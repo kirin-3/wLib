@@ -785,3 +785,70 @@ def test_newest_list_capable_connection_wins():
     request = _first_fetch_sent(_list_fetch, newer_capable_sent)
     assert request == {"type": "fetch", "id": request["id"], "url": LIST_URL}
     assert not capable_sent and not old_sent
+
+
+def _lc_page_connection(order):
+    def send(raw):
+        message = json.loads(raw)
+        order.append(message["url"])
+        bridge._handle_message(conn, {
+            "type": "fetch_result", "id": message["id"], "ok": True, "status": 200,
+            "final_url": message["url"], "body": "<html></html>",
+        })
+
+    conn = BridgeConnection(send)
+    bridge._register_connection(conn)
+    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_fetch_lc": True})
+    return conn
+
+
+def test_lc_fetch_listener_runs_once_per_turn_on():
+    calls = []
+    bridge.add_lc_fetch_listener(lambda: calls.append(1))
+    conn = BridgeConnection(lambda _raw: None)
+    bridge._register_connection(conn)
+    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True})
+    assert calls == []
+    bridge._handle_message(conn, {"type": "status", "can_fetch": True, "can_fetch_lc": True})
+    bridge._handle_message(conn, {"type": "status", "can_fetch": True, "can_fetch_lc": True})
+    assert calls == [1]
+    bridge._handle_message(conn, {"type": "status", "can_fetch": True, "can_fetch_lc": False})
+    bridge._handle_message(conn, {"type": "status", "can_fetch": True, "can_fetch_lc": True})
+    assert calls == [1, 1]
+    _lc_page_connection([])
+    assert calls == [1, 1, 1]
+
+
+def test_background_lc_page_fetch_waits_behind_foreground(monkeypatch):
+    monkeypatch.setattr(bridge, "LC_GAP_SECONDS", 0)
+    order = []
+    _lc_page_connection(order)
+    gate = bridge._lc_request_lock
+    gate.acquire_foreground()  # another LC request in flight
+    background = threading.Thread(
+        target=lambda: bridge.fetch("https://lewdcorner.com/threads/1/", site="lc", background=True))
+    background.start()
+    time.sleep(0.05)
+    foreground = threading.Thread(target=lambda: bridge.fetch("https://lewdcorner.com/threads/2/", site="lc"))
+    foreground.start()
+    while gate._waiting_foreground == 0:
+        time.sleep(0.01)
+    gate.release()
+    foreground.join(5)
+    background.join(5)
+    assert order == ["https://lewdcorner.com/threads/2/", "https://lewdcorner.com/threads/1/"]
+    assert not gate.locked()
+
+
+def test_background_lc_page_fetch_keeps_the_lc_gap(monkeypatch):
+    now = [1000.0]
+    sends = []
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(bridge.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    bridge._lc_request_lock.timed_wait = lambda _cond, seconds: now.__setitem__(0, now[0] + seconds)
+    _lc_page_connection(sends)
+    _ = bridge.fetch("https://lewdcorner.com/threads/1/", site="lc")
+    start = now[0]
+    sends.clear()
+    _ = bridge.fetch("https://lewdcorner.com/threads/2/", site="lc", background=True)
+    assert now[0] - start == pytest.approx(bridge.LC_GAP_SECONDS)

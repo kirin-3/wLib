@@ -332,6 +332,48 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
             </div>
           </details>
 
+          <details v-if="ordered.old.length" class="other" data-testid="older-versions">
+            <summary class="flex items-center gap-1.5 text-sm cursor-pointer select-none" style="color: var(--text-secondary)">
+              <IconChevronRight class="chevron w-4 h-4" />
+              Older versions ({{ ordered.old.length }})
+            </summary>
+            <div class="space-y-4 mt-3">
+              <div v-for="build in ordered.old" :key="build.label + build.section" class="space-y-2" :aria-disabled="!canSelect(build) || undefined">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="text-sm font-semibold" style="color: var(--text-primary)">{{ buildTitle(build) }}</span>
+                  <span v-if="showPlatform(build)" class="chip">{{ platformLabel(build.platform) }}</span>
+                  <span class="chip chip-warn">Older version</span>
+                </div>
+                <div class="mirror-grid">
+                  <button
+                    v-for="mirror in build.mirrors"
+                    :key="mirror.link_id"
+                    type="button"
+                    class="mirror"
+                    :class="{ selected: chosenMirror?.link_id === mirror.link_id }"
+                    :disabled="!canSelect(build)"
+                    :aria-pressed="chosenMirror?.link_id === mirror.link_id"
+                    @click="choose(build, mirror)"
+                  >
+                    <span class="min-w-0 flex-1 text-left">
+                      <span class="block text-sm font-medium truncate">{{ mirror.label || mirror.host }}</span>
+                      <span class="block text-xs truncate" style="color: var(--text-muted)">
+                        <template v-if="mirror.split">Part {{ mirror.part }} · browser only</template>
+                        <template v-else-if="suitable(build, platform) && inAppMirror(mirror)">In-app download</template>
+                        <template v-else>Browser only</template>
+                      </span>
+                    </span>
+                    <span class="radio" aria-hidden="true"><IconCheck v-if="chosenMirror?.link_id === mirror.link_id" class="w-3 h-3" stroke-width="3" /></span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <div v-if="chosenBuild?.kind === 'old'" class="callout callout-warn" data-testid="older-version-note">
+            <IconAlertTriangle class="w-4 h-4 shrink-0 mt-0.5" />
+            <p>This is an older version than the thread's current one ({{ version || 'Unknown' }}).</p>
+          </div>
           <div v-if="chosenBuild?.kind === 'patch'" class="callout callout-warn">
             <IconAlertTriangle class="w-4 h-4 shrink-0 mt-0.5" />
             <p>This patch updates an existing install. Keep the old version when installing it.</p>

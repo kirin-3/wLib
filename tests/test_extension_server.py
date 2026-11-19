@@ -1192,7 +1192,7 @@ def test_extension_lc_check_open_add_wishlist_and_attach(monkeypatch, tmp_path, 
     })
     js = window.evaluate_js.call_args.args[0]
     add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", js)[1]))
-    assert add_payload["engine"] == "Other"
+    assert add_payload["engine"] == "Others"
     assert add_payload["thread_onhold"] is True
     # A mismatched id list leaves every id unknown, as from an older extension.
     status, _ = send("POST", "/api/add", {
@@ -1200,7 +1200,7 @@ def test_extension_lc_check_open_add_wishlist_and_attach(monkeypatch, tmp_path, 
     })
     js = window.evaluate_js.call_args.args[0]
     add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", js)[1]))
-    assert add_payload["engine"] == "Other"
+    assert add_payload["engine"] == "Others"
 
     # The states come from one source: the page read, else the catalog with its time.
     from core import game_lookup
@@ -1327,3 +1327,46 @@ def test_lc_image_route_fetch_failure_is_a_404(tmp_path, monkeypatch):
     handler.do_GET()
     handler.send_error.assert_called_once_with(404)
     assert game_covers.lc_copy_file(key) is None
+
+
+def test_extension_lc_developer_falls_back_to_the_title(monkeypatch, tmp_path, extension_server):
+    import base64
+    import re
+    import sqlite3
+
+    from catalog_server.store import CATALOG_SCHEMA
+    from core import database
+
+    api = Api()
+    monkeypatch.setattr(api.cover_cache, "wake", lambda: None)
+    monkeypatch.setattr(server_module, "api_ref", api)
+    window = MagicMock()
+    monkeypatch.setattr(server_module, "window_ref", window)
+    with sqlite3.connect(tmp_path / "catalog.db") as conn:
+        conn.executescript(CATALOG_SCHEMA)
+        conn.execute(
+            "INSERT INTO lc_threads(thread_id,title,creator,url,first_seen,last_seen) "
+            "VALUES (31, 'BreedVille', 'Catalog Dev', '', '', '')"
+        )
+    assert database.DB_PATH == str(tmp_path / "extension.db")
+
+    def add(url, **body):
+        with closing(HTTPConnection(*extension_server.server_address, timeout=3)) as connection:
+            connection.request("POST", "/api/add", json.dumps({"url": url, **body}), headers={
+                "Host": "localhost:8183", "Origin": "chrome-extension://wlib",
+                "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+            })
+            assert connection.getresponse().status == 200
+        js = window.evaluate_js.call_args.args[0]
+        return json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", js)[1]))
+
+    outside = "https://lewdcorner.com/threads/30/"
+    payload = add(outside, title="BreedVille [v0.10.0] [Redsky]")
+    assert (payload["title"], payload["developer"]) == ("BreedVille", "Redsky")
+    payload = add(outside, title="Game Name [v0.5]")
+    assert payload["title"] == "Game Name" and not payload.get("developer")
+    payload = add(outside, title="BreedVille [v0.10.0] [Redsky]", developer="Redsky Games")
+    assert payload["developer"] == "Redsky Games"
+    # The catalog's developer wins over the title.
+    payload = add("https://lewdcorner.com/threads/31/", title="BreedVille [v0.10.0] [Redsky]")
+    assert payload["developer"] == "Catalog Dev"

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { defaultDownloadSite, downloadSites, latestSiteLabel, lcActive, normalizeLcThreadUrl, showLcFields, updateCheckUrl, type LewdCornerMode } from "./lewdcorner.ts";
+import { defaultDownloadSite, downloadSites, latestSiteLabel, lcActive, lcPlusCheckedAt, lcPlusCheckReason, lcPlusDetectedText, normalizeLcThreadUrl, showLcFields, updateCheckUrl, type LewdCornerMode } from "./lewdcorner.ts";
 
 const url = "https://lewdcorner.com/threads/123/";
 
@@ -83,4 +83,17 @@ test("the edit form hides the LC fields of an F95 game while LC is off", () => {
   assert.equal(showLcFields({ lc_url: url, lc_mode: "" }, false), true);
   assert.equal(showLcFields({ f95_url: f95 }, false), false);
   assert.equal(showLcFields({}, true), true);
+});
+
+test("the LC Plus row names the detected tier and why Check now is off", () => {
+  assert.equal(lcPlusDetectedText("plus"), "Detected: Plus");
+  assert.equal(lcPlusDetectedText("standard"), "Detected: Standard");
+  assert.equal(lcPlusDetectedText(""), "Not detected yet");
+  assert.equal(lcPlusCheckReason("ready", true), "");
+  assert.match(lcPlusCheckReason("no_catalog", true), /catalog must be on/);
+  assert.match(lcPlusCheckReason("no_extension", true), /wLib extension.*LewdCorner switch/);
+  assert.match(lcPlusCheckReason("ready", false), /Use LewdCorner/);
+  assert.equal(lcPlusCheckedAt(""), "");
+  assert.equal(lcPlusCheckedAt("not a time"), "");
+  assert.ok(lcPlusCheckedAt("2026-11-19T10:00:00Z", "en-US").includes("2026"));
 });

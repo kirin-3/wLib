@@ -18,11 +18,14 @@ export const inAppMirror = (mirror: UpdateMirror): boolean =>
   !mirror.split && mirror.in_app !== false && ["pixeldrain", "mega", "buzzheavier"].includes(mirror.host.toLowerCase());
 export const suitable = (build: UpdateBuild, host: HostPlatform): boolean =>
   (host === "linux" ? ["linux", "windows/linux", "windows", "all", "unknown"] : ["windows", "windows/linux", "all", "unknown"]).includes(build.platform);
-export function orderBuilds(builds: UpdateBuild[], host: HostPlatform): { suitable: UpdateBuild[]; other: UpdateBuild[] } {
+/** Old builds (from an older-version spoiler) are kept apart from the others, whatever their platform. */
+export function orderBuilds(builds: UpdateBuild[], host: HostPlatform): { suitable: UpdateBuild[]; other: UpdateBuild[]; old: UpdateBuild[] } {
   const order = host === "linux" ? ["linux", "windows/linux", "windows", "all", "unknown"] : ["windows", "windows/linux", "all", "unknown"];
+  const current = builds.filter(build => build.kind !== "old");
   return {
-    suitable: builds.filter(build => suitable(build, host)).slice().sort((a,b) => order.indexOf(a.platform) - order.indexOf(b.platform)),
-    other: builds.filter(build => !suitable(build, host)),
+    suitable: current.filter(build => suitable(build, host)).slice().sort((a,b) => order.indexOf(a.platform) - order.indexOf(b.platform)),
+    other: current.filter(build => !suitable(build, host)),
+    old: builds.filter(build => build.kind === "old"),
   };
 }
 export function preselect(builds: UpdateBuild[], host: HostPlatform): { build: UpdateBuild; mirror: UpdateMirror } | null {
@@ -45,8 +48,10 @@ export function bulkDownloadDecision(
   const builds = links.builds || [];
   const choice = preselect(builds, host);
   if (choice) return { kind: "start", ...choice };
-  const usable = orderBuilds(builds, host).suitable;
+  const ordered = orderBuilds(builds, host);
+  const usable = ordered.suitable;
   if (!builds.length) return { kind: "needs-choice", reason: "No builds were found in the thread" };
+  if (!usable.length && ordered.old.some(build => suitable(build, host))) return { kind: "needs-choice", reason: "Only older versions were found" };
   if (!usable.length) return { kind: "needs-choice", reason: "No build for this platform was found" };
   if (!usable.some(build => build.kind === "full")) return { kind: "needs-choice", reason: "Only patch builds were found" };
   return { kind: "needs-choice", reason: "No full build has an in-app mirror" };

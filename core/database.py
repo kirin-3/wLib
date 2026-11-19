@@ -58,6 +58,7 @@ RPGMAKER_LINUX_RUNNER_SETTING = "rpgmaker_linux_runner_path"
 DEFAULT_LIBRARY_FOLDER_PATTERN = "{creator}/{title}/{version}"
 GENERAL_SETTINGS_KEYS = (
     *lewdcorner.LC_SETTINGS,
+    lewdcorner.LC_PLUS_MODE,
     "enable_logging",
     "auto_update_check",
     "update_notifications",
@@ -693,11 +694,14 @@ def fill_lc_threads(partners: Mapping[str, tuple[str, str]]) -> int:
     with closing(get_connection()) as conn:
         _ = conn.execute("BEGIN IMMEDIATE")
         settings = dict(cast(list[tuple[str, str]], conn.execute(
-            "SELECT key, value FROM settings WHERE key IN ('lc_enabled', 'lc_plus')"
+            "SELECT key, value FROM settings WHERE key IN ('lc_enabled', ?, ?)",
+            (lewdcorner.LC_PLUS_MODE, lewdcorner.LC_PLUS_DETECTED),
         ).fetchall()))
         if not lewdcorner.setting_enabled(settings.get("lc_enabled")):
             return 0
-        has_plus = lewdcorner.setting_enabled(settings.get("lc_plus"))
+        has_plus = lewdcorner.plus_effective(
+            settings.get(lewdcorner.LC_PLUS_MODE), settings.get(lewdcorner.LC_PLUS_DETECTED)
+        )
         rows = cast(list[tuple[int, str, str]], conn.execute(
             "SELECT id, f95_url, lc_dismissed FROM games "
             + "WHERE f95_url != '' AND COALESCE(lc_url, '') = '' ORDER BY id"
@@ -1099,6 +1103,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     )
     for key in lewdcorner.LC_SETTINGS:
         _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, '0')", (key,))
+    # The old "I have LC Plus" switch: on becomes Yes, off becomes Auto. Once only.
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) SELECT ?, CASE WHEN lower(trim(value)) "
+        + "IN ('1', 'true', 'on', 'yes') THEN 'yes' ELSE 'auto' END FROM settings WHERE key = 'lc_plus'",
+        (lewdcorner.LC_PLUS_MODE,),
+    )
+    _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'auto')", (lewdcorner.LC_PLUS_MODE,))
     for key in ("gamemode_enabled", "mangohud_enabled"):
         _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'false')", (key,))
     for key, value in gamescope.SETTINGS_DEFAULTS.items():
@@ -1318,6 +1329,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     changed = " OR ".join(
         f"OLD.{column} IS NOT NEW.{column}" for column in SYNC_GAME_COLUMNS
     )
+    # LC's engine "Other" is the engine F95 names "Others". Costs nothing once done.
+    _ = cursor.execute("UPDATE games SET engine = 'Others' WHERE engine = 'Other'")
     # Recreate on every start so upgraded databases watch columns added
     # after the trigger was first created.
     _ = cursor.execute("DROP TRIGGER IF EXISTS sync_games_update")
@@ -2661,6 +2674,16 @@ def get_setting(key: str) -> str | None:
 
 def update_setting(key: str, value: str) -> None:
     update_settings({key: value})
+
+
+def lc_plus_effective() -> bool:
+    """The effective LC Plus state: Yes, or Auto with Plus detected on this device."""
+    with closing(get_connection()) as conn:
+        rows = dict(cast(list[tuple[str, str]], conn.execute(
+            "SELECT key, value FROM settings WHERE key IN (?, ?)",
+            (lewdcorner.LC_PLUS_MODE, lewdcorner.LC_PLUS_DETECTED),
+        ).fetchall()))
+    return lewdcorner.plus_effective(rows.get(lewdcorner.LC_PLUS_MODE), rows.get(lewdcorner.LC_PLUS_DETECTED))
 
 
 def update_settings(

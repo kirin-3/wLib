@@ -86,6 +86,7 @@
   "check_for_updates": [
     "url"
   ],
+  "check_lc_plus": [],
   "check_path": [
     "path",
     "kind"

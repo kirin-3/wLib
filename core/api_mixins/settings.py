@@ -125,8 +125,56 @@ class SettingsMixin(ApiBase):
             )
             == "true",
             "catalog_enabled": get_setting_fn("catalog_enabled") != "0",
-            **{key: lewdcorner.setting_enabled(get_setting_fn(key)) for key in lewdcorner.LC_SETTINGS},
+            **self._lc_plus_settings(get_setting_fn),
         }
+
+    def _lc_plus_settings(self, get_setting_fn: Callable[[str], object]) -> dict[str, object]:
+        """"Use LewdCorner", the LC Plus mode, and the effective and detected LC Plus state."""
+        mode = lewdcorner.plus_mode(get_setting_fn(lewdcorner.LC_PLUS_MODE))
+        detected = str(get_setting_fn(lewdcorner.LC_PLUS_DETECTED) or "")
+        return {
+            "lc_enabled": lewdcorner.setting_enabled(get_setting_fn("lc_enabled")),
+            # The effective state, so readers of the old switch keep working.
+            "lc_plus": lewdcorner.plus_effective(mode, detected),
+            "lc_plus_mode": mode,
+            "lc_plus_detected": detected if detected in ("plus", "standard") else "",
+            "lc_plus_detected_at": str(get_setting_fn(lewdcorner.LC_PLUS_DETECTED_AT) or ""),
+            "lc_plus_check": self._lc_plus_check(),
+        }
+
+    def check_lc_plus(self) -> dict[str, object]:
+        """"Check now": detect the LC Plus tier and return the new LC Plus state."""
+        from core import lewdcorner_plus
+        from core.database import get_setting
+
+        detection = lewdcorner_plus.detect("check_now")
+        status = self._lc_plus_settings(get_setting)
+        skipped = detection["skipped"]
+        if skipped and skipped != "running":
+            errors = {
+                "lc_off": "Turn on Use LewdCorner first",
+                "mode": "LC Plus is not set to Auto",
+                "no_catalog": "The game catalog must be on to check LC Plus",
+                "no_candidates": "The game catalog has no LC Plus threads to check",
+                "no_extension": "Open a browser with the wLib extension and its LewdCorner switch on",
+            }
+            return {"success": False, "code": skipped, "error": errors.get(skipped, "Could not check LC Plus"), **status}
+        return {
+            "success": True,
+            "running": skipped == "running",
+            "checked_without_result": detection["result"] == "",
+            **status,
+        }
+
+    def _lc_plus_check(self) -> str:
+        """Whether "Check now" can run: ready, no_extension or no_catalog."""
+        from core import extension_bridge, game_lookup
+
+        if not self._catalog_enabled() or not game_lookup.catalog_installed():
+            return "no_catalog"
+        if not extension_bridge.is_available(site="lc"):
+            return "no_extension"
+        return "ready"
 
     def get_diagnostics(self) -> dict[str, object]:
         from core.diagnostics import build_report, collect_basic
@@ -234,6 +282,15 @@ class SettingsMixin(ApiBase):
             return {"success": False, "error": "Settings must be an object"}
 
         settings_map = cast(Mapping[str, object], settings)
+        lc_plus_mode: str | None = None
+        if lewdcorner.LC_PLUS_MODE in settings_map:
+            raw_mode = settings_map[lewdcorner.LC_PLUS_MODE]
+            if not isinstance(raw_mode, str) or raw_mode.strip().lower() not in lewdcorner.LC_PLUS_MODES:
+                return {"success": False, "field": lewdcorner.LC_PLUS_MODE, "error": "LC Plus must be auto, yes or no"}
+            lc_plus_mode = raw_mode.strip().lower()
+        elif "lc_plus" in settings_map:
+            # The old switch: on is Yes, off is Auto.
+            lc_plus_mode = "yes" if lewdcorner.setting_enabled(settings_map["lc_plus"]) else "auto"
         # Checked first, so a bad gamescope value never leaves other settings half saved.
         from core import gamescope
 
@@ -496,13 +553,22 @@ class SettingsMixin(ApiBase):
                 update_setting_fn("save_backup_keep", save_backup_keep)
             fill_lc = False
             lc_changed = False
-            for key in lewdcorner.LC_SETTINGS:
-                if key in settings_map:
-                    enabled = lewdcorner.setting_enabled(settings_map[key])
-                    was_enabled = lewdcorner.setting_enabled(get_setting_fn(key))
-                    fill_lc |= enabled and not was_enabled
-                    lc_changed |= key == "lc_enabled" and enabled != was_enabled
-                    pending[key] = "1" if enabled else "0"
+            detect_lc_plus = False
+            was_lc = lewdcorner.setting_enabled(get_setting_fn("lc_enabled"))
+            was_mode = lewdcorner.plus_mode(get_setting_fn(lewdcorner.LC_PLUS_MODE))
+            detected = get_setting_fn(lewdcorner.LC_PLUS_DETECTED)
+            if "lc_enabled" in settings_map:
+                enabled = lewdcorner.setting_enabled(settings_map["lc_enabled"])
+                fill_lc |= enabled and not was_lc
+                lc_changed |= enabled != was_lc
+                detect_lc_plus |= enabled and not was_lc
+                pending["lc_enabled"] = "1" if enabled else "0"
+            if lc_plus_mode is not None:
+                fill_lc |= lewdcorner.plus_effective(lc_plus_mode, detected) and not lewdcorner.plus_effective(was_mode, detected)
+                detect_lc_plus |= lc_plus_mode == "auto" and was_mode != "auto"
+                pending[lewdcorner.LC_PLUS_MODE] = lc_plus_mode
+                # Kept for an older wLib that reads the old switch: "1" only for Yes.
+                pending["lc_plus"] = "1" if lc_plus_mode == "yes" else "0"
             pending.update(torrent_values)
             pending.update(queue_values)
             pending.update(gamescope_values)
@@ -516,6 +582,8 @@ class SettingsMixin(ApiBase):
                 threading.Thread(
                     target=self._apply_lc_setting_change, kwargs={"turned_on": fill_lc}, daemon=True
                 ).start()
+            if detect_lc_plus:
+                self._start_lc_plus_detection("settings")
             if catalog_change is False:
                 self.catalog.remove()
             elif catalog_change is True:

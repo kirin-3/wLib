@@ -104,7 +104,7 @@ class UpdateDownloads:
         lc_id = lewdcorner.extract_thread_id(game.get("lc_url"))
         catalog = game_lookup.lc_thread_entries([lc_id]).get(lc_id, {}) if lc_id else {}
         lc_enabled = bool(lc_id) and lewdcorner.setting_enabled(database.get_setting("lc_enabled"))
-        lc_plus = bool(lc_id) and lewdcorner.setting_enabled(database.get_setting("lc_plus"))
+        lc_plus = bool(lc_id) and database.lc_plus_effective()
         tier = str(catalog.get("tier") or "")
         sites = download_sites(game, lc_enabled=lc_enabled, lc_plus=lc_plus, catalog_tier=tier)
         selected: lewdcorner.Site | None

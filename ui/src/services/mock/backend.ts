@@ -583,6 +583,25 @@ export class MockBackend {
       }
       case "get_settings":
         return readMockSettings();
+      case "check_lc_plus": {
+        // Mock rule: the result comes from localStorage "wlib-mock-lc-plus-result" ("plus", "standard" or unset for unknown).
+        const settings = readMockSettings();
+        const status = () => {
+          const current = readMockSettings();
+          return {
+            lc_plus: current.lc_plus, lc_plus_mode: current.lc_plus_mode, lc_plus_detected: current.lc_plus_detected,
+            lc_plus_detected_at: current.lc_plus_detected_at, lc_plus_check: current.lc_plus_check,
+          };
+        };
+        if (!settings.lc_enabled) return { success: false, code: "lc_off", error: "Turn on Use LewdCorner first", ...status() };
+        if (settings.lc_plus_mode !== "auto") return { success: false, code: "mode", error: "LC Plus is not set to Auto", ...status() };
+        if (settings.lc_plus_check === "no_catalog") return { success: false, code: "no_catalog", error: "The game catalog must be on to check LC Plus", ...status() };
+        if (settings.lc_plus_check === "no_extension") return { success: false, code: "no_extension", error: "Open a browser with the wLib extension and its LewdCorner switch on", ...status() };
+        const result = localStorage.getItem("wlib-mock-lc-plus-result");
+        const tier = result === "plus" || result === "standard" ? result : "";
+        writeMockSettings({ ...settings, lc_plus_detected: tier || settings.lc_plus_detected, lc_plus_detected_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z") });
+        return { success: true, running: false, checked_without_result: !tier, ...status() };
+      }
       case "set_tag_color": {
         const tag = String(args[0] || "").trim().toLowerCase();
         const swatch = args[1];
@@ -1213,6 +1232,10 @@ export class MockBackend {
         if (!option) return {success:false, sites, error:"This game has no available thread for downloads"};
         const prefix = site === "lc" ? "mock-lc" : "mock";
         return {success:true, site, sites, version:option.version || "v1.2", builds:[{
+          // Listed first, as a post with an "Old Versions" spoiler above the current links would be.
+          label:"Win", section:"Old Versions", platform:"windows", kind:"old",
+          mirrors:[{link_id:`${prefix}-old-mega`,host:"mega",label:"MEGA",part:"",split:false}],
+        }, {
           label:"Windows/Linux", section:"", platform:"windows/linux", kind:"full",
           mirrors:[
             {link_id:`${prefix}-pixeldrain`,host:"pixeldrain",label:"Pixeldrain",part:"",split:false},

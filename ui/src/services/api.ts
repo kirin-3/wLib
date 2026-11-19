@@ -1425,7 +1425,7 @@ export interface SettingsPayload extends Partial<GamescopeSettings> {
   save_backup_keep?: SaveBackupKeep;
   catalog_enabled?: boolean;
   lc_enabled?: boolean;
-  lc_plus?: boolean;
+  lc_plus_mode?: LcPlusMode;
 }
 
 export interface UrmStatusResponse extends ApiBasicResponse {
@@ -1564,7 +1564,31 @@ export interface SettingsResponse extends GamescopeSettings {
   save_backup_keep: SaveBackupKeep;
   catalog_enabled: boolean;
   lc_enabled: boolean;
+  /** The effective LC Plus state: Yes, or Auto with Plus detected on this device. */
   lc_plus: boolean;
+  lc_plus_mode: LcPlusMode;
+  lc_plus_detected: LcPlusTier;
+  lc_plus_detected_at: string;
+  lc_plus_check: LcPlusCheck;
+}
+
+export type LcPlusMode = "auto" | "yes" | "no";
+/** The detected LC tier; "" when not detected yet. */
+export type LcPlusTier = "plus" | "standard" | "";
+/** Whether "Check now" can run. */
+export type LcPlusCheck = "ready" | "no_extension" | "no_catalog";
+export interface LcPlusStatus {
+  lc_plus: boolean;
+  lc_plus_mode: LcPlusMode;
+  lc_plus_detected: LcPlusTier;
+  lc_plus_detected_at: string;
+  lc_plus_check: LcPlusCheck;
+}
+export interface CheckLcPlusResponse extends ApiBasicResponse, Partial<LcPlusStatus> {
+  code?: string;
+  running?: boolean;
+  /** Every page tried said nothing about the tier. */
+  checked_without_result?: boolean;
 }
 
 export interface CatalogSourceStatus {
@@ -2231,6 +2255,11 @@ class ApiService {
 
   async getPlatformCapabilities(): Promise<PlatformCapabilities> {
     return this.invoke<PlatformCapabilities>("get_platform_capabilities");
+  }
+
+  /** "Check now": detect the LC Plus tier through the browser extension. */
+  async checkLcPlus(): Promise<CheckLcPlusResponse> {
+    return this.invoke<CheckLcPlusResponse>("check_lc_plus");
   }
 
   /** On a failure, `field` names the setting that was refused (gamescope fields). */

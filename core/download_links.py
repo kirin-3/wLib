@@ -9,6 +9,7 @@ from html.parser import HTMLParser
 from urllib.parse import SplitResult, urlsplit
 
 from core import lewdcorner
+from core.versions import normalize_version
 from typing import TypedDict, final, override
 
 
@@ -40,6 +41,40 @@ DENIED_HOSTS = (
 _DOWNLOAD_HEADING = re.compile(r"downloads?\b(?:\s*links?\b)?[\s:]*(.*)", re.I)
 _DIVIDER = re.compile(r"(?:extras?|bonus(?:es)?|translations?|mods?)", re.I)
 _PART = re.compile(r"part\s*(\d{1,2})\b", re.I)
+_SPOILER_PREFIX = re.compile(r"^\s*spoiler\s*:?\s*", re.I)
+# A file size ("Win (1.5 GB)") is not a version.
+_VERSION_IN_TEXT = re.compile(
+    r"\bv(?:er(?:sion)?)?\.?\s*(\d+(?:\.\d+)*[a-z]?)\b|\b(\d+(?:\.\d+)+[a-z]?)\b(?!\s*[KMGT]i?B\b)", re.I
+)
+_DATE_IN_TEXT = re.compile(r"\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[/.-]\d{1,2}[/.-]\d{4}\b")
+_OLD_WORDS = re.compile(r"\b(?:old|older|previous|prior|legacy|archived?|past)\b", re.I)
+
+
+def _versions_in(text: str) -> set[str]:
+    return {normalize_version(m.group(1) or m.group(2)) for m in _VERSION_IN_TEXT.finditer(text)}
+
+
+def spoiler_title_kind(title: str, thread_version: str) -> str:
+    """Return how a spoiler title scopes its content: download, part, old or ignore.
+
+    A title names an older version when it has a date, an old word, or a
+    version that the thread's version does not have.
+    """
+    line = title.strip().rstrip(" :")
+    if not line:
+        return "ignore"
+    if _DOWNLOAD_HEADING.fullmatch(line):
+        return "download"
+    if _PART.fullmatch(line):
+        return "part"
+    if _DATE_IN_TEXT.search(line) or _OLD_WORDS.search(line):
+        return "old"
+    versions = _versions_in(line)
+    if versions:
+        current = _versions_in(thread_version) or {normalize_version(thread_version)}
+        if versions - current:
+            return "old"
+    return "ignore"
 
 
 def classify_build(label: str) -> tuple[str, str]:
@@ -200,6 +235,9 @@ class _Elements(HTMLParser):
         self.bold_parts: list[str] = []
         self.anchor: dict[str, str] | None = None
         self.anchor_parts: list[str] = []
+        self.spoilers: list[int] = []
+        self.button = 0
+        self.button_parts: list[str] = []
         self.events: list[tuple[str, str, dict[str, str]]] = []
 
     def _flush_bold(self) -> None:
@@ -220,9 +258,20 @@ class _Elements(HTMLParser):
         if self.article and tag == "div":
             if self.wrapper:
                 self.wrapper += 1
+                # A spoiler inside a hidden quote copy is not read, like the rest of that copy.
+                if "bbCodeSpoiler" in classes and not self.hidden:
+                    self.spoilers.append(self.wrapper)
             elif "bbWrapper" in classes:
                 self.wrapper = 1
         if not self.wrapper:
+            return
+        if tag == "button" and (self.button or ("bbCodeSpoiler-button" in classes and not self.hidden)):
+            # The button's own text ("Spoiler: <title>") is not post text.
+            if not self.button:
+                self.button_parts = []
+            self.button += 1
+            return
+        if self.button:
             return
         if "messageHide--link" in classes:
             self.events.append(("hidden_link", "", {}))
@@ -250,6 +299,13 @@ class _Elements(HTMLParser):
 
     @override
     def handle_endtag(self, tag: str) -> None:
+        if self.wrapper and self.button:
+            if tag == "button":
+                self.button -= 1
+                if not self.button:
+                    title = _SPOILER_PREFIX.sub("", " ".join("".join(self.button_parts).split()))
+                    self.events.append(("spoiler_open", title, {}))
+            return
         if self.wrapper:
             if self.hidden:
                 if tag == "span":
@@ -262,6 +318,11 @@ class _Elements(HTMLParser):
                 if not self.bold:
                     self._flush_bold()
             if tag == "div":
+                if self.spoilers and self.spoilers[-1] == self.wrapper:
+                    _ = self.spoilers.pop()
+                    if self.bold:
+                        self._flush_bold()
+                    self.events.append(("spoiler_close", "", {}))
                 self.wrapper -= 1
         if tag == "article" and self.article:
             self.article -= 1
@@ -269,6 +330,9 @@ class _Elements(HTMLParser):
     @override
     def handle_data(self, data: str) -> None:
         if self.hidden:
+            return
+        if self.button:
+            self.button_parts.append(data)
             return
         if self.anchor is not None:
             self.anchor_parts.append(data)
@@ -297,10 +361,14 @@ def parse_download_links(
     events = parser.events
     signed = re.search(r'\bdata-logged-in=["\'](true|false)["\']', html[:4096], re.I)
     signed_in = bool(signed and signed.group(1).lower() == "true")
+    version = profile.version(html) if page_version is None else page_version or _title_version(html)
+    spoiler_kinds = {
+        i: spoiler_title_kind(s, version) for i, (t, s, _) in enumerate(events) if t == "spoiler_open"
+    }
     heading_present = any(
         t == "b" and any(_DOWNLOAD_HEADING.fullmatch(line) for line in _heading_lines(s))
         for t, s, _ in events
-    )
+    ) or "download" in spoiler_kinds.values()
     active = not heading_present
     started = False
     section = ""
@@ -310,16 +378,34 @@ def parse_download_links(
     # A part line that already labelled links is a fragment marker, not a build.
     part_linked = False
     glue = False
+    # Builds inside a spoiler that names an older version are kind "old".
+    old = False
+    saved: list[tuple[str, str, bool, str, bool, bool]] = []
     builds: list[Build] = []
 
     def hold_part(line: str) -> None:
         nonlocal pending_part, part_linked, glue
         pending_part, part_linked, glue = line, False, False
 
-    for typ, value, attrs in events:
+    for index, (typ, value, attrs) in enumerate(events):
         if typ == "hidden_link" and active and site == "lc":
             return {"version": "Unknown", "signed_in": False, "builds": []}
-        if typ == "break":
+        if typ == "spoiler_open":
+            # A spoiler is its own scope: what it sets ends where it ends.
+            saved.append((section, label, divider, pending_part, glue, old))
+            glue = False
+            spoiler_kind = spoiler_kinds[index]
+            if spoiler_kind == "download":
+                active, started, divider = True, True, False
+                section = label = pending_part = ""
+            elif spoiler_kind == "part":
+                hold_part(value.strip().rstrip(" :"))
+            elif spoiler_kind == "old":
+                section, label, divider, pending_part, old = value.strip().rstrip(" :"), "", False, "", True
+        elif typ == "spoiler_close":
+            if saved:
+                section, label, divider, pending_part, glue, old = saved.pop()
+        elif typ == "break":
             glue = False
         elif typ == "text":
             line = value.rstrip(" :")
@@ -383,7 +469,9 @@ def parse_download_links(
             else:
                 host = known or domain.removeprefix("www.")
             platform, kind = classify_build(label)
-            if divider and kind == "full":
+            if old:
+                kind = "old"
+            elif divider and kind == "full":
                 kind = "extra"
             anchor_part = _PART.search(value)
             if re.search(r"\b(full|complete|single)\b", value, re.I):
@@ -403,5 +491,4 @@ def parse_download_links(
                 builds.append(build)
             build["mirrors"].append({"url": url, "host": host, "label": value, "part": part, "split": bool(part)})
             glue = False
-    version = profile.version(html) if page_version is None else page_version or _title_version(html)
     return {"version": version, "signed_in": signed_in, "builds": builds}

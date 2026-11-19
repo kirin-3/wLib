@@ -330,7 +330,7 @@ def test_lc_prefill(lc_catalog):
     database.update_setting("lc_enabled", "1")
     assert lookup_lc_partner(f95) == {"lc_url": lc}
     assert lookup_lc_partner(premium_f95) == {}
-    database.update_setting("lc_plus", "1")
+    database.update_setting("lc_plus_mode", "yes")
     assert lookup_lc_partner(premium_f95) == {"lc_url": "https://lewdcorner.com/threads/22/"}
     database.add_game("F95", "", f95)
     database.add_game("LC", "", lc_url=lc)
@@ -358,7 +358,7 @@ def test_lc_automatic_fill_and_dismissal(lc_catalog, monkeypatch):
     assert database.get_game(existing)["lc_url"].endswith("/99/")
     assert database.get_game(plus)["lc_url"] == ""
     database.update_game(free, {"lc_url": ""})
-    database.update_setting("lc_plus", "1")
+    database.update_setting("lc_plus_mode", "yes")
     assert api._fill_lc_threads_from_catalog() == 1
     assert database.get_game(plus)["lc_url"].endswith("/22/")
     assert database.get_game(free)["lc_url"] == ""
@@ -548,4 +548,80 @@ def test_catalog_render_other_prefix_sets_no_engine(state_catalog):
     entries = lc_thread_entries(["13588", "623", "624"])
     assert entries["13588"]["engine"] == ""
     assert entries["623"]["engine"] == "Ren'Py"
-    assert entries["624"]["engine"] == "Other"
+    assert entries["624"]["engine"] == "Others"
+
+
+def test_lc_plus_mode_setting_saves_and_fills(lc_catalog, monkeypatch):
+    from core.api import Api
+
+    api = Api()
+    monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
+    monkeypatch.setattr("core.api_mixins.settings.threading.Thread", lambda target, kwargs=None, **_kw: type(
+        "ImmediateThread", (), {"start": staticmethod(lambda: target(**(kwargs or {})))}
+    )())
+    detections = []
+    monkeypatch.setattr(api, "_start_lc_plus_detection", detections.append)
+    from core import extension_bridge
+
+    monkeypatch.setattr(extension_bridge, "is_available", lambda site="f95": False)
+    premium = database.add_game("Premium", "", "https://f95zone.to/threads/102/")
+    assert api.save_settings({"lc_enabled": True})["success"]
+    assert detections == ["settings"]
+    settings = api.get_settings()
+    assert (settings["lc_plus_mode"], settings["lc_plus"], settings["lc_plus_detected"]) == ("auto", False, "")
+    assert settings["lc_plus_check"] == "no_extension"
+    assert database.get_game(premium)["lc_url"] == ""
+
+    bad = api.save_settings({"lc_plus_mode": "maybe"})
+    assert bad["success"] is False and bad["field"] == "lc_plus_mode"
+    assert api.save_settings({"lc_plus_mode": True})["success"] is False
+    assert database.get_setting("lc_plus_mode") == "auto"
+
+    assert api.save_settings({"lc_plus_mode": "yes"})["success"]
+    assert (database.get_setting("lc_plus_mode"), database.get_setting("lc_plus")) == ("yes", "1")
+    assert api.get_settings()["lc_plus"] is True
+    assert database.get_game(premium)["lc_url"].endswith("/22/")
+
+    assert api.save_settings({"lc_plus_mode": "no"})["success"]
+    assert (database.get_setting("lc_plus_mode"), database.get_setting("lc_plus")) == ("no", "0")
+    assert detections == ["settings"]
+    # Back to Auto starts a detection.
+    assert api.save_settings({"lc_plus_mode": "auto"})["success"]
+    assert detections == ["settings", "settings"]
+
+
+def test_lc_plus_check_needs_a_catalog(lc_catalog, monkeypatch):
+    from core import extension_bridge
+    from core.api import Api
+
+    api = Api()
+    monkeypatch.setattr(extension_bridge, "is_available", lambda site="f95": True)
+    assert api.get_settings()["lc_plus_check"] == "ready"
+    database.update_setting("catalog_enabled", "0")
+    assert api.get_settings()["lc_plus_check"] == "no_catalog"
+
+
+def test_premium_lc_threads_are_newest_first_with_imports_last(lc_catalog, tmp_path):
+    from core.game_lookup import premium_lc_threads
+
+    lc_catalog.executemany(
+        "INSERT INTO lc_threads(thread_id,title,tier,url,ts,first_seen,last_seen,origin) VALUES (?,?,?,'',?,'','',?)",
+        [(30, "Old plus", "Premium", 100, None), (31, "New plus", "Premium", 300, None),
+         (32, "Imported plus", "Premium", 900, "import"), (33, "Free", "Free", 999, None),
+         (34, "Gone plus", "Premium", 800, None)],
+    )
+    lc_catalog.execute("UPDATE lc_threads SET removed_at = 'yesterday' WHERE thread_id = 34")
+    lc_catalog.commit()
+    assert premium_lc_threads(3) == ["31", "30", "22"]
+    assert premium_lc_threads(1) == ["31"]
+    # Imported rows only fill the rest.
+    assert premium_lc_threads(5) == ["31", "30", "22", "32"]
+    lc_catalog.execute("UPDATE lc_threads SET origin = 'import' WHERE thread_id IN (22, 30, 31)")
+    lc_catalog.commit()
+    assert premium_lc_threads(2) == ["32", "31"]
+    database.update_setting("catalog_enabled", "0")
+    assert premium_lc_threads(3) == []
+    database.update_setting("catalog_enabled", "1")
+    lc_catalog.close()
+    (tmp_path / "catalog.db").unlink()
+    assert premium_lc_threads(3) == []

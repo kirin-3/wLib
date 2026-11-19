@@ -199,7 +199,22 @@ test("browser mock payloads keep the desktop contract for every bridge method", 
     // the desktop database writes.
     assert.equal((await api.getSettings()).lc_enabled, false);
     assert.equal((await api.getSettings()).lc_plus, false);
-    assert.equal((await api.saveSettings({ lc_enabled: true, lc_plus: true })).success, true);
+    assert.equal((await api.getSettings()).lc_plus_mode, "auto");
+    assert.equal((await api.saveSettings({ lc_enabled: true })).success, true);
+    const unknown = await api.checkLcPlus();
+    assert.equal(unknown.success, true);
+    assert.equal(unknown.checked_without_result, true);
+    assert.equal(unknown.lc_plus_detected, "");
+    assert.ok(unknown.lc_plus_detected_at);
+    storage.set("wlib-mock-lc-plus-result", "plus");
+    const plus = await api.checkLcPlus();
+    assert.equal(plus.lc_plus_detected, "plus");
+    assert.equal(plus.lc_plus, true);
+    storage.delete("wlib-mock-lc-plus-result");
+    assert.equal((await api.saveSettings({ lc_plus_mode: "no" })).success, true);
+    assert.equal((await api.getSettings()).lc_plus, false);
+    assert.equal((await api.checkLcPlus()).code, "mode");
+    assert.equal((await api.saveSettings({ lc_plus_mode: "yes" })).success, true);
     assert.equal((await api.getSettings()).lc_enabled, true);
     assert.equal((await api.getSettings()).lc_plus, true);
     assert.deepEqual(await api.lookupLcPartner("https://lewdcorner.com/threads/123/"), {});
@@ -700,8 +715,10 @@ test('update downloads expose browser mock payloads', async () => {
     assert.equal(links.site,'f95');
     const lcLinks = await api.getUpdateDownloadLinks(1,'lc');
     assert.equal(lcLinks.site,'lc');
-    assert.equal(lcLinks.builds[0].mirrors[1].host,'buzzheavier');
-    assert.equal(links.builds[0].mirrors[0].link_id,'mock-pixeldrain');
+    const full = (response) => response.builds.find((build) => build.kind === 'full');
+    assert.equal(full(lcLinks).mirrors[1].host,'buzzheavier');
+    assert.equal(full(links).mirrors[0].link_id,'mock-pixeldrain');
+    assert.equal(links.builds[0].kind,'old');
     const before = await api.getDownloadQueue();
     assert.equal(before.success,true);
     assert.equal(before.queue.max_active,2);

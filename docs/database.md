@@ -335,4 +335,8 @@ exported and imported in the metadata section and are in `SYNC_GAME_COLUMNS`.
 - `games.lc_url` stores a canonical `https://lewdcorner.com/threads/<id>/` URL or an empty string. A partial unique index reserves each thread for one game.
 - `games.lc_mode` stores `''` (Default), `on`, or `off`.
 - `games.lc_dismissed` stores the numeric ID of the last LC thread the user cleared or replaced, or an empty string.
-- `lc_enabled` and `lc_plus` are library settings stored as `0` (off, the default) or `1` (on).
+- `lc_enabled` is a library setting stored as `0` (off, the default) or `1` (on).
+- `lc_plus_mode` is the "LC Plus" setting: `auto` (the default), `yes` or `no`. It is in `GENERAL_SETTINGS_KEYS`, so backups and sync carry it; an unknown imported value is `auto`. `init_db()` sets it once from the old `lc_plus` switch when it is missing (`1` gives `yes`, anything else `auto`).
+- `lc_plus` is kept for older wLib versions: each save of the mode writes `1` for `yes` and `0` otherwise. It is still exported, but wLib no longer reads it for decisions. A backup that has `lc_plus` and no mode restores as `yes` (on) or `auto` (off); a sync merge applies only an old `1` and keeps the local mode for an old `0`.
+- `lc_plus_detected` (`plus`, `standard` or empty) and `lc_plus_detected_at` (UTC ISO time of the last detection) are device-local: they are not in `GENERAL_SETTINGS_KEYS`, so they are never exported or synced. `database.lc_plus_effective()` (`lewdcorner.plus_effective`) gives the effective state: `yes`, or `auto` with `plus` detected.
+- `init_db()` changes `games.engine = 'Other'` to `'Others'` (LC's "Other" engine is F95's "Others"); backup and sync game imports map an incoming `Other` the same way.

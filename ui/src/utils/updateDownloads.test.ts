@@ -71,3 +71,19 @@ test('a site the game no longer offers falls back to the default', () => {
   assert.equal(siteUnavailable('lc', []), false);
   assert.equal(siteUnavailable('lc', undefined), false);
 });
+
+test('old builds are kept apart and never preselected', () => {
+  const old = {...build('windows', 'old'), section: 'Old Versions'};
+  const builds = [old, build('windows')];
+  const ordered = orderBuilds(builds, 'linux');
+  assert.deepEqual(ordered.old, [old]);
+  assert.ok(!ordered.suitable.includes(old) && !ordered.other.includes(old));
+  assert.equal(preselect(builds, 'linux')?.build.kind, 'full');
+  assert.equal(preselect([old], 'linux'), null);
+});
+
+test('bulk download asks when only older versions were found', () => {
+  const decision = bulkDownloadDecision({success: true, builds: [build('windows', 'old'), build('mac')]}, 'linux');
+  assert.equal(decision.kind, 'needs-choice');
+  assert.equal(decision.kind === 'needs-choice' && decision.reason, 'Only older versions were found');
+});

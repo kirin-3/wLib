@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { GamescopeSettings, RpgmakerLinuxRunnerStatus, SaveBackupKeep, SettingsResponse } from "../api";
+import type { GamescopeSettings, LcPlusMode, LcPlusTier, RpgmakerLinuxRunnerStatus, SaveBackupKeep, SettingsResponse } from "../api";
 import { FILTER_OPTIONS, SCALER_OPTIONS, WINDOW_MODE_OPTIONS, argsError, fpsLimitError, normalizeResolution } from "../../utils/gamescope";
 import type { LibraryFilterPreset } from "../../utils/libraryViewState";
 import { VALID_SORT_FIELDS } from "../../utils/libraryViewState";
@@ -58,7 +58,18 @@ export const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   catalog_enabled: true,
   lc_enabled: false,
   lc_plus: false,
+  lc_plus_mode: "auto",
+  lc_plus_detected: "",
+  lc_plus_detected_at: "",
+  lc_plus_check: "ready",
 };
+
+const lcPlusTier = (value: unknown): LcPlusTier => value === "plus" || value === "standard" ? value : "";
+// Mock rule like the backend: an old "I have LC Plus" on is Yes, anything else without a mode is Auto.
+const lcPlusMode = (source: Record<string, unknown>): LcPlusMode =>
+  source.lc_plus_mode === "yes" || source.lc_plus_mode === "no" || source.lc_plus_mode === "auto"
+    ? source.lc_plus_mode
+    : source.lc_plus === true ? "yes" : "auto";
 
 const stringList = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
@@ -195,7 +206,11 @@ export const normalizeMockSettings = (value: unknown): SettingsResponse => {
     save_backup_keep: isSaveBackupKeep(source.save_backup_keep) ? source.save_backup_keep : "all",
     catalog_enabled: source.catalog_enabled !== false,
     lc_enabled: source.lc_enabled === true,
-    lc_plus: source.lc_plus === true,
+    lc_plus: lcPlusMode(source) === "yes" || (lcPlusMode(source) === "auto" && lcPlusTier(source.lc_plus_detected) === "plus"),
+    lc_plus_mode: lcPlusMode(source),
+    lc_plus_detected: lcPlusTier(source.lc_plus_detected),
+    lc_plus_detected_at: typeof source.lc_plus_detected_at === "string" ? source.lc_plus_detected_at : "",
+    lc_plus_check: source.lc_plus_check === "no_extension" || source.lc_plus_check === "no_catalog" ? source.lc_plus_check : "ready",
   };
 };
 

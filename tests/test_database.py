@@ -2637,3 +2637,46 @@ def test_caller_thread_states_trust_page_reads_only_for_lc_only_games():
     assert caller_thread_states(False, True, seen, has_f95=True) == (False, True, seen)
     assert caller_thread_states(None, True, seen, has_f95=False) is None
     assert caller_thread_states(False, True, "garbage", has_f95=True) is None
+
+
+@pytest.mark.parametrize(("old", "mode"), [("1", "yes"), ("0", "auto"), (None, "auto")])
+def test_lc_plus_mode_comes_from_the_old_switch_once(old, mode):
+    init_db()
+    with closing(get_connection()) as conn:
+        conn.execute("DELETE FROM settings WHERE key IN ('lc_plus', 'lc_plus_mode')")
+        if old is not None:
+            conn.execute("INSERT INTO settings (key, value) VALUES ('lc_plus', ?)", (old,))
+        conn.commit()
+    init_db()
+    assert get_setting("lc_plus_mode") == mode
+    # A second start keeps the mode, even when the old switch changed meanwhile.
+    update_setting("lc_plus", "0" if mode == "yes" else "1")
+    init_db()
+    assert get_setting("lc_plus_mode") == mode
+
+
+def test_effective_lc_plus_reads_the_mode_and_the_detected_tier():
+    from core.database import lc_plus_effective
+
+    init_db()
+    assert get_setting("lc_plus_mode") == "auto"
+    assert lc_plus_effective() is False
+    update_setting("lc_plus_detected", "plus")
+    assert lc_plus_effective() is True
+    update_setting("lc_plus_mode", "no")
+    assert lc_plus_effective() is False
+    update_setting("lc_plus_mode", "yes")
+    update_setting("lc_plus_detected", "standard")
+    assert lc_plus_effective() is True
+
+
+def test_engine_other_becomes_others_at_start():
+    init_db()
+    game_id = add_game("LC game", "")
+    with closing(get_connection()) as conn:
+        conn.execute("UPDATE games SET engine = 'Other' WHERE id = ?", (game_id,))
+        conn.commit()
+    init_db()
+    assert get_game(game_id)["engine"] == "Others"
+    init_db()
+    assert get_game(game_id)["engine"] == "Others"

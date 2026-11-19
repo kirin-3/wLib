@@ -176,3 +176,133 @@ def test_lc_downloads_from_real_page_markup():
         assert all(url.startswith("https://lewdcorner.com/masked/out?") for url in urls[:4])
         assert urls[4].startswith("https://mxdrop.sx/f/")
         assert not any("proxy" in url or "attachments" in url for url in urls)
+
+
+def _spoiler(title, body):
+    return (
+        '<div class="bbCodeSpoiler"><button type="button" class="button bbCodeSpoiler-button">'
+        f'<span class="button-text"><span>Spoiler: <span class="bbCodeSpoiler-button-title">{title}</span>'
+        f'</span></span></button><div class="bbCodeSpoiler-content">{body}</div></div>'
+    )
+
+
+def _post(body, version="v0.21"):
+    return (
+        f'<html data-logged-in="true"><h1 class="p-title-value">Game [{version}] [Dev]</h1>'
+        f'<article class="message-threadStarterPost"><div class="bbWrapper">{body}</div></article></html>'
+    )
+
+
+@pytest.mark.parametrize(("title", "version", "expected"), [
+    ("Part 7", "v0.21", "part"),
+    ("Before the Tech Update (v0.20.16)", "v0.21", "old"),
+    ("Episode 2 (v0.21)", "v0.21", "ignore"),
+    ("Episode 2 (v0.21)", "0.21", "ignore"),
+    ("Old Versions", "v0.21", "old"),
+    ("Previous builds", "v0.21", "old"),
+    ("Legacy", "v0.21", "old"),
+    ("2024-05-01 build", "v0.21", "old"),
+    ("01.05.2024 build", "v0.21", "old"),
+    ("Downloads v0.5", "v0.21", "download"),
+    ("Changelog", "v0.21", "ignore"),
+    ("Installation", "v0.21", "ignore"),
+    ("Compressed (1.5 GB)", "v0.21", "ignore"),
+    ("Win (2.25 GiB)", "v0.21", "ignore"),
+    ("", "v0.21", "ignore"),
+])
+def test_spoiler_title_kind(title, version, expected):
+    from core.download_links import spoiler_title_kind
+
+    assert spoiler_title_kind(title, version) == expected
+
+
+def test_installation_spoiler_names_no_build():
+    html = _post(
+        _spoiler("Installation", "Extract and run.")
+        + '<b>DOWNLOAD</b><br><b>Win</b>: <a href="https://mega.nz/file/a#b">MEGA</a>'
+    )
+    builds = parse_download_links(html)["builds"]
+    assert [(b["label"], b["section"], b["kind"]) for b in builds] == [("Win", "", "full")]
+
+
+def test_current_build_after_old_version_spoiler():
+    html = _post(
+        "<b>DOWNLOAD</b><br>"
+        + _spoiler("Before the Tech Update (v0.20.16)", 'Win: <a href="https://mega.nz/file/old#k">MEGA</a>')
+        + '<b>Win</b>: <a href="https://mega.nz/file/new#k">MEGA</a>'
+    )
+    builds = parse_download_links(html)["builds"]
+    assert [(b["label"], b["section"], b["kind"]) for b in builds] == [
+        ("Win", "Before the Tech Update (v0.20.16)", "old"),
+        ("Win", "", "full"),
+    ]
+    full = builds[1]
+    # The old MEGA link listed first no longer joins the current build.
+    assert [m["url"] for m in full["mirrors"]] == ["https://mega.nz/file/new#k"]
+
+
+def test_part_spoilers_give_two_builds():
+    html = _post(
+        "<b>DOWNLOAD</b><br>"
+        + _spoiler("Part 7", '<b>Win</b>: <a href="https://mega.nz/file/p7#k">MEGA</a>')
+        + _spoiler("Part 8", '<b>Win</b>: <a href="https://mega.nz/file/p8#k">MEGA</a>')
+    )
+    builds = parse_download_links(html)["builds"]
+    assert [(b["section"], b["platform"], b["kind"]) for b in builds] == [
+        ("Part 7", "windows", "full"), ("Part 8", "windows", "full"),
+    ]
+
+
+def test_same_platform_inside_and_outside_old_spoiler():
+    html = _post(
+        "<b>DOWNLOAD</b><br>"
+        + _spoiler("Old Versions", '<b>Win</b>: <a href="https://mega.nz/file/old#k">MEGA</a>')
+        + '<b>Win</b>: <a href="https://mega.nz/file/new#k">MEGA</a>'
+    )
+    builds = parse_download_links(html)["builds"]
+    assert [(b["kind"], b["platform"], len(b["mirrors"])) for b in builds] == [
+        ("old", "windows", 1), ("full", "windows", 1),
+    ]
+
+
+def test_patch_inside_old_spoiler_is_old():
+    html = _post(
+        "<b>DOWNLOAD</b><br>"
+        + _spoiler("Old Versions", '<b>Win - Update Only</b>: <a href="https://mega.nz/file/old#k">MEGA</a>')
+    )
+    assert [b["kind"] for b in parse_download_links(html)["builds"]] == ["old"]
+
+
+def test_spoiler_with_current_version_is_not_old():
+    html = _post(
+        "<b>DOWNLOAD</b><br>"
+        + _spoiler("Episode 2 (v0.21)", '<b>Win</b>: <a href="https://mega.nz/file/e2#k">MEGA</a>'),
+        version="0.21",
+    )
+    assert [b["kind"] for b in parse_download_links(html)["builds"]] == ["full"]
+
+
+def test_lc_reads_spoilers_the_same_way():
+    body = (
+        "<b>DOWNLOAD</b><br>"
+        + _spoiler("Old Versions", '<b>Win</b>: <a href="https://mega.nz/file/old#k">MEGA</a>')
+        + '<b>Win</b>: <a href="https://mega.nz/file/new#k">MEGA</a>'
+    )
+    html = _post(body).replace(
+        '<article class="message-threadStarterPost">', '<article class="message message--post">'
+    )
+    f95 = parse_download_links(_post(body))["builds"]
+    lc = parse_download_links(html, "lc", page_version="v0.21")["builds"]
+    assert [(b["kind"], b["section"], [m["url"] for m in b["mirrors"]]) for b in lc] == [
+        (b["kind"], b["section"], [m["url"] for m in b["mirrors"]]) for b in f95
+    ]
+
+
+def test_spoiler_in_hidden_quote_copy_is_not_read():
+    html = _post(
+        "<b>DOWNLOAD</b><br>"
+        + '<span class="u-hidden">' + _spoiler("Old Versions", "Win: ") + "</span>"
+        + '<b>Win</b>: <a href="https://mega.nz/file/new#k">MEGA</a>'
+    )
+    builds = parse_download_links(html)["builds"]
+    assert [(b["label"], b["section"], b["kind"]) for b in builds] == [("Win", "", "full")]

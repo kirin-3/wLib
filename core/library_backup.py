@@ -1592,6 +1592,10 @@ def _import_fields_for_game(
             _game_section(imported_game, SECTION_METADATA).get("title")
         ).strip():
             _ = fields.pop("title", None)
+        # LC's engine "Other" is the engine F95 and wLib name "Others".
+        engine = fields.get("engine")
+        if isinstance(engine, str) and engine.strip() == "Other":
+            fields["engine"] = "Others"
 
     if SECTION_USER_STATE in sections:
         fields.update(
@@ -1818,6 +1822,8 @@ def _coerce_setting_value(key: str, raw: object) -> str:
         return json.dumps(raw, ensure_ascii=False)
     if key in lewdcorner.LC_SETTINGS:
         return "1" if _coerce_bool(raw) else "0"
+    if key == lewdcorner.LC_PLUS_MODE:
+        return lewdcorner.plus_mode(raw)
     if key in BOOLEAN_SETTINGS_KEYS:
         return "true" if _coerce_bool(raw) else "false"
     if key in gamescope.SETTINGS_DEFAULTS:
@@ -1987,12 +1993,42 @@ _COLLECTION_SETTING_KEYS = (
 )
 
 
+def _lc_plus_general_group(group: Mapping[str, object], sync: bool) -> dict[str, object]:
+    """Carry an older backup's "I have LC Plus" switch over to the LC Plus mode.
+
+    On becomes Yes. Off becomes Auto on a restore, but a sync merge keeps the
+    local mode, because an old "off" usually means the switch was never set.
+    With a mode, `lc_plus` is written to match it ("1" only for Yes).
+    """
+    result = dict(group)
+    raw_mode = result.get(lewdcorner.LC_PLUS_MODE)
+    if raw_mode is not None and _coerce_text(raw_mode).strip():
+        mode = lewdcorner.plus_mode(raw_mode)
+        result[lewdcorner.LC_PLUS_MODE] = mode
+        result["lc_plus"] = "1" if mode == "yes" else "0"
+        return result
+    _ = result.pop(lewdcorner.LC_PLUS_MODE, None)
+    if "lc_plus" not in result:
+        return result
+    raw_old = result["lc_plus"]
+    if not isinstance(raw_old, (bool, int, float)) and not _coerce_text(raw_old).strip():
+        return result
+    if _coerce_bool(raw_old):
+        result[lewdcorner.LC_PLUS_MODE] = "yes"
+    elif sync:
+        _ = result.pop("lc_plus")
+    else:
+        result[lewdcorner.LC_PLUS_MODE] = "auto"
+    return result
+
+
 def _import_setting_groups(
     cursor: sqlite3.Cursor,
     backup: Mapping[str, object],
     sections: set[str],
     merge_mode: str = "overwrite",
     mirror: bool = False,
+    sync: bool = False,
 ) -> int:
     settings = _coerce_mapping(backup.get("settings"))
     groups: list[tuple[str, Sequence[str]]] = []
@@ -2004,6 +2040,8 @@ def _import_setting_groups(
     updated = 0
     for group_name, allowed_keys in groups:
         group = _coerce_mapping(settings.get(group_name))
+        if group_name == "general":
+            group = _lc_plus_general_group(group, sync)
         if group_name == "paths":
             updated += _import_library_folders(cursor, group, merge_mode, mirror)
         for key in allowed_keys:
@@ -2467,7 +2505,7 @@ def apply_library_backup(
                     _replace_launch_targets(cursor, game_id, imported_game)
 
             settings_updated = _import_setting_groups(
-                cursor, backup, sections, merge_mode, mirror
+                cursor, backup, sections, merge_mode, mirror, sync
             )
             if SECTION_USER_STATE in sections and not mirror:
                 # Memberships of collections this machine lacks would stay

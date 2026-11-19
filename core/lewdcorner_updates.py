@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
-from core import database, extension_bridge, lewdcorner as lc
+from core import database, extension_bridge, lewdcorner as lc, lewdcorner_plus
 from core.versions import actionable_remote_version, normalize_version
 
 logger = logging.getLogger(__name__)
@@ -124,6 +124,7 @@ def check_thread(
     elif (single or not catalog_usable and not stored_version) and available:
         try:
             response = _fetch(url)
+            lewdcorner_plus.note_thread_page(lc.extract_thread_id(url), response.body, response.status)
             premium = bool(feed_item and feed_item.premium) or (
                 str(catalog.get("tier") or "").casefold() == "premium"
             )

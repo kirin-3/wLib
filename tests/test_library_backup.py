@@ -3840,6 +3840,7 @@ def test_lc_backup_round_trip_merge_and_restore(tmp_path, monkeypatch):
     update_setting("lc_feed_read_at", versions["lc_latest_at"])
     update_setting("lc_enabled", "1")
     update_setting("lc_plus", "1")
+    update_setting("lc_plus_mode", "yes")
     backup = build_library_backup({"sections": [SECTION_METADATA, SECTION_SETTINGS_GENERAL]})
     assert backup["games"][0]["metadata"]["lc_dismissed"] == "22"
     assert backup["settings"]["general"]["lc_plus"] == "1"
@@ -3934,3 +3935,41 @@ def test_thread_states_backup_round_trip_and_older_backup(tmp_path):
         conn.commit()
     assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})["success"]
     assert {(g["thread_onhold"], g["thread_abandoned"]) for g in get_all_games()} == {(None, None)}
+
+
+def _general_backup(general: dict[str, object]) -> dict[str, object]:
+    backup = base_backup([])
+    backup["selected_sections"] = [SECTION_SETTINGS_GENERAL]
+    backup["settings"] = {"general": general}
+    return backup
+
+
+@pytest.mark.parametrize(("old", "mode"), [("0", "auto"), ("1", "yes"), (False, "auto"), (True, "yes")])
+def test_old_backup_lc_plus_maps_to_the_mode(old, mode):
+    update_setting("lc_plus_mode", "no")
+    apply_library_backup(_general_backup({"lc_plus": old}), {"sections": [SECTION_SETTINGS_GENERAL]})
+    assert get_setting("lc_plus_mode") == mode
+    assert get_setting("lc_plus") == ("1" if mode == "yes" else "0")
+
+
+def test_backup_lc_plus_mode_wins_and_unknown_is_auto():
+    apply_library_backup(_general_backup({"lc_plus": "1", "lc_plus_mode": "no"}), {"sections": [SECTION_SETTINGS_GENERAL]})
+    assert (get_setting("lc_plus_mode"), get_setting("lc_plus")) == ("no", "0")
+    apply_library_backup(_general_backup({"lc_plus_mode": "sometimes"}), {"sections": [SECTION_SETTINGS_GENERAL]})
+    assert get_setting("lc_plus_mode") == "auto"
+
+
+def test_export_keeps_the_lc_plus_mode_but_not_the_detected_tier():
+    update_setting("lc_plus_mode", "auto")
+    update_setting("lc_plus_detected", "plus")
+    update_setting("lc_plus_detected_at", "2026-11-19T10:00:00Z")
+    general = build_library_backup({"sections": [SECTION_SETTINGS_GENERAL]})["settings"]["general"]
+    assert general["lc_plus_mode"] == "auto"
+    assert "lc_plus_detected" not in general and "lc_plus_detected_at" not in general
+    assert "plus" not in json.dumps(general).replace("lc_plus", "")
+
+
+def test_restore_maps_engine_other_to_others():
+    backup = base_backup([{"metadata": {"title": "LC game", "engine": "Other"}}])
+    assert apply_library_backup(backup, {"sections": [SECTION_METADATA]})["created"] == 1
+    assert get_all_games()[0]["engine"] == "Others"

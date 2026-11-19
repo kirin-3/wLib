@@ -17,9 +17,11 @@ LC_HOSTS = frozenset({"lewdcorner.com", "www.lewdcorner.com"})
 _THREAD_PATH = re.compile(r"^/threads/(?:[^/]+\.)?([0-9]+)(?:/.*)?$", re.IGNORECASE)
 LC_ENGINE_PREFIXES = (
     "Flash", "HTML", "Java", "QSP", "RAGS", "RPGM", "Ren'Py", "Unity",
-    "Unreal Engine", "WebGL", "Wolf RPG", "Godot", "Other",
+    "Unreal Engine", "WebGL", "Wolf RPG", "Godot", "ADRIFT", "Tads", "Other",
 )
-_ENGINES = {normalize_prefix_label(name): name for name in LC_ENGINE_PREFIXES}
+# LC's engine "Other" is the engine F95 names "Others".
+_ENGINE_NAMES = {"Other": "Others"}
+_ENGINES = {normalize_prefix_label(name): _ENGINE_NAMES.get(name, name) for name in LC_ENGINE_PREFIXES}
 # LC prefix ids that share an engine's name but are not an engine: 29 is the
 # render prefix "Other Render Engine", which LC labels "Other" like engine 22.
 LC_NON_ENGINE_PREFIX_IDS = frozenset({29})
@@ -43,7 +45,16 @@ def lc_prefix(name: object, prefix_id: object = None) -> LcPrefix | None:
         number = int(prefix_id.strip())
     return LcPrefix(name.strip(), number)
 LC_SETTINGS = ("lc_enabled", "lc_plus")
+# "LC Plus" is Auto, Yes or No. `lc_plus` keeps "1" only for Yes, so an older
+# wLib that reads it keeps an explicit Yes. The detected tier is device-local.
+LC_PLUS_MODE = "lc_plus_mode"
+LC_PLUS_MODES = ("auto", "yes", "no")
+LC_PLUS_DETECTED = "lc_plus_detected"
+LC_PLUS_DETECTED_AT = "lc_plus_detected_at"
 GAME_NODES = {"6", "212", "119", "213"}
+# LC's Plus forums: Games+ and AI Games+. A signed-in thread page in one of
+# them proves the account has LC Plus.
+LC_PLUS_FORUMS = frozenset({119, 213})
 
 
 def hosts_url(url: str) -> bool:
@@ -113,6 +124,18 @@ def setting_enabled(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "on", "yes"}
 
 
+def plus_mode(value: object) -> str:
+    """The LC Plus mode from a stored or imported value; anything unknown is Auto."""
+    text = str(value or "").strip().lower()
+    return text if text in LC_PLUS_MODES else "auto"
+
+
+def plus_effective(mode: object, detected: object) -> bool:
+    """Yes, or Auto with a detected Plus tier, means the account has LC Plus."""
+    current = plus_mode(mode)
+    return current == "yes" or (current == "auto" and str(detected or "") == "plus")
+
+
 def lc_active(game: Mapping[str, object], lc_enabled: bool) -> bool:
     mode = game.get("lc_mode") or ""
     return bool(game.get("lc_url")) and (
@@ -120,7 +143,23 @@ def lc_active(game: Mapping[str, object], lc_enabled: bool) -> bool:
     )
 
 
-_TRAILING_GROUP_RE = re.compile(r"\s*\[[^\[\]]*\]\s*$")
+_TRAILING_GROUP_RE = re.compile(r"\s*\[([^\[\]]*)\]\s*$")
+
+
+def split_title(text: str) -> tuple[str, str | None]:
+    """The title without its trailing bracket groups, and the developer from the
+    last group when there are two or more ("[v1.2.0] [opopoworld]").
+
+    A copy of the catalog builder's `split_title` (catalog_server/sources/lc_plus.py),
+    which the app bundle must not import."""
+    groups: list[str] = []
+    rest = text
+    while (match := _TRAILING_GROUP_RE.search(rest)) is not None and match.start() > 0:
+        groups.insert(0, match.group(1).strip())
+        rest = rest[: match.start()]
+    title = rest.strip()
+    developer = groups[-1] if len(groups) >= 2 and groups[-1] else None
+    return title, developer
 
 
 def page_title(text: object) -> str:
@@ -130,10 +169,7 @@ def page_title(text: object) -> str:
     title alone, and so do F95 games. A heading that is only bracket groups
     is kept as it is."""
     title = str(text or "").strip()
-    rest = title
-    while (match := _TRAILING_GROUP_RE.search(rest)) is not None and match.start() > 0:
-        rest = rest[: match.start()].rstrip()
-    return rest or title
+    return split_title(title)[0] or title
 
 
 MAX_PAGE_SCREENSHOTS = 20
@@ -305,6 +341,8 @@ class _ThreadPage(HTMLParser):
         super().__init__()
         self.template = ""
         self.logged_in: bool | None = None
+        # The thread's forum, from XenForo's `data-container-key="node-<id>"`.
+        self.node: int | None = None
         self.in_title = False
         self.in_version_field = False
         self.in_version = False
@@ -323,6 +361,8 @@ class _ThreadPage(HTMLParser):
         classes = (attr.get("class") or "").split()
         if tag == "html":
             self.template = attr.get("data-template") or ""
+            node = re.fullmatch(r"node-([0-9]{1,9})", attr.get("data-container-key") or "")
+            self.node = int(node.group(1)) if node else None
             match attr.get("data-logged-in"):
                 case "true":
                     self.logged_in = True
@@ -374,6 +414,28 @@ class _ThreadPage(HTMLParser):
             self.version.append(data)
         if self._prefix_tag:
             self._prefix_text.append(data)
+
+
+def tier_signal(body: str, status: int) -> str | None:
+    """What an LC thread page says about the account's tier: plus, standard or None.
+
+    Plus needs a signed-in thread page in a Plus forum, so a stale catalog tier
+    never gives a false Plus. Standard is LC's signed-in 403 error page; the
+    caller must know that the thread is a Plus thread. Anything else is None.
+    """
+    page = _ThreadPage()
+    try:
+        page.feed(body)
+        page.close()
+    except (AssertionError, ValueError):
+        return None
+    if page.challenge or page.logged_in is not True:
+        return None
+    if status == 200 and page.template == "thread_view" and page.node in LC_PLUS_FORUMS:
+        return "plus"
+    if status == 403 and page.template == "error":
+        return "standard"
+    return None
 
 
 def parse_thread_page(

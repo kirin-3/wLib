@@ -10,7 +10,7 @@ import sys
 import threading
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import closing, contextmanager, suppress
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from core import database, lewdcorner, lewdcorner_updates
 from core.controllers import ControllerWatcher
@@ -131,6 +131,11 @@ class ApiBase:
         from core import extension_bridge
 
         extension_bridge.add_lc_images_listener(self.cover_cache.wake)
+        from core import lewdcorner_plus
+
+        # LC Plus detection when an extension that can fetch LC pages connects.
+        extension_bridge.add_lc_fetch_listener(lewdcorner_plus.on_lc_fetch_available)
+        lewdcorner_plus.set_turned_on_callback(self._lc_plus_turned_on)
         self.controller_watcher: ControllerWatcher = hide_from_js(
             ControllerWatcher(on_change=self._controller_presence_changed)
         )
@@ -1266,8 +1271,19 @@ class ApiBase:
         _ = self._fill_ratings_from_catalog()
         _ = self._fill_thread_details_from_catalog()
 
+    def _start_lc_plus_detection(self, trigger: Literal["settings", "connect", "check_now"]) -> None:
+        from core import lewdcorner_plus
+
+        lewdcorner_plus.start(trigger)
+
+    def _lc_plus_turned_on(self) -> None:
+        """A detection found Plus: fill Premium LC threads in the background."""
+        threading.Thread(
+            target=self._apply_lc_setting_change, kwargs={"turned_on": True}, daemon=True
+        ).start()
+
     def _apply_lc_setting_change(self, *, turned_on: bool) -> None:
-        """Runs in the background after "Use LewdCorner" changes, or "I have LC Plus" turns on.
+        """Runs in the background after "Use LewdCorner" changes, or the effective LC Plus state turns on.
 
         Each LC game's newest version is picked again for the new setting.
         When a setting turned on, new LC threads, and games that the setting

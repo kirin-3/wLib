@@ -266,8 +266,13 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         resolved = resolve_page(page_url, [f"{link['source']}:{link['id']}" for link in links])
         expanded = resolved["ids"]
         if lc_url:
-            # A catalog title, when there is one, replaces this below.
-            payload["title"] = lewdcorner.page_title(payload.get("title"))
+            # A catalog title and developer, when there are ones, replace these below.
+            heading = str(payload.get("title") or "").strip()
+            title, title_developer = lewdcorner.split_title(heading)
+            payload["title"] = title or heading
+            # The page's Developer field wins over the title's last bracket group.
+            if title_developer and not str(payload.get("developer") or "").strip():
+                payload["developer"] = title_developer
             payload["screenshots"] = lewdcorner.page_screenshots(payload.get("screenshots"))
             raw_prefixes = payload.get("prefixes")
             if isinstance(raw_prefixes, list):

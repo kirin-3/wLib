@@ -231,6 +231,25 @@ _last_lc_request: float | None = None
 _lc_background_fetches: deque[float] = deque(maxlen=LC_BACKGROUND_PER_HOUR)
 # Called (outside any lock) when a connection starts to report LC image support.
 _on_lc_images_available: list[Callable[[], None]] = []
+# Called (outside any lock) when a connection starts to report LC page fetches.
+_on_lc_fetch_available: list[Callable[[], None]] = []
+
+
+def add_lc_fetch_listener(callback: Callable[[], None]) -> None:
+    """Run ``callback`` each time a connection's ``can_fetch_lc`` turns true."""
+    with _lock:
+        if callback not in _on_lc_fetch_available:
+            _on_lc_fetch_available.append(callback)
+
+
+def _notify_lc_fetch_available() -> None:
+    with _lock:
+        callbacks = list(_on_lc_fetch_available)
+    for callback in callbacks:
+        try:
+            callback()
+        except Exception:
+            logger.exception("LC fetch listener failed")
 
 
 def add_lc_images_listener(callback: Callable[[], None]) -> None:
@@ -282,6 +301,7 @@ def reset_for_tests() -> None:
         _pending_images.clear()
         _lc_background_fetches.clear()
         _on_lc_images_available.clear()
+        _on_lc_fetch_available.clear()
         _pending_resolves.clear()
         _disconnects = 0
         _last_disconnect_at = None
@@ -462,8 +482,11 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
         )
         if conn.can_fetch_lc_images:
             _notify_lc_images_available()
+        if conn.can_fetch_lc:
+            _notify_lc_fetch_available()
     elif raw_type == "status":
         could_fetch = conn.can_fetch
+        could_fetch_lc = conn.can_fetch_lc
         could_resolve_lc = conn.can_resolve_lc
         could_fetch_lc_images = conn.can_fetch_lc_images
         conn.note_status(
@@ -478,6 +501,8 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
             logger.info("Browser extension can_fetch_lc_images: %s", conn.can_fetch_lc_images)
             if conn.can_fetch_lc_images:
                 _notify_lc_images_available()
+        if conn.can_fetch_lc and not could_fetch_lc:
+            _notify_lc_fetch_available()
     elif raw_type == "ping":
         try:
             conn.send_text(json.dumps({"type": "pong"}))
@@ -602,11 +627,24 @@ def _wait_lc_gap() -> None:
             time.sleep(delay)
 
 
-def fetch(url: str, timeout: float = 30, *, site: Site = "f95") -> BridgeResponse:
-    """Send one fetch to the newest eligible extension and wait for its body."""
+def _lc_gap_ready_at() -> float:
+    return (_last_lc_request or 0.0) + LC_GAP_SECONDS
+
+
+def fetch(url: str, timeout: float = 30, *, site: Site = "f95", background: bool = False) -> BridgeResponse:
+    """Send one fetch to the newest eligible extension and wait for its body.
+
+    A ``background`` LC fetch keeps the normal LC gap but waits behind every
+    foreground LC request, including ones that arrive while it waits."""
     if site == "lc":
         if not is_available(site="lc"):
             raise BridgeUnavailable("no eligible extension connected")
+        if background:
+            _lc_request_lock.acquire_background(_lc_gap_ready_at)
+            try:
+                return _fetch(url, timeout, site)
+            finally:
+                _lc_request_lock.release()
         with _lc_request_lock:
             _wait_lc_gap()
             return _fetch(url, timeout, site)

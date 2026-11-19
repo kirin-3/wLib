@@ -1181,6 +1181,9 @@ def _fetch_lc_thread_download_links(url: str) -> dict[str, object]:
             "success": False, "code": "lc_extension_unavailable",
             "error": "Open a browser with the wLib extension and turn on its LewdCorner switch",
         }
+    from core import lewdcorner_plus
+
+    lewdcorner_plus.note_thread_page(lewdcorner.extract_thread_id(thread), response.body, response.status)
     login = "Sign in to LewdCorner in your browser"
     try:
         page = lewdcorner.parse_thread_page(response.body, response.status, for_downloads=True)

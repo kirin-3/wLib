@@ -2144,3 +2144,40 @@ def test_thread_states_sync_between_data_directories(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", str(db_a))
     a.run()
     assert database.get_game(alpha)["thread_abandoned"] == 0
+
+
+def _old_sync_payload(lc_plus):
+    from core.library_backup import build_sync_backup
+
+    payload = build_sync_backup("2026-11-19T10:00:00Z", "older-device")
+    general = payload["settings"]["general"]
+    general.pop("lc_plus_mode", None)
+    general["lc_plus"] = lc_plus
+    return payload
+
+
+@pytest.mark.parametrize(("local", "old", "expected"), [
+    ("no", "0", "no"), ("yes", "0", "yes"), ("auto", "0", "auto"), ("no", "1", "yes"), ("auto", "1", "yes"),
+])
+def test_sync_from_an_older_device_applies_only_lc_plus_on(local, old, expected):
+    from core.library_backup import apply_library_backup
+
+    database.update_setting("lc_plus_mode", local)
+    database.update_setting("lc_plus", "1" if local == "yes" else "0")
+    payload = _old_sync_payload(old)
+    apply_library_backup(payload, {"sections": ["settings_general"]}, mirror=True, sync=True)
+    assert database.get_setting("lc_plus_mode") == expected
+    assert database.get_setting("lc_plus") == ("1" if expected == "yes" else "0")
+
+
+def test_sync_keeps_the_detected_tier_on_this_device():
+    from core.library_backup import apply_library_backup, build_sync_backup
+
+    database.update_setting("lc_plus_detected", "plus")
+    payload = build_sync_backup("2026-11-19T10:00:00Z", "device-a")
+    assert "lc_plus_detected" not in json.dumps(payload)
+    database.update_setting("lc_plus_detected", "")
+    apply_library_backup(payload, {"sections": ["settings_general"]}, mirror=True, sync=True)
+    assert database.get_setting("lc_plus_detected") == ""
+    assert database.get_setting("lc_plus_mode") == "auto"
+    assert database.lc_plus_effective() is False

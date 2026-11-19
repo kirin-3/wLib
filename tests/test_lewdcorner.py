@@ -59,9 +59,9 @@ def test_prefix_flags(prefixes, engine, flags):
 @pytest.mark.parametrize(("prefixes", "engine"), [
     ([lewdcorner.LcPrefix("Other", 29)], ""),
     ([lewdcorner.LcPrefix("Other", 29), lewdcorner.LcPrefix("Ren'Py", 9)], "Ren'Py"),
-    ([lewdcorner.LcPrefix("Other", 22)], "Other"),
-    (["Other"], "Other"),
-    ([lewdcorner.LcPrefix("Other")], "Other"),
+    ([lewdcorner.LcPrefix("Other", 22)], "Others"),
+    (["Other"], "Others"),
+    ([lewdcorner.LcPrefix("Other")], "Others"),
 ])
 def test_render_other_prefix_id_sets_no_engine(prefixes, engine):
     assert lewdcorner.prefix_details(prefixes)[0] == engine
@@ -309,3 +309,98 @@ def test_changing_use_lewdcorner_recomputes_the_winning_version():
     assert database.refresh_latest_versions() == 1
     stored = database.get_game(game_id)
     assert (stored["latest_version"], stored["latest_site"]) == ("0.6", "lc")
+
+
+@pytest.mark.parametrize(("mode", "detected", "expected"), [
+    ("yes", "", True), ("yes", "plus", True), ("yes", "standard", True),
+    ("no", "", False), ("no", "plus", False), ("no", "standard", False),
+    ("auto", "", False), ("auto", "plus", True), ("auto", "standard", False),
+    ("", "plus", True), ("bogus", "plus", True), (None, None, False),
+])
+def test_plus_effective(mode, detected, expected):
+    from core.lewdcorner import plus_effective
+
+    assert plus_effective(mode, detected) is expected
+
+
+@pytest.mark.parametrize(("names", "ids", "engine"), [
+    (["ADRIFT"], [None], "ADRIFT"),
+    (["Tads"], [None], "Tads"),
+    (["Other"], [22], "Others"),
+    (["Other"], [29], ""),
+    (["Other"], [None], "Others"),
+])
+def test_lc_engine_prefixes(names, ids, engine):
+    from core.lewdcorner import LcPrefix, prefix_details
+
+    assert prefix_details([LcPrefix(name, prefix_id) for name, prefix_id in zip(names, ids, strict=True)])[0] == engine
+
+
+@pytest.mark.parametrize(("heading", "expected"), [
+    ("BreedVille [v0.10.0] [Redsky]", ("BreedVille", "Redsky")),
+    ("Game Name [v0.5]", ("Game Name", None)),
+    ("Plain title", ("Plain title", None)),
+    ("[v1.0] [Dev]", ("[v1.0]", None)),
+])
+def test_split_title(heading, expected):
+    from core.lewdcorner import page_title, split_title
+
+    title, developer = split_title(heading)
+    assert ((title or heading), developer) == expected
+    assert page_title(heading) == expected[0]
+
+
+@pytest.mark.parametrize(("body", "status", "expected"), [
+    ('<html data-template="thread_view" data-container-key="node-119" data-logged-in="true">', 200, "plus"),
+    ('<html data-template="thread_view" data-container-key="node-213" data-logged-in="true">', 200, "plus"),
+    ('<html data-template="error" data-logged-in="true">', 403, "standard"),
+    ('<html data-template="thread_view" data-container-key="node-6" data-logged-in="true">', 200, None),
+    ('<html data-template="thread_view" data-container-key="node-119" data-logged-in="false">', 200, None),
+    ('<html data-template="login" data-logged-in="false">', 200, None),
+    ('<html data-template="error" data-logged-in="false">', 403, None),
+    ('<html data-template="thread_view" data-container-key="node-119" data-logged-in="true"><form id="challenge-form">', 200, None),
+    ('<html><form id="challenge-form">', 403, None),
+    ('<html data-template="error" data-logged-in="true">', 404, None),
+    ('<html data-template="error" data-logged-in="true">', 500, None),
+    ('<html data-template="thread_view" data-container-key="node-119" data-logged-in="true">', 500, None),
+    ("", 200, None),
+])
+def test_tier_signal(body, status, expected):
+    from core.lewdcorner import tier_signal
+
+    assert tier_signal(body, status) == expected
+
+
+def test_thread_page_reads_the_forum_node():
+    from pathlib import Path
+
+    from core.lewdcorner import _ThreadPage
+
+    page = _ThreadPage()
+    page.feed((Path(__file__).parent / "fixtures" / "catalog" / "lc_thread_6.html").read_text())
+    assert page.node == 6
+
+
+def test_tier_signal_on_saved_standard_pages():
+    from pathlib import Path
+
+    from core.lewdcorner import LcUpdateError, parse_thread_page, tier_signal
+
+    fixtures = Path(__file__).parent / "fixtures"
+    free = (fixtures / "lc_thread_standard_free.html").read_text()
+    plus = (fixtures / "lc_thread_plus_synthetic.html").read_text()
+    # A Free thread in the Games forum says nothing about the tier.
+    assert tier_signal(free, 200) is None
+    # The same page in Games+ (synthetic: no Plus account) means Plus.
+    assert tier_signal(plus, 200) == "plus"
+    assert tier_signal(plus, 403) is None
+    # LC's signed-in 403 error page for a catalog Premium thread means Standard.
+    denied = (fixtures / "lc_thread_standard_plus_denied.html").read_text()
+    assert tier_signal(denied, 403) == "standard"
+    assert tier_signal(denied, 200) is None
+    with pytest.raises(LcUpdateError) as error:
+        parse_thread_page(denied, 403)
+    assert error.value.code == "lc_plus_required"
+    # The forum check does not change what the thread page parser reads.
+    assert parse_thread_page(free, 200) == parse_thread_page(plus, 200)
+    assert parse_thread_page(free, 200).version == "Release 10"

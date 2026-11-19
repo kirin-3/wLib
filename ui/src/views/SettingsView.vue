@@ -5,7 +5,8 @@ import { useGamescopeSettings } from "../composables/useGamescopeSettings";
 import { FILTER_OPTIONS, SCALER_OPTIONS, WINDOW_MODE_OPTIONS } from "../utils/gamescope";
 import type { GamescopeFilter, GamescopeScaler, GamescopeWindowMode } from "../services/api";
 import FieldSaveFeedback from "../components/FieldSaveFeedback.vue";
-import type { SettingsPayload } from "../services/api";
+import type { LcPlusMode, LcPlusStatus, SettingsPayload } from "../services/api";
+import { lcPlusCheckedAt, lcPlusCheckReason, lcPlusDetectedText } from "../utils/lewdcorner";
 import { mergeSettingsFields } from "../utils/settingsMerge";
 import { confirmAction } from "../utils/confirm";
 import { gamingMode, setTvPreference, tvModeActive, tvPreference } from "../utils/tvMode";
@@ -119,10 +120,9 @@ const removeLibraryFolder = (path: string) => {
 };
 const lcSettings = [
   { key: "lc_enabled", label: "Use LewdCorner", description: "Show LewdCorner thread fields and fill in LewdCorner threads for your games from the catalog." },
-  { key: "lc_plus", label: "I have LC Plus", description: "Also fill in LewdCorner Plus (Premium) threads." },
 ] as const;
-const lcValues = reactive({ lc_enabled: false, lc_plus: false });
-const lcSaving = reactive({ lc_enabled: false, lc_plus: false });
+const lcValues = reactive({ lc_enabled: false });
+const lcSaving = reactive({ lc_enabled: false });
 const saveLcSetting = async (key: typeof lcSettings[number]["key"], event: Event) => {
   const previous = lcValues[key];
   lcValues[key] = (event.target as HTMLInputElement).checked;
@@ -130,11 +130,67 @@ const saveLcSetting = async (key: typeof lcSettings[number]["key"], event: Event
   try {
     const result = await api.saveSettings({ [key]: lcValues[key] });
     if (!result.success) throw new Error(result.error || "Unknown error");
+    // Turning LC on can start an LC Plus check; read the new state back.
+    void refreshLcPlus();
   } catch (error) {
     lcValues[key] = previous;
     notifyError(`Failed to save the LewdCorner setting: ${String(error)}`);
   } finally {
     lcSaving[key] = false;
+  }
+};
+// "LC Plus": Auto, Yes or No. In Auto, the detected tier and "Check now".
+const lcPlus = reactive<LcPlusStatus>({
+  lc_plus: false, lc_plus_mode: "auto", lc_plus_detected: "", lc_plus_detected_at: "", lc_plus_check: "ready",
+});
+const lcPlusSaving = ref(false);
+const lcPlusChecking = ref(false);
+const lcPlusMessage = ref("");
+const lcPlusCheckDisabled = computed(() => lcPlusCheckReason(lcPlus.lc_plus_check, lcValues.lc_enabled));
+const applyLcPlus = (data: Partial<LcPlusStatus>) => {
+  if (data.lc_plus_mode) lcPlus.lc_plus_mode = data.lc_plus_mode;
+  if (typeof data.lc_plus === "boolean") lcPlus.lc_plus = data.lc_plus;
+  if (data.lc_plus_detected !== undefined) lcPlus.lc_plus_detected = data.lc_plus_detected;
+  if (data.lc_plus_detected_at !== undefined) lcPlus.lc_plus_detected_at = data.lc_plus_detected_at;
+  if (data.lc_plus_check) lcPlus.lc_plus_check = data.lc_plus_check;
+};
+const refreshLcPlus = async () => {
+  try {
+    const data = await api.getSettings();
+    if (!lcPlusSaving.value) applyLcPlus(data);
+  } catch {
+    // The row keeps its last state; the next settings load reads it again.
+  }
+};
+const saveLcPlusMode = async (event: Event) => {
+  const previous = lcPlus.lc_plus_mode;
+  const mode = (event.target as HTMLSelectElement).value as LcPlusMode;
+  lcPlus.lc_plus_mode = mode;
+  lcPlusMessage.value = "";
+  lcPlusSaving.value = true;
+  try {
+    const result = await api.saveSettings({ lc_plus_mode: mode });
+    if (!result.success) throw new Error(result.error || "Unknown error");
+  } catch (error) {
+    lcPlus.lc_plus_mode = previous;
+    notifyError(`Failed to save the LC Plus setting: ${String(error)}`);
+  } finally {
+    lcPlusSaving.value = false;
+  }
+  void refreshLcPlus();
+};
+const checkLcPlus = async () => {
+  lcPlusChecking.value = true;
+  lcPlusMessage.value = "";
+  try {
+    const result = await api.checkLcPlus();
+    applyLcPlus(result);
+    if (!result.success) lcPlusMessage.value = result.error || "Could not check LC Plus.";
+    else if (result.checked_without_result) lcPlusMessage.value = "LC Plus could not be checked. Set LC Plus to Yes or No if you know it.";
+  } catch (error) {
+    lcPlusMessage.value = `Could not check LC Plus: ${String(error)}`;
+  } finally {
+    lcPlusChecking.value = false;
   }
 };
 const libraryFolderPattern = ref("{creator}/{title}/{version}");
@@ -325,6 +381,7 @@ const onKeepCustom = (event: Event) => {
 
 const applySettings = (data: SettingsResponse) => {
   for (const { key } of lcSettings) if (!lcSaving[key]) lcValues[key] = !!data[key];
+  if (!lcPlusSaving.value) applyLcPlus(data);
   customStatuses.value = [...(data.custom_play_statuses || [])];
   collectionList.value = [...(data.collections || [])];
   urmPath.value = data.urm_rpa_path || "";
@@ -1653,6 +1710,44 @@ const browseUrm = async () => {
             />
             <div class="ui-toggle"></div>
           </label>
+        </div>
+
+        <div data-settings-row="lc_plus" data-settings-bound data-keywords="lewdcorner thread lc plus premium tier detect check"
+          v-show="settingsRowVisible('lc_plus')" class="ui-card-row space-y-2" data-testid="settings-lc-plus">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <h4 id="settings-lc_plus-label" class="text-sm font-medium" style="color: var(--text-primary)">LC Plus</h4>
+              <p class="text-xs mt-1" style="color: var(--text-muted)">
+                Also fill in LewdCorner Plus (Premium) threads. Auto checks your LewdCorner account through the browser extension.
+              </p>
+            </div>
+            <select
+              class="settings-input shrink-0"
+              aria-labelledby="settings-lc_plus-label"
+              :value="lcPlus.lc_plus_mode"
+              :disabled="settingsLoading || !!settingsLoadError || lcPlusSaving"
+              @change="saveLcPlusMode"
+            >
+              <option value="auto">Auto</option>
+              <option value="yes">Yes</option>
+              <option value="no">No</option>
+            </select>
+          </div>
+          <div v-if="lcPlus.lc_plus_mode === 'auto'" class="flex flex-wrap items-center justify-between gap-3">
+            <p class="text-xs" style="color: var(--text-secondary)" data-testid="lc-plus-detected">
+              {{ lcPlusDetectedText(lcPlus.lc_plus_detected) }}<template v-if="lcPlusCheckedAt(lcPlus.lc_plus_detected_at)"> · checked {{ lcPlusCheckedAt(lcPlus.lc_plus_detected_at) }}</template>
+            </p>
+            <button
+              type="button"
+              class="settings-btn shrink-0 disabled:opacity-50"
+              :disabled="!!lcPlusCheckDisabled || lcPlusChecking || settingsLoading || !!settingsLoadError"
+              :title="lcPlusCheckDisabled || undefined"
+              :aria-describedby="lcPlusCheckDisabled ? 'settings-lc_plus-reason' : undefined"
+              @click="checkLcPlus"
+            >{{ lcPlusChecking ? "Checking…" : "Check now" }}</button>
+          </div>
+          <p v-if="lcPlus.lc_plus_mode === 'auto' && lcPlusCheckDisabled" id="settings-lc_plus-reason" class="text-xs" style="color: var(--text-muted)">{{ lcPlusCheckDisabled }}</p>
+          <p v-if="lcPlus.lc_plus_mode === 'auto' && lcPlusMessage" role="status" class="text-xs" style="color: var(--warning-text)">{{ lcPlusMessage }}</p>
         </div>
 
         <div data-settings-row="library-downloads-queue" data-keywords="download queue speed limit bandwidth slots same time pause playing game battery" data-settings-bound v-show="settingsRowVisible('library-downloads-queue')" class="ui-card-row space-y-3" data-testid="settings-download-queue">

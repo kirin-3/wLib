@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { DownloadSite, DownloadSiteOption, GameRecord } from "../services/api";
+import type { DownloadSite, DownloadSiteOption, GameRecord, LcPlusCheck, LcPlusTier } from "../services/api";
 
 export type LewdCornerMode = "" | "on" | "off";
 
@@ -81,4 +81,23 @@ export function downloadSites(
 export function defaultDownloadSite(game: Pick<GameRecord, "latest_site">, sites: DownloadSiteOption[]): DownloadSite | "" {
   if (game.latest_site === "lc" && sites.some(option => option.site === "lc")) return "lc";
   return sites[0]?.site || "";
+}
+
+/** "Detected: Plus / Standard / Not detected yet" for the LC Plus setting in Auto. */
+export function lcPlusDetectedText(tier: LcPlusTier): string {
+  return tier === "plus" ? "Detected: Plus" : tier === "standard" ? "Detected: Standard" : "Not detected yet";
+}
+
+/** Why "Check now" is disabled, or "" when it can run. */
+export function lcPlusCheckReason(check: LcPlusCheck, lcEnabled: boolean): string {
+  if (!lcEnabled) return "Turn on Use LewdCorner to check LC Plus.";
+  if (check === "no_catalog") return "The game catalog must be on to check LC Plus.";
+  if (check === "no_extension") return "Open a browser with the wLib extension and turn on its LewdCorner switch to check LC Plus.";
+  return "";
+}
+
+/** When the tier was last checked, in the user's locale; "" when never. */
+export function lcPlusCheckedAt(value: string, locale?: string): string {
+  const time = value ? Date.parse(value) : NaN;
+  return Number.isNaN(time) ? "" : new Date(time).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
 }

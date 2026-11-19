@@ -163,6 +163,44 @@ def lc_partners() -> list[tuple[str, str, str]]:
         return []
 
 
+def catalog_installed() -> bool:
+    """True when the catalog is on and its file holds LC threads."""
+    if database.get_setting("catalog_enabled") == "0":
+        return False
+    path = Path(database.DB_PATH).parent / CATALOG_FILE
+    if not path.is_file():
+        return False
+    try:
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+            return conn.execute("SELECT 1 FROM lc_threads LIMIT 1").fetchone() is not None
+    except (sqlite3.Error, OSError, ValueError):
+        return False
+
+
+def premium_lc_threads(limit: int = 3) -> list[str]:
+    """LC threads the catalog marks Premium, newest update first, for LC Plus detection.
+
+    Rows the builder read from LC's Plus listings come first. Rows imported
+    from elsewhere (`origin = 'import'`) only fill the rest: their tier may be
+    out of date, which can give "unknown" but never a false Plus, because the
+    page itself must show a Plus forum.
+    """
+    if limit <= 0 or database.get_setting("catalog_enabled") == "0":
+        return []
+    path = Path(database.DB_PATH).parent / CATALOG_FILE
+    try:
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+            rows = cast(list[tuple[object]], conn.execute(
+                "SELECT thread_id FROM lc_threads WHERE removed_at IS NULL AND lower(tier) = 'premium' "
+                + "ORDER BY COALESCE(origin, '') = 'import', "
+                + "COALESCE(ts, 0) DESC, COALESCE(updated_at, '') DESC, thread_id DESC LIMIT ?",
+                (limit,),
+            ).fetchall())
+    except (sqlite3.Error, OSError, ValueError):
+        return []
+    return [str(thread_id) for (thread_id,) in rows]
+
+
 def lc_for_f95(thread_id: str) -> tuple[str, str] | None:
     return next(((lc, tier) for f95, lc, tier in lc_partners() if f95 == thread_id), None)
 
@@ -188,7 +226,7 @@ def lookup_lc_partner(url: object) -> dict[str, str]:
             lc, tier = partner
             lc_url = f"https://lewdcorner.com/threads/{lc}/"
             if (
-                (tier.casefold() != "premium" or lewdcorner.setting_enabled(database.get_setting("lc_plus")))
+                (tier.casefold() != "premium" or database.lc_plus_effective())
                 and not database.find_game_by_lc_url(lc_url)
             ):
                 return {"lc_url": lc_url}
