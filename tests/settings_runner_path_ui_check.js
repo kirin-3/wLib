@@ -49,14 +49,14 @@ async (page) => {
     const runner = page.getByLabel("RPGMaker Linux Runner", { exact: true });
     const status = () => page.evaluate(() => {
       const input = document.querySelector('input[aria-labelledby="settings-rpgm-label"]');
-      return input?.closest(".setting-row")?.querySelector(".path-status")?.textContent?.trim() || "";
+      return input?.closest(".ui-card-row")?.querySelector(".path-status")?.textContent?.trim() || "";
     });
 
     // A command name on PATH is valid for this runner, like the Proton runner field.
     await runner.fill("rpgmaker-linux");
     await page.waitForFunction(() => {
       const input = document.querySelector('input[aria-labelledby="settings-rpgm-label"]');
-      return input?.closest(".setting-row")?.querySelector(".path-status")?.textContent.includes("Found");
+      return input?.closest(".ui-card-row")?.querySelector(".path-status")?.textContent.includes("Found");
     }, null, { timeout: 3000 });
     check((await status()) === "Found", "A runner command name found on PATH must show Found");
 
@@ -64,7 +64,7 @@ async (page) => {
     await runner.fill("definitely-missing-runner");
     await page.waitForFunction(() => {
       const input = document.querySelector('input[aria-labelledby="settings-rpgm-label"]');
-      return input?.closest(".setting-row")?.querySelector(".path-status")?.textContent.includes("Command not found on PATH");
+      return input?.closest(".ui-card-row")?.querySelector(".path-status")?.textContent.includes("Command not found on PATH");
     }, null, { timeout: 3000 });
 
     await page.evaluate(() => { delete window.pywebview; });

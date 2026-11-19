@@ -152,7 +152,7 @@ async (page) => {
         await updateSettings.click();
         await page.getByRole("dialog", { name: "Update settings", exact: true }).waitFor();
       };
-      const toggle = page.getByRole("checkbox", { name: "Desktop notifications", exact: true });
+      const toggle = page.getByRole("checkbox", { name: /^Desktop notifications\b/ });
       await openUpdateSettings();
       await toggle.waitFor();
       await toggle.uncheck();

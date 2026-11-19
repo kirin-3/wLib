@@ -11,8 +11,8 @@ async page => {
     await page.evaluate(() => {
       delete window.pywebview;
       localStorage.setItem('wlib-mock-settings',JSON.stringify({collections:['Fixture collection']}));
-      localStorage.setItem('wlib-library-view-state',JSON.stringify({layoutMode:'grid',isFiltersCollapsed:false}));
-      localStorage.setItem('wlib-mock-games',JSON.stringify([{id:1,title:'Confirm fixture',exe_path:'/game',launch_targets:[{id:1,game_id:1,label:'Part two',exe_path:'/part',sort_order:0}]}]));
+      localStorage.setItem('wlib-library-view-state',JSON.stringify({layoutMode:'grid',isFiltersCollapsed:false,filterStatuses:['Playing']}));
+      localStorage.setItem('wlib-mock-games',JSON.stringify([{id:1,title:'Confirm fixture',exe_path:'/game',play_status:'Playing',launch_targets:[{id:1,game_id:1,label:'Part two',exe_path:'/part',sort_order:0}]}]));
       localStorage.setItem('wlib-mock-attachments',JSON.stringify({'1':[{name:'guide.txt',size:42}]}));
     });
     await page.goto(new URL('/#/',url).toString()); await page.reload();
@@ -23,8 +23,9 @@ async page => {
       await dialog.getByRole('button',{name:'Cancel'}).click();
     };
     const name = page.getByLabel('Saved filter name');
-    await name.fill('Fixture filter'); await name.press('Enter');
-    await name.fill('Fixture filter'); await name.press('Enter'); await answer('Replace saved filter');
+    const savePreset = page.getByRole('button',{name:'Save as preset',exact:true});
+    await savePreset.click(); await name.fill('Fixture filter'); await name.press('Enter');
+    await savePreset.click(); await name.fill('Fixture filter'); await name.press('Enter'); await answer('Replace saved filter');
     await page.getByRole('button',{name:'Delete the saved filter Fixture filter'}).click(); await answer('Delete saved filter');
     await page.getByRole('tab',{name:/Fixture collection/}).click({button:'right'});
     await page.getByRole('menuitem',{name:'Delete'}).click(); await answer('Delete collection');

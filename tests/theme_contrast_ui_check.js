@@ -57,6 +57,9 @@ async (page) => {
       }
       return results;
     }, selectors);
+    for (const selector of selectors) {
+      check(measured.some(result => result.selector === selector), `${theme}: no visible element for ${selector}`);
+    }
     for (const result of measured) {
       if (result.ratio < 4.5) failures.push({ theme, ...result });
     }
@@ -85,7 +88,7 @@ async (page) => {
     await page.getByRole("heading", { name: "RPGMaker Linux Runner", exact: true }).waitFor();
     for (const theme of ["light", "dark"]) {
       await page.evaluate(theme => document.documentElement.classList.toggle("light", theme === "light"), theme);
-      await measure(theme, [".setting-row p.copyable-feedback"]);
+      await measure(theme, [".ui-card-row p.copyable-feedback"]);
     }
     await page.evaluate(() => localStorage.setItem("wlib-mock-games", JSON.stringify([{ id: 1, title: "Selected fixture", exe_path: "/game" }])));
     await page.getByRole("link", { name: "Library", exact: true }).click();
