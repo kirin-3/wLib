@@ -1596,6 +1596,8 @@ def test_add_game_rejects_duplicate_thread_url_variants(monkeypatch):
 
 def test_update_game_rejects_duplicate_thread_url_variants(monkeypatch):
     api = Api()
+    # The metadata threads must finish before teardown removes the database (Windows locks open files).
+    monkeypatch.setattr("threading.Thread", _InlineThread)
 
     monkeypatch.setattr(
         api.scraper,
