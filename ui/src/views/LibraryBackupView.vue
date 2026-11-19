@@ -1,9 +1,11 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, ref, watch, type Component, type Ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch, type Component, type Ref } from "vue";
 import {
   IconAlertTriangle,
+  IconBookmark,
   IconDatabaseExport,
+  IconEye,
   IconFileExport,
   IconFileImport,
   IconFolder,
@@ -16,9 +18,12 @@ import {
   IconSettings,
   IconTerminal2,
   IconUserCheck,
+  IconWorldDownload,
+  IconX,
 } from "@tabler/icons-vue";
 import { api } from "../services/api";
 import PathStatus from "../components/PathStatus.vue";
+import { F95AccountImport, f95AccountProgressText, f95AccountResultText } from "../utils/f95AccountImport";
 import type {
   ExternalLibraryImportResponse,
   ExternalLibraryInspectResponse,
@@ -29,7 +34,7 @@ import type {
   LibraryBackupWarning,
 } from "../services/api";
 
-type BackupTab = "export" | "import" | "external";
+type BackupTab = "export" | "import" | "external" | "f95";
 
 interface SectionOption {
   id: LibraryBackupSection;
@@ -472,6 +477,30 @@ watch(externalPath, () => {
   externalError.value = "";
 });
 
+const f95Account = reactive(new F95AccountImport(api));
+const F95_POLL_MS = 500;
+let f95PollTimer: ReturnType<typeof setTimeout> | undefined;
+const stopF95Poll = () => {
+  if (f95PollTimer) clearTimeout(f95PollTimer);
+  f95PollTimer = undefined;
+};
+const pollF95Account = () => {
+  stopF95Poll();
+  f95PollTimer = setTimeout(async () => {
+    f95PollTimer = undefined;
+    if (await f95Account.poll()) pollF95Account();
+  }, F95_POLL_MS);
+};
+const readF95Lists = async () => {
+  if (await f95Account.start()) pollF95Account();
+};
+const importF95Lists = async () => {
+  if (await f95Account.importLists()) window.dispatchEvent(new Event("wlib-refresh-library"));
+};
+const f95ProgressText = computed(() => f95AccountProgressText(f95Account.progress));
+const f95ResultText = computed(() => (f95Account.result ? f95AccountResultText(f95Account.result) : ""));
+onBeforeUnmount(stopF95Poll);
+
 const runImport = async () => {
   if (importing.value || !inspectResult.value) return;
   importMessage.value = "";
@@ -549,6 +578,14 @@ const runImport = async () => {
         >
           <IconFileImport />
           From another app
+        </button>
+        <button
+          type="button"
+          :class="['backup-tab', activeTab === 'f95' ? 'backup-tab-active' : '']"
+          @click="activeTab = 'f95'"
+        >
+          <IconWorldDownload />
+          F95 account
         </button>
       </div>
 
@@ -855,6 +892,74 @@ const runImport = async () => {
         </div>
       </section>
 
+      <section v-else-if="activeTab === 'f95'" class="backup-body f95-account">
+        <div class="backup-note">
+          <IconInfoCircle />
+          <span>
+            wLib reads the Watched games and Bookmarked games lists of the F95Zone account
+            that is signed in to the browser with the paired wLib extension. wLib never asks
+            for your F95 password. New games are added to your wishlist. Every game gets the
+            tag "Watched on F95" or "Bookmarked on F95". wLib changes nothing else on games
+            already in your library, and never removes games or tags.
+          </span>
+        </div>
+
+        <div class="f95-account-actions">
+          <button
+            type="button"
+            class="backup-secondary"
+            :disabled="f95Account.busy"
+            @click="readF95Lists"
+          >
+            <IconLoader2 v-if="f95Account.phase === 'starting' || f95Account.phase === 'reading'" class="backup-spinner" />
+            <IconWorldDownload v-else />
+            Read my F95 lists
+          </button>
+          <button
+            v-if="f95Account.phase === 'reading'"
+            type="button"
+            class="backup-secondary"
+            :disabled="f95Account.cancelling"
+            @click="f95Account.cancel()"
+          >
+            <IconX />
+            {{ f95Account.cancelling ? "Cancelling..." : "Cancel" }}
+          </button>
+        </div>
+
+        <div v-if="f95Account.phase === 'reading'" class="backup-note" role="status" aria-live="polite">
+          <IconLoader2 class="backup-spinner" />
+          <span>{{ f95ProgressText }}</span>
+        </div>
+
+        <div v-if="f95Account.phase === 'preview' && f95Account.preview" class="backup-preview">
+          <p v-if="f95Account.emptyLists" class="f95-account-empty">
+            No watched or bookmarked games were found on F95Zone. There is nothing to import.
+          </p>
+          <template v-else>
+            <div class="f95-account-lists">
+              <div class="f95-account-list">
+                <strong><IconEye /> Watched games</strong>
+                <span>{{ f95Account.preview.lists.watched.found }} found</span>
+                <span>{{ f95Account.preview.lists.watched.new }} new</span>
+                <span>{{ f95Account.preview.lists.watched.existing }} already in library</span>
+              </div>
+              <div class="f95-account-list">
+                <strong><IconBookmark /> Bookmarked games</strong>
+                <span>{{ f95Account.preview.lists.bookmarks.found }} found</span>
+                <span>{{ f95Account.preview.lists.bookmarks.new }} new</span>
+                <span>{{ f95Account.preview.lists.bookmarks.existing }} already in library</span>
+              </div>
+            </div>
+            <div class="backup-counts">
+              <span>Total: {{ f95Account.preview.total }}</span>
+              <span>New: {{ f95Account.preview.new }}</span>
+              <span>Already in library: {{ f95Account.preview.existing }}</span>
+            </div>
+          </template>
+        </div>
+      </section>
+
       <footer class="backup-footer">
         <div class="backup-feedback">
           <p v-if="activeTab === 'export' && exportError" class="backup-error">
@@ -872,6 +977,18 @@ const runImport = async () => {
           <p v-else-if="activeTab === 'external' && externalError" class="backup-error">
             {{ externalError }}
           </p>
+          <p v-else-if="activeTab === 'f95' && f95Account.error" class="backup-error">
+            {{ f95Account.error }}
+          </p>
+          <div v-else-if="activeTab === 'f95' && f95Account.result" class="backup-success">
+            <p>Imported from F95: {{ f95ResultText }}.</p>
+            <router-link v-if="f95Account.result.metadata_check === 'started'" to="/updates">
+              View progress
+            </router-link>
+            <p v-else-if="f95Account.result.metadata_check === 'busy'">
+              An update check is already running; run one later from Updates.
+            </p>
+          </div>
           <div v-else-if="activeTab === 'external' && externalResult" class="backup-success">
             <p>{{ externalMessage }}</p>
             <router-link
@@ -920,6 +1037,17 @@ const runImport = async () => {
             <IconFileImport v-else />
             {{ externalImporting ? "Importing..." : "Import Selected" }}
           </button>
+          <button
+            v-else-if="activeTab === 'f95' && (f95Account.canImport || f95Account.phase === 'importing')"
+            type="button"
+            class="backup-primary"
+            :disabled="!f95Account.canImport"
+            @click="importF95Lists"
+          >
+            <IconLoader2 v-if="f95Account.phase === 'importing'" class="backup-spinner" />
+            <IconFileImport v-else />
+            {{ f95Account.phase === "importing" ? "Importing..." : "Import" }}
+          </button>
         </div>
       </footer>
     </div>
@@ -927,6 +1055,21 @@ const runImport = async () => {
 </template>
 
 <style scoped>
+.f95-account-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.f95-account-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0.75rem; }
+.f95-account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+.f95-account-list strong { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-primary); }
+.f95-account-list svg { width: 1rem; height: 1rem; }
+.f95-account-empty { color: var(--text-secondary); font-size: 0.875rem; }
 .backup-passphrase-fields { display: grid; gap: .5rem; }
 .backup-passphrase-fields p { font-size: .875rem; color: var(--text-secondary); }
 .backup-page button:focus-visible, .backup-page input[type="checkbox"]:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }

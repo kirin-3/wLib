@@ -945,6 +945,80 @@ export interface ExternalLibraryImportResponse extends LibraryBackupImportRespon
   metadata_check?: "started" | "busy" | "none";
 }
 
+export type F95AccountList = "watched" | "bookmarks";
+
+export type F95AccountErrorCode =
+  | "no_extension"
+  | "extension_outdated"
+  | "login_required"
+  | "blocked"
+  | "not_a_list"
+  | "rate_limited"
+  | "timeout"
+  | "fetch_failed"
+  | "cancelled"
+  | "busy"
+  | "not_running"
+  | "not_found"
+  | "expired"
+  | "empty"
+  | "import_failed";
+
+export interface F95AccountReadProgress {
+  list?: F95AccountList;
+  list_label?: string;
+  page?: number;
+  found?: number;
+  total?: number | null;
+}
+
+export interface F95AccountListCounts {
+  found: number;
+  new: number;
+  existing: number;
+}
+
+export interface F95AccountPreviewEntry {
+  thread_id: string;
+  title: string;
+  version: string;
+  developer: string;
+  engine: string;
+  prefixes: string[];
+  lists: F95AccountList[];
+  in_library: boolean;
+}
+
+export interface F95AccountPreview {
+  lists: Record<F95AccountList, F95AccountListCounts>;
+  total: number;
+  new: number;
+  existing: number;
+  entries: F95AccountPreviewEntry[];
+}
+
+export interface F95AccountResponse extends ApiBasicResponse {
+  error_code?: F95AccountErrorCode | string;
+}
+
+export interface F95AccountReadStartResponse extends F95AccountResponse {
+  read_id?: string;
+}
+
+export interface F95AccountReadStatus extends F95AccountResponse {
+  read_id?: string;
+  state?: "idle" | "running" | "done" | "error" | "cancelled" | "expired" | "imported";
+  progress?: F95AccountReadProgress;
+  preview?: F95AccountPreview;
+}
+
+export interface F95AccountImportResponse extends F95AccountResponse {
+  added?: number;
+  tagged?: number;
+  added_ids?: number[];
+  metadata_check?: "started" | "busy" | "none";
+}
+
 export interface SaveLocation {
   path: string;
   type: string;
@@ -2192,6 +2266,22 @@ class ApiService {
       path,
       options,
     );
+  }
+
+  async startF95AccountRead(): Promise<F95AccountReadStartResponse> {
+    return this.invoke<F95AccountReadStartResponse>("start_f95_account_read");
+  }
+
+  async getF95AccountReadStatus(): Promise<F95AccountReadStatus> {
+    return this.invoke<F95AccountReadStatus>("get_f95_account_read_status");
+  }
+
+  async cancelF95AccountRead(): Promise<F95AccountResponse> {
+    return this.invoke<F95AccountResponse>("cancel_f95_account_read");
+  }
+
+  async importF95AccountLists(readId: string): Promise<F95AccountImportResponse> {
+    return this.invokeLibraryChange<F95AccountImportResponse>("import_f95_account_lists", readId);
   }
 
   async browseExternalLibraryFile(source: ExternalLibrarySource, startPath = ""): Promise<string> {

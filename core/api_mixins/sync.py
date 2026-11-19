@@ -234,6 +234,53 @@ class SyncMixin(ApiBase):
         self._refresh_synced_library()
         return {"success": True, **payload}
 
+    def start_f95_account_read(self) -> dict[str, object]:
+        """Start reading the signed-in F95 Watched games and Bookmarks lists."""
+        return self.f95_account_reader.start()
+
+    def get_f95_account_read_status(self) -> dict[str, object]:
+        return self.f95_account_reader.status()
+
+    def cancel_f95_account_read(self) -> dict[str, object]:
+        return self.f95_account_reader.cancel()
+
+    def import_f95_account_lists(self, read_id: str = "") -> dict[str, object]:
+        """Apply the preview of read ``read_id``: add new games as wishlisted
+        and tag every list game. Never reads F95 again."""
+        import logging
+        import sqlite3
+
+        from core.f95_lists import ListReadResult, apply_import
+
+        taken = self.f95_account_reader.take_result(str(read_id or ""))
+        if not isinstance(taken, ListReadResult):
+            return taken
+        read_id = str(read_id or "")
+        try:
+            result = apply_import(taken.entries)
+        except sqlite3.Error as exc:
+            logging.getLogger("wlib.f95_lists").exception("F95 account import failed")
+            # The transaction rolled back: keep the preview so Import can be retried.
+            self.f95_account_reader.restore_result(read_id, taken)
+            return {
+                "success": False,
+                "error": f"The import could not be saved, and the library was not changed: {exc}",
+                "error_code": "import_failed",
+            }
+        self.f95_account_reader.finish_import(read_id)
+        added_ids = cast(list[int], result["added_ids"])
+        metadata_check = "none"
+        if added_ids:
+            metadata_check = "started" if self.check_all_updates(added_ids).get("success") else "busy"
+        self._refresh_synced_library()
+        return {
+            "success": True,
+            "added": result["added"],
+            "tagged": result["tagged"],
+            "added_ids": added_ids,
+            "metadata_check": metadata_check,
+        }
+
     def _game_ids_with_url(self, game_ids: Sequence[int]) -> list[int]:
         from core import lewdcorner
         from core.database import get_all_games, get_setting

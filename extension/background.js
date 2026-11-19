@@ -360,6 +360,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // API use.
 const F95_THREAD_FETCH_RE = /^https:\/\/f95zone\.to\/threads\/\d+\/$/;
 const F95_BATCH_FETCH_RE = /^https:\/\/f95zone\.to\/sam\/checker\.php\?threads=\d+(,\d+){0,99}$/;
+// The signed-in user's Watched games and Bookmarked games lists, title order, pages 1-200.
+const F95_WATCHED_LIST_RE = /^https:\/\/f95zone\.to\/watched\/threads\?tab=games&unread=0&sort=title&page=([1-9]\d{0,2})$/;
+const F95_BOOKMARK_LIST_RE = /^https:\/\/f95zone\.to\/watched\/threads\?tab=bookmarks&bm=games&sort=title&page=([1-9]\d{0,2})$/;
+const F95_LIST_MAX_PAGE = 200;
 const LC_FETCH_RE = /^https:\/\/lewdcorner\.com\/(?:(?:threads\/\d+\/)|(?:latest-updates\/api\?page=(?:[1-9]|10)&per_page=90&cat=Games&sort=date))$/;
 const LC_ORIGIN = "https://lewdcorner.com/*";
 // LC attachment images only (covers and screenshots), never proxied or masked links.
@@ -376,8 +380,13 @@ const BRIDGE_ALARM_NAME = "wlib-bridge";
 const BRIDGE_BACKOFF_MIN_MS = 5000;
 const BRIDGE_BACKOFF_MAX_MS = 60000;
 
+function isF95ListUrlAllowed(url) {
+    const match = F95_WATCHED_LIST_RE.exec(url) || F95_BOOKMARK_LIST_RE.exec(url);
+    return !!match && Number(match[1]) <= F95_LIST_MAX_PAGE;
+}
+
 function isBridgeUrlAllowed(url) {
-    return F95_THREAD_FETCH_RE.test(url) || F95_BATCH_FETCH_RE.test(url);
+    return F95_THREAD_FETCH_RE.test(url) || F95_BATCH_FETCH_RE.test(url) || isF95ListUrlAllowed(url);
 }
 
 async function bridgeFetchUrl(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS, site = "f95") {
@@ -751,12 +760,12 @@ async function bridgeGetCanFetch(origin = "https://f95zone.to/*") {
 function bridgeGetVersion() {
     try {
         if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
-            return String(chrome.runtime.getManifest().version || "1.2.11");
+            return String(chrome.runtime.getManifest().version || "1.2.12");
         }
     } catch (error) {
         console.warn("wLib extension: version read failed.", error);
     }
-    return "1.2.11";
+    return "1.2.12";
 }
 
 // Firefox suspends an idle event page after 30 seconds, and WebSocket traffic
@@ -836,6 +845,7 @@ async function bridgeSendHello() {
             type: "hello",
             protocol: 2,
             can_resolve: true,
+            can_fetch_lists: true,
             extension_version: bridgeGetVersion(),
             ...capabilities,
         }));

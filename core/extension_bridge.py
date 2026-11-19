@@ -30,7 +30,14 @@ logger = logging.getLogger("wlib.bridge")
 
 
 class BridgeUnavailable(Exception):
-    """Raised when no eligible extension is connected."""
+    """Raised when no eligible extension is connected.
+
+    ``reason`` is ``"no_extension"`` or, for list fetches, ``"extension_outdated"``
+    when a connected extension does not report list-fetch support."""
+
+    def __init__(self, message: str = "", reason: str = "no_extension") -> None:
+        super().__init__(message)
+        self.reason: str = reason
 
 
 class BridgeFailed(Exception):
@@ -108,6 +115,7 @@ class BridgeConnection:
         self.can_resolve = False
         self.can_resolve_lc = False
         self.can_fetch_lc_images = False
+        self.can_fetch_lists = False
         self.eligible = False
         self.closed = False
         self.extension_version = ""
@@ -128,9 +136,10 @@ class BridgeConnection:
     def note_hello(
         self, protocol: object, can_fetch: object, extension_version: object = "",
         can_resolve: object = False, *, can_fetch_lc: object = False, can_resolve_lc: object = False,
-        can_fetch_lc_images: object = False,
+        can_fetch_lc_images: object = False, can_fetch_lists: object = False,
     ) -> None:
         self._hello_ok = protocol in (1, 2)
+        self.can_fetch_lists = self._hello_ok and can_fetch_lists is True
         self.can_fetch = bool(can_fetch) if isinstance(can_fetch, bool) else False
         self.can_fetch_lc = self._hello_ok and can_fetch_lc is True
         self.can_resolve = can_resolve is True
@@ -399,6 +408,7 @@ def status_snapshot() -> dict[str, object]:
             "can_fetch_lc": any(conn.can_fetch_lc for conn in open_connections),
             "can_resolve_lc": any(conn.can_fetch_lc and conn.can_resolve and conn.can_resolve_lc for conn in open_connections),
             "can_fetch_lc_images": any(conn.can_fetch_lc_images for conn in open_connections),
+            "can_fetch_lists": any(conn.eligible and conn.can_fetch_lists for conn in open_connections),
             "connected_seconds": (
                 round(now - newest.opened_at) if newest else None
             ),
@@ -438,15 +448,17 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
             can_fetch_lc=message.get("can_fetch_lc"),
             can_resolve_lc=message.get("can_resolve_lc"),
             can_fetch_lc_images=message.get("can_fetch_lc_images"),
+            can_fetch_lists=message.get("can_fetch_lists"),
         )
         logger.info(
-            "Browser extension connected (version %s, protocol %s, can fetch F95Zone: %s, LewdCorner: %s, can_resolve_lc: %s, can_fetch_lc_images: %s)",
+            "Browser extension connected (version %s, protocol %s, can fetch F95Zone: %s, LewdCorner: %s, can_resolve_lc: %s, can_fetch_lc_images: %s, can_fetch_lists: %s)",
             conn.extension_version or "unknown",
             message.get("protocol"),
             conn.can_fetch,
             conn.can_fetch_lc,
             conn.can_resolve_lc,
             conn.can_fetch_lc_images,
+            conn.can_fetch_lists,
         )
         if conn.can_fetch_lc_images:
             _notify_lc_images_available()
@@ -601,9 +613,39 @@ def fetch(url: str, timeout: float = 30, *, site: Site = "f95") -> BridgeRespons
     return _fetch(url, timeout, site)
 
 
-def _fetch(url: str, timeout: float, site: Site) -> BridgeResponse:
+def _newest_list_fetcher() -> BridgeConnection | None:
+    with _lock:
+        return next(
+            (conn for conn in _connections if not conn.closed and conn.eligible and conn.can_fetch_lists),
+            None,
+        )
+
+
+def list_fetch_unavailable_reason() -> str | None:
+    """``None`` when a list fetch can be sent, else why it cannot."""
+    if _newest_list_fetcher() is not None:
+        return None
+    return "extension_outdated" if _newest_eligible("f95") is not None else "no_extension"
+
+
+def fetch_list_page(url: str, timeout: float = 30) -> BridgeResponse:
+    """Fetch one F95 Watched / Bookmarked list page through the newest extension
+    that reports list-fetch support. The caller holds the shared F95 slot."""
+    conn = _newest_list_fetcher()
+    if conn is None:
+        reason = list_fetch_unavailable_reason() or "no_extension"
+        raise BridgeUnavailable(
+            "extension does not support F95 list pages" if reason == "extension_outdated"
+            else "no eligible extension connected",
+            reason,
+        )
+    return _fetch(url, timeout, "f95", conn)
+
+
+def _fetch(url: str, timeout: float, site: Site, conn: BridgeConnection | None = None) -> BridgeResponse:
     global _last_lc_request
-    conn = _newest_eligible(site)
+    if conn is None:
+        conn = _newest_eligible(site)
     if conn is None:
         raise BridgeUnavailable("no eligible extension connected")
     request_id = uuid.uuid4().hex

@@ -170,6 +170,7 @@ BOOLEAN_SETTINGS_KEYS = frozenset(
         "gamescope_enabled",
         "html_builtin_player",
         "web_player_devtools",
+        "f95_list_tag_colors_seeded",
     }
 )
 # Exported with the path settings but not filesystem paths, so never host-checked.

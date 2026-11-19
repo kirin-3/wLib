@@ -166,6 +166,33 @@ def _run_paced_f95_request[T](
                 _f95_last_foreground_finished = _f95_last_request_finished
 
 
+# Public names for F95 readers outside this module (the account list reader).
+F95RequestError = _F95RequestError
+
+
+def run_paced_f95_request[T](transport: Callable[[], T]) -> T:
+    """Run one F95 request in the shared F95 slot, cooldown and pacing.
+
+    Raises ``F95RequestError("rate_limited", ...)`` during a 429 cooldown."""
+    return _run_paced_f95_request(transport)
+
+
+def note_f95_status(status: int) -> None:
+    """Start the shared 429 cooldown when a response says so."""
+    _note_rate_limit(status)
+
+
+def classify_f95_page_issue(status: int, html: str) -> dict[str, str] | None:
+    """The scraper's page issue check (``blocked``, ``login_required``, ...)."""
+    scraper = Scraper()
+    return scraper._classify_page_issue(status, scraper._page_title(html), html)  # pyright: ignore[reportPrivateUsage]
+
+
+def xenforo_signed_in(html: str) -> bool | None:
+    """XenForo's ``data-logged-in`` flag; ``None`` for non-page bodies."""
+    return _xenforo_signed_in(html)
+
+
 def _decode_body(body: bytes, charset: str | None) -> str:
     """Decode a response, falling back to UTF-8 for an unknown charset."""
     try:

@@ -132,7 +132,7 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Protocol (JSON text messages):** the current extension sends protocol 2; the app also accepts protocol 1 for older clients.
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 2, "extension_version": "1.2.11", "can_fetch": true, "can_fetch_lc": true, "can_resolve": true, "can_resolve_lc": true, "can_fetch_lc_images": true}
+  {"type": "hello", "protocol": 2, "extension_version": "1.2.12", "can_fetch": true, "can_fetch_lists": true, "can_fetch_lc": true, "can_resolve": true, "can_resolve_lc": true, "can_fetch_lc_images": true}
   {"type": "status", "can_fetch": false, "can_fetch_lc": true, "can_resolve_lc": false, "can_fetch_lc_images": true}
   {"type": "ping"}
   // app -> ext
@@ -150,6 +150,14 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
   {"type": "fetch_image_chunk", "id": "...", "index": 0, "ok": false, "error": "refused|timeout|too_large|offsite_redirect|network", "last": true}
   ```
   A connection is eligible for fetches only after `hello` with protocol 1 or 2 and `can_fetch == true` (from `permissions.contains({origins: ["https://f95zone.to/*"]})`). Download resolution also requires `can_resolve == true`. Unknown message types are ignored. A JSON `{"type":"ping"}` is answered with JSON `{"type":"pong"}`; WebSocket ping frames are answered with pong frames, and close frames are answered with a close frame.
+- **F95 fetch allowlist:** the extension fetches only these F95 URLs and refuses any other without a network request (`refused`):
+  - `https://f95zone.to/threads/<thread id>/`
+  - `https://f95zone.to/sam/checker.php?threads=<1 to 100 comma-separated thread ids>`
+  - `https://f95zone.to/watched/threads?tab=games&unread=0&sort=title&page=<page>` (Watched games)
+  - `https://f95zone.to/watched/threads?tab=bookmarks&bm=games&sort=title&page=<page>` (Bookmarked games)
+
+  `<page>` is a whole number from 1 to 200 with no leading zero. The query parameters must be in this order, with no others; "Other threads", bookmarked posts and the other sorts are refused. A redirect that leaves `f95zone.to` fails with `offsite_redirect`.
+- **List fetches:** `can_fetch_lists: true` in `hello` (extension 1.2.12 and later) says the extension accepts the two list URLs. wLib sends list URLs (`extension_bridge.fetch_list_page`) only to the newest connection that is eligible (`can_fetch`) and sends this flag. A connection without it stays eligible for thread pages and batch version requests; the F95 account import then reports `extension_outdated` ("update the extension"), and with no eligible connection `no_extension`.
 - **Login:** Firefox sends no site cookies with background-page fetches, so F95 answers them as a guest. Cloudflare likewise challenges them without the browser's clearance cookie. When a background fetch returns a guest page (`data-logged-in="false"`) or a managed challenge page, the extension repeats it once from an open, non-discarded `f95zone.to` tab via `scripting.executeScript` (Firefox `content.fetch`, page cookies) and, if that works, uses a tab first for later fetches while one is open. Without an F95 tab it keeps the background result.
 - **LewdCorner fetches:** `can_fetch_lc` in `hello` and `status` reports the optional `https://lewdcorner.com/*` permission. A missing flag means LC is unavailable. F95 eligibility still uses `can_fetch`. The app sends `site: "lc"` to the newest LC-capable connection and spaces requests at least two seconds apart. The browser extension uses its own session from its background context and accepts only these URLs:
   - `https://lewdcorner.com/threads/<thread id>/`
@@ -177,7 +185,7 @@ Each returns a small static HTML completion page with `Cache-Control: no-store` 
 
 ## Installed Extension Files
 
-The bundled manifest is `1.2.11` and targets wLib `0.4.8`.
+The bundled manifest is `1.2.12` and targets wLib `0.4.8`.
 
 Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 

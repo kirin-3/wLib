@@ -82,6 +82,8 @@ GENERAL_SETTINGS_KEYS = (
     "torrent_seed_mode",
     "torrent_seed_ratio",
     "torrent_seed_hours",
+    # True once the F95 account import gave its two list tags default colors.
+    "f95_list_tag_colors_seeded",
 )
 SAVE_BACKUP_KEEP_MAX = 99
 TAG_COLOR_SWATCHES = (
@@ -1185,6 +1187,132 @@ def add_game(
         game_id = cursor.lastrowid
         conn.commit()
     return game_id
+
+
+def _tag_list(value: object) -> list[str]:
+    """A stored comma list as tags: stripped, no empty ones, first of each key."""
+    from core.f95_tags import split_tags
+
+    return split_tags(value) or []
+
+
+def _merge_tag_lists(*lists: Sequence[str]) -> list[str]:
+    from core.f95_tags import split_tags
+
+    return split_tags(",".join(tag for tags in lists for tag in tags)) or []
+
+
+def insert_wishlist_game(
+    cursor: sqlite3.Cursor,
+    *,
+    title: str,
+    f95_url: str,
+    version: str = "",
+    developer: str = "",
+    engine: str = "",
+    cover_image: str = "",
+    f95_tags: str = "",
+    extra_tags: Sequence[str] = (),
+    rating: str = "",
+    thread_completed: bool | None = None,
+) -> int:
+    """Insert a wishlisted game (empty executable) inside the caller's transaction.
+
+    ``f95_tags`` (the thread's tags, possibly empty) is the game's F95 tag
+    baseline, so ``extra_tags`` count as user-added tags on later refreshes.
+    Raises ``sqlite3.IntegrityError`` when the thread is already in the library."""
+    normalized_url = normalize_thread_url(f95_url)
+    if normalized_url and find_matching_game_row(cursor, normalized_url) is not None:
+        raise sqlite3.IntegrityError("duplicate f95_url")
+    baseline = _tag_list(f95_tags)
+    tags = _merge_tag_lists(baseline, extra_tags)
+    _ = cursor.execute("SELECT value FROM settings WHERE key = 'sandbox_new_games'")
+    sandbox_row = cast(tuple[object, ...] | None, cursor.fetchone())
+    sandbox_enabled = _coerce_bool_int(sandbox_row[0] if sandbox_row else None)
+    _ = cursor.execute(
+        "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, f95_tags, rating, developer, engine, launch_mode, date_added, play_status, sandbox_enabled, thread_completed, screenshots) VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]')",
+        (
+            title,
+            normalized_url,
+            version,
+            cover_image,
+            ", ".join(tags),
+            ", ".join(baseline),
+            rating,
+            developer,
+            engine,
+            DEFAULT_LAUNCH_MODE,
+            local_now_iso(),
+            DEFAULT_PLAY_STATUS,
+            sandbox_enabled,
+            1 if thread_completed else 0,
+        ),
+    )
+    game_id = cursor.lastrowid
+    if game_id is None:
+        raise sqlite3.DatabaseError("game insert returned no id")
+    return game_id
+
+
+def add_game_tags(cursor: sqlite3.Cursor, game_id: int, tags: Sequence[str]) -> bool:
+    """Add ``tags`` to a game inside the caller's transaction; True when it changed.
+
+    A game with no F95 tag baseline yet (``f95_tags`` NULL) whose tags the
+    user never edited first gets its current tags as the baseline. Else the
+    first "Refresh F95 info" would take the new tags as F95 tags and drop them."""
+    _ = cursor.execute(
+        "SELECT tags, f95_tags, tags_user_edited FROM games WHERE id = ?", (game_id,)
+    )
+    row = cast(tuple[object, object, object] | None, cursor.fetchone())
+    if row is None:
+        return False
+    stored_tags, baseline, user_edited = row
+    current = _tag_list(stored_tags)
+    current_keys = {tag.lower() for tag in current}
+    missing = [tag for tag in _tag_list(",".join(tags)) if tag.lower() not in current_keys]
+    if not missing:
+        return False
+    fields: dict[str, object] = {"tags": ", ".join([*current, *missing])}
+    if baseline is None and not user_edited:
+        fields["f95_tags"] = ", ".join(current)
+    set_clause = ", ".join(f"{key} = ?" for key in fields)
+    _ = cursor.execute(f"UPDATE games SET {set_clause} WHERE id = ?", (*fields.values(), game_id))
+    return True
+
+
+def seed_tag_colors_once(
+    cursor: sqlite3.Cursor, marker_key: str, defaults: Mapping[str, str]
+) -> bool:
+    """Give each tag in ``defaults`` its color when it has none, once.
+
+    ``marker_key`` records that this ran, so a color the user later cleared
+    stays cleared. Returns True when it ran now."""
+    _ = cursor.execute("SELECT value FROM settings WHERE key = ?", (marker_key,))
+    marker = cast(tuple[object, ...] | None, cursor.fetchone())
+    if marker is not None and str(marker[0]).strip().lower() in ("1", "true"):
+        return False
+    _ = cursor.execute("SELECT value FROM settings WHERE key = 'tag_colors'")
+    raw = cast(tuple[object, ...] | None, cursor.fetchone())
+    stored: object = {}
+    try:
+        if raw and raw[0]:
+            stored = cast(object, json.loads(str(raw[0])))
+    except (ValueError, TypeError):
+        stored = {}
+    colors: dict[str, object] = (
+        {str(key): value for key, value in cast(dict[object, object], stored).items()}
+        if isinstance(stored, dict) else {}
+    )
+    present = {key.strip().lower() for key in colors}
+    for tag, swatch in defaults.items():
+        key = tag.strip().lower()
+        if key and key not in present and swatch in TAG_COLOR_SWATCHES:
+            colors[key] = swatch
+    _ = cursor.executemany(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [("tag_colors", json.dumps(colors)), (marker_key, "true")],
+    )
+    return True
 
 
 def get_game_links(game_id: int) -> list[StoreLink]:

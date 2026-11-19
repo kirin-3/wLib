@@ -124,6 +124,9 @@ class ApiBase:
         )
         # Local addresses handed out for LC screenshots (core/extension_server.py).
         self.lc_image_keys: LcImageKeys = hide_from_js(LcImageKeys())
+        from core.f95_lists import AccountReader
+
+        self.f95_account_reader: AccountReader = hide_from_js(AccountReader())
         from core import extension_bridge
 
         extension_bridge.add_lc_images_listener(self.cover_cache.wake)
@@ -1124,7 +1127,7 @@ class ApiBase:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             _ = cursor.execute(
-                "SELECT id, engine, tags, tags_user_edited, cover_image_path, developer FROM games WHERE f95_url = ?",
+                "SELECT id, engine, tags, tags_user_edited, f95_tags, cover_image_path, developer FROM games WHERE f95_url = ?",
                 (normalized_url,),
             )
             games = cast(list[sqlite3.Row], cursor.fetchall())
@@ -1147,6 +1150,7 @@ class ApiBase:
                 ):
                     fields["engine"] = engine_value
                 tags_user_edited = bool(cast(object, game["tags_user_edited"]))
+                baseline = cast(object, game["f95_tags"])
                 if (
                     tags_value
                     and not tags_user_edited
@@ -1154,6 +1158,22 @@ class ApiBase:
                 ):
                     fields["tags"] = tags_value
                     # The tags came from F95, so they are the F95 baseline too.
+                    fields["f95_tags"] = tags_value
+                elif (
+                    tags_value
+                    and not tags_user_edited
+                    and baseline is not None
+                    and not str(baseline).strip()
+                ):
+                    # An empty F95 baseline (the F95 account import adds games
+                    # with no catalog tags) makes every current tag user-added:
+                    # put the thread's tags first and keep those.
+                    from core.f95_tags import merge_f95_tags, split_tags
+
+                    merged, _ = merge_f95_tags(
+                        split_tags(tags_current) or [], [], split_tags(tags_value) or [], False
+                    )
+                    fields["tags"] = ", ".join(merged)
                     fields["f95_tags"] = tags_value
                 if cover_value and self._is_missing_text(cover_current):
                     fields["cover_image_path"] = cover_value

@@ -62,3 +62,89 @@ def test_split_tags_keeps_null_and_cleans_values():
     assert split_tags(None) is None
     assert split_tags("") == []
     assert split_tags(" a , ,A, b ") == ["a", "b"]
+
+
+# The F95 account import adds "Watched on F95"; "Refresh F95 info" must keep it.
+
+def _import_watched(thread_id: int) -> None:
+    from core import f95_lists
+
+    entry = f95_lists.ListEntry(str(thread_id), "G [v1] [D]", "G", "1", "D", "", [], ["watched"])
+    _ = f95_lists.apply_import([entry], catalog_lookup=lambda _ids: {})
+
+
+def _refresh(thread_id: int, f95_tags: str) -> str:
+    from core.api import Api
+    from core.database import find_game_by_f95_url
+
+    url = f"https://f95zone.to/threads/{thread_id}/"
+    _ = Api()._refresh_f95_info_for_url(url, {"tags": f95_tags})  # pyright: ignore[reportPrivateUsage]
+    game = find_game_by_f95_url(url)
+    assert game is not None
+    from core.database import get_game
+
+    full = get_game(int(str(game["id"])))
+    assert full is not None
+    return str(full["tags"])
+
+
+def test_refresh_keeps_list_tag_on_new_imported_game():
+    from core.database import init_db
+
+    init_db()
+    _import_watched(10)
+    assert _refresh(10, "3dcg, sandbox") == "3dcg, sandbox, Watched on F95"
+
+
+def test_refresh_keeps_list_tag_on_existing_game_without_baseline():
+    from core.database import add_game, get_game, init_db
+
+    init_db()
+    game_id = add_game("Old", "", "https://f95zone.to/threads/11/", tags="3dcg, rpg")
+    assert game_id is not None
+    assert (get_game(game_id) or {}).get("f95_tags") is None
+    _import_watched(11)
+    assert (get_game(game_id) or {}).get("f95_tags") == "3dcg, rpg"
+    assert _refresh(11, "3dcg, rpg, sandbox") == "3dcg, rpg, sandbox, Watched on F95"
+
+
+def test_refresh_keeps_list_tag_on_user_edited_game():
+    from core.database import add_game, get_game, init_db, update_game
+
+    init_db()
+    game_id = add_game("Edited", "", "https://f95zone.to/threads/12/", tags="mine")
+    assert game_id is not None
+    _ = update_game(game_id, {"tags_user_edited": 1})
+    _import_watched(12)
+    assert (get_game(game_id) or {}).get("f95_tags") is None
+    assert _refresh(12, "3dcg") == "mine, Watched on F95"
+    assert _refresh(12, "3dcg, rpg") == "rpg, mine, Watched on F95"
+
+
+def test_update_check_backfill_adds_thread_tags_to_imported_game():
+    from core.api import Api
+    from core.database import find_game_by_f95_url, get_game, init_db
+
+    init_db()
+    _import_watched(13)
+    url = "https://f95zone.to/threads/13/"
+    game = find_game_by_f95_url(url)
+    assert game is not None
+    game_id = int(str(game["id"]))
+    assert (get_game(game_id) or {}).get("f95_tags") == ""
+    assert Api()._backfill_missing_metadata_for_url(url, {"tags": ["3dcg", "sandbox"]}) == 1  # pyright: ignore[reportPrivateUsage]
+    full = get_game(game_id) or {}
+    assert (full["tags"], full["f95_tags"]) == ("3dcg, sandbox, Watched on F95", "3dcg, sandbox")
+    # A later refresh keeps the list tag.
+    assert _refresh(13, "3dcg, sandbox, rpg") == "3dcg, sandbox, rpg, Watched on F95"
+
+
+def test_backfill_keeps_tags_of_games_without_a_baseline():
+    from core.api import Api
+    from core.database import add_game, get_game, init_db
+
+    init_db()
+    game_id = add_game("Old", "", "https://f95zone.to/threads/14/", tags="mine")
+    assert game_id is not None
+    assert Api()._backfill_missing_metadata_for_url("https://f95zone.to/threads/14/", {"tags": ["3dcg"]}) == 0  # pyright: ignore[reportPrivateUsage]
+    assert (get_game(game_id) or {})["tags"] == "mine"

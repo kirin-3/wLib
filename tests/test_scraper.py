@@ -1661,3 +1661,33 @@ def test_quoted_not_found_text_does_not_mark_thread_deleted():
 
     html = '<h1 class="p-title-value">My Game</h1><blockquote>The requested thread could not be found.</blockquote>'
     assert Scraper()._classify_page_issue(200, "My Game", html) is None
+
+
+def test_list_request_and_thread_request_do_not_overlap(monkeypatch):
+    _reset_scraper_globals()
+    monkeypatch.setattr(scraper_module, "get_request_interval_seconds", lambda: 0)
+    spans: list[tuple[str, float, float]] = []
+    list_started = threading.Event()
+
+    def slow_list_page() -> str:
+        start = time.monotonic()
+        list_started.set()
+        time.sleep(0.2)
+        spans.append(("list", start, time.monotonic()))
+        return "list"
+
+    def thread_page(_url: str) -> tuple[int, str]:
+        start = time.monotonic()
+        time.sleep(0.05)
+        spans.append(("thread", start, time.monotonic()))
+        return 200, "<html></html>"
+
+    monkeypatch.setattr(scraper_module, "_urllib_f95_get", thread_page)
+    worker = threading.Thread(target=lambda: scraper_module.run_paced_f95_request(slow_list_page))
+    worker.start()
+    assert list_started.wait(2)
+    assert scraper_module._f95_get("https://f95zone.to/threads/1/") == (200, "<html></html>")
+    worker.join(2)
+    assert [name for name, _, _ in spans] == ["list", "thread"]
+    assert spans[1][1] >= spans[0][2]
+    _reset_scraper_globals()

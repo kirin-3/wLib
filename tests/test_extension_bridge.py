@@ -707,3 +707,81 @@ def test_foreground_lc_requests_go_before_waiting_background_images(monkeypatch)
     background.join(5)
     assert order == ["https://lewdcorner.com/attachments/fg.2/", "https://lewdcorner.com/attachments/bg.1/"]
     assert not gate.locked()
+
+
+LIST_URL = "https://f95zone.to/watched/threads?tab=games&unread=0&sort=title&page=1"
+
+
+def _first_fetch_sent(fn, sent: list[str]) -> dict[str, object]:
+    thread = threading.Thread(target=fn, daemon=True)
+    thread.start()
+    thread.join(timeout=5)
+    assert sent
+    return json.loads(sent[0])
+
+
+def test_old_extension_fetches_threads_but_not_lists():
+    sent: list[str] = []
+    conn = _fake_conn(sent)
+    bridge._register_connection(conn)
+    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True})
+    assert bridge.is_available()
+    assert bridge.list_fetch_unavailable_reason() == "extension_outdated"
+    with pytest.raises(BridgeUnavailable) as excinfo:
+        bridge.fetch_list_page(LIST_URL, timeout=0.05)
+    assert excinfo.value.reason == "extension_outdated"
+    assert not sent
+
+    def _thread_fetch():
+        try:
+            bridge.fetch("https://f95zone.to/threads/1/", timeout=0.2)
+        except BridgeFailed:
+            pass
+
+    request = _first_fetch_sent(_thread_fetch, sent)
+    assert request["url"] == "https://f95zone.to/threads/1/"
+
+
+def test_no_extension_reason_for_list_fetch():
+    assert bridge.list_fetch_unavailable_reason() == "no_extension"
+    with pytest.raises(BridgeUnavailable) as excinfo:
+        bridge.fetch_list_page(LIST_URL, timeout=0.05)
+    assert excinfo.value.reason == "no_extension"
+    # A list-capable extension without host access is not eligible either.
+    conn = _fake_conn([])
+    bridge._register_connection(conn)
+    bridge._handle_message(
+        conn, {"type": "hello", "protocol": 2, "can_fetch": False, "can_fetch_lists": True}
+    )
+    assert bridge.list_fetch_unavailable_reason() == "no_extension"
+
+
+def test_newest_list_capable_connection_wins():
+    capable_sent: list[str] = []
+    old_sent: list[str] = []
+    newer_capable_sent: list[str] = []
+    capable = _fake_conn(capable_sent)
+    bridge._register_connection(capable)
+    bridge._handle_message(
+        capable, {"type": "hello", "protocol": 2, "can_fetch": True, "can_fetch_lists": True}
+    )
+    newer_capable = _fake_conn(newer_capable_sent)
+    bridge._register_connection(newer_capable)
+    bridge._handle_message(
+        newer_capable, {"type": "hello", "protocol": 2, "can_fetch": True, "can_fetch_lists": True}
+    )
+    old = _fake_conn(old_sent)
+    bridge._register_connection(old)
+    bridge._handle_message(old, {"type": "hello", "protocol": 2, "can_fetch": True})
+    assert bridge.list_fetch_unavailable_reason() is None
+    assert bridge.status_snapshot()["can_fetch_lists"] is True
+
+    def _list_fetch():
+        try:
+            bridge.fetch_list_page(LIST_URL, timeout=0.2)
+        except BridgeFailed:
+            pass
+
+    request = _first_fetch_sent(_list_fetch, newer_capable_sent)
+    assert request == {"type": "fetch", "id": request["id"], "url": LIST_URL}
+    assert not capable_sent and not old_sent

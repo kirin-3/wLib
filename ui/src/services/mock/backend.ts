@@ -18,6 +18,7 @@ import { isRecord, readMockGames } from "./games";
 import { nextMockLaunchTargetId, readMockLaunchTargets, sortMockLaunchTargets, writeMockLaunchTargets } from "./launchTargets";
 import { mockRpgmSaves } from "./rpgm";
 import { MockWebMedia } from "./webMedia";
+import { MockF95Account } from "./f95Account";
 import { DEFAULT_MOCK_SETTINGS, isActionableVersion, isSaveBackupKeep, normalizeMockFilterPresets, normalizeMockSettings, readMockSettings, writeMockSettings } from "./settings";
 
 // Browser preview: gamescope reads as missing unless this key is "installed".
@@ -68,6 +69,7 @@ export class MockBackend {
   _mockArchiveStatus: ArchiveInstallStatus = { running: false, stage: "", done: 0, total: 0 };
   _mockGameFiles = new MockGameFiles((id) => this._mockRunningGames.has(id));
   _mockWebMedia = new MockWebMedia();
+  _mockF95Account = new MockF95Account();
   _mockWebPlayerExports = new Map<number, number>();
   _mockDownloads = new MockDownloads(() => this._mockRunningGames.size > 0, () => {
     const settings = readMockSettings();
@@ -245,6 +247,11 @@ export class MockBackend {
       case "get_web_media_conversion_status":
       case "set_web_media_play_anyway":
         return this._mockWebMedia.respond(method, args, (id) => this._mockRunningGames.has(id));
+      case "start_f95_account_read":
+      case "get_f95_account_read_status":
+      case "cancel_f95_account_read":
+      case "import_f95_account_lists":
+        return this._mockF95Account.respond(method, args);
       case "list_companion_tools":
         return { success: true, tools: readMockCompanions().tools };
       case "save_companion_tool": {
