@@ -204,6 +204,7 @@ def test_thread_parser_reads_live_lc_markup():
     (0, 12, False, 10),
     (0, 1, False, 1),
     (123, 12, True, 2),
+    (1794991483 - 10 * 86400, 12, False, 10),
 ])
 def test_feed_limits_and_cursor(monkeypatch, mark, last_page, broken, expected_calls):
     import json
@@ -238,7 +239,10 @@ def test_feed_limits_and_cursor(monkeypatch, mark, last_page, broken, expected_c
     else:
         assert lewdcorner_updates.read_feed(lambda: False)["21"].version == "1"
     assert calls == list(range(1, expected_calls + 1))
-    assert database.get_setting("lc_feed_read_at") == lewdcorner.timestamp_iso(mark if broken else 1794991483)
+    # The page limit stopped a read that never reached the old cursor.
+    stopped_early = bool(mark) and expected_calls == 10
+    kept = broken or stopped_early
+    assert database.get_setting("lc_feed_read_at") == lewdcorner.timestamp_iso(mark if kept else 1794991483)
 
 
 def test_switching_thread_or_mode_recomputes_the_winning_version():

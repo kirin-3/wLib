@@ -27,6 +27,8 @@ def read_feed(cancelled: Callable[[], bool]) -> dict[str, lc.LcVersion]:
     """Read one newest-first pass and keep its cursor on this device."""
     mark = database.get_setting(FEED_READ_AT) or ""
     newest = mark
+    # Without a cursor the first read is only a baseline.
+    reached = not mark
     items: dict[str, lc.LcVersion] = {}
     logger.info("Reading LewdCorner update feed through the browser extension")
     for number in range(1, 11):
@@ -41,10 +43,13 @@ def read_feed(cancelled: Callable[[], bool]) -> dict[str, lc.LcVersion]:
         newest = max(newest, page.newest_at)
         # A page reaching behind the cursor already spans all newer items.
         if not page.has_more or (page.oldest_at and page.oldest_at < mark):
+            reached = True
             break
     if cancelled():
         return {}
-    if newest > mark:
+    # A read the page limit stopped early keeps the old cursor, so the
+    # unread gap is not marked as read.
+    if reached and newest > mark:
         database.update_setting(FEED_READ_AT, newest)
     return items
 
