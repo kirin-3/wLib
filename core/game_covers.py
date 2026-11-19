@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import threading
@@ -12,8 +13,9 @@ import re
 import stat
 import tempfile
 from pathlib import Path
+from collections import OrderedDict
 from typing import BinaryIO
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from uuid import uuid4
 
 from core import database, lewdcorner
@@ -22,6 +24,9 @@ MAX_COVER_SIZE = 20 * 1024 * 1024
 MAX_TYPE_BOX_SIZE = 64 * 1024
 UNSUPPORTED_IMAGE = "The file is not a supported image (JPEG, PNG, WebP, GIF or AVIF)."
 COVER_NAME_RE = re.compile(r"[0-9a-f]{32}\.(jpg|png|webp|gif|avif)\Z")
+# Device-local copies of LC screenshots in the cover cache folder.
+LC_COPY_RE = re.compile(r"lc-([0-9a-f]{32})\.(jpg|png|webp|gif|avif)\Z")
+LC_KEY_RE = re.compile(r"[0-9a-f]{32}\Z")
 COVER_TYPES = {
     "jpg": "image/jpeg",
     "png": "image/png",
@@ -182,18 +187,25 @@ def _open_image_source(path: str | Path) -> BinaryIO:
     return os.fdopen(fd, "rb")
 
 
+def validate_image_bytes(data: bytes) -> str:
+    """The extension of a supported image in ``data``; ValueError otherwise."""
+    with io.BytesIO(data) as stream:
+        extension, _ = _inspect_image(stream)
+    return extension
+
+
 def validate_cover_file(path: str | Path) -> str:
     with _open_image_source(path) as stream:
         extension, _ = _inspect_image(stream)
         return extension
 
 
-def _store_cover(source: BinaryIO, folder: Path) -> str:
+def _store_cover(source: BinaryIO, folder: Path, stem: str = "") -> str:
     folder.mkdir(parents=True, exist_ok=True)
     temp_name: str | None = None
     try:
         extension, header = _inspect_image(source)
-        name = f"{uuid4().hex}.{extension}"
+        name = f"{stem or uuid4().hex}.{extension}"
         with tempfile.NamedTemporaryFile(
             dir=folder, prefix=".cover-", delete=False
         ) as dest:
@@ -268,14 +280,96 @@ def delete_cached_cover(name: object) -> None:
         path.unlink(missing_ok=True)
 
 
+def lc_image_key(url: str) -> str:
+    """The local key of an LC image URL: 32 hex characters of its SHA-256."""
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
+
+
+def lc_copy_file(key: str) -> Path | None:
+    """The cached copy of an LC screenshot, when one exists as a regular file."""
+    if not LC_KEY_RE.fullmatch(key):
+        return None
+    folder = cache_covers_dir().resolve()
+    for extension in COVER_TYPES:
+        entry = child_file(folder, f"lc-{key}.{extension}")
+        if entry is not None:
+            return entry[0]
+    return None
+
+
+def store_lc_copy(key: str, data: bytes) -> Path:
+    if not LC_KEY_RE.fullmatch(key):
+        raise ValueError("Invalid LewdCorner image key")
+    with io.BytesIO(data) as source:
+        return cache_covers_dir() / _store_cover(source, cache_covers_dir(), f"lc-{key}")
+
+
+def fetch_lc_image(url: str, *, background: bool) -> bytes:
+    """An LC image through the browser extension; wLib never requests LC itself.
+
+    Raises ``BridgeUnavailable`` when no extension can fetch LC images, and
+    ``ValueError`` or ``BridgeFailed`` for an answer that is not an image."""
+    from core import extension_bridge
+
+    answer = extension_bridge.fetch_image(url, background=background)
+    content_type = answer.content_type.split(";", 1)[0].strip().lower()
+    if answer.status != 200:
+        raise ValueError(f"LewdCorner answered HTTP {answer.status}")
+    if content_type not in COVER_TYPES.values():
+        raise ValueError(f"LewdCorner answered {content_type or 'no content type'}, not an image")
+    if not answer.body or len(answer.body) > MAX_COVER_SIZE:
+        raise ValueError("The LewdCorner image is empty or larger than 20 MiB")
+    _ = validate_image_bytes(answer.body)
+    if not image_looks_complete(answer.body):
+        raise ValueError("The LewdCorner image was cut off")
+    return answer.body
+
+
+class LcImageKeys:
+    """Bounded in-memory ``key -> LC URL`` map for local screenshot addresses.
+
+    Only ``get_game_screenshots`` fills it, so another local program cannot
+    make wLib fetch an LC URL of its choice."""
+
+    LIMIT: int = 500
+
+    def __init__(self) -> None:
+        self._lock: threading.Lock = threading.Lock()
+        self._urls: OrderedDict[str, str] = OrderedDict()
+
+    def add(self, url: str) -> str:
+        key = lc_image_key(url)
+        with self._lock:
+            self._urls[key] = url
+            self._urls.move_to_end(key)
+            while len(self._urls) > self.LIMIT:
+                _ = self._urls.popitem(last=False)
+        return key
+
+    def get(self, key: str) -> str | None:
+        with self._lock:
+            return self._urls.get(key)
+
+
+LC_IMAGE_ADDRESS = "http://127.0.0.1:8183/lc-images/"
+
 RETRY_BASE_SECONDS = 15 * 60
 RETRY_MAX_SECONDS = 24 * 60 * 60
 ERROR_RETRY_SECONDS = 60
 
 
 class CoverCacheService:
-    def __init__(self, on_change: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self, on_change: Callable[[], None] | None = None,
+        lc_screenshot_urls: Callable[[], Iterable[str]] | None = None,
+        on_lc_cover: Callable[[], None] | None = None,
+    ) -> None:
         self.on_change: Callable[[], None] | None = on_change
+        # Called after an LC cover copy is saved: until the window reloads the
+        # library, it shows the placeholder (it never loads the LC URL).
+        self.on_lc_cover: Callable[[], None] | None = on_lc_cover
+        # Every LC screenshot URL a library game shows; copies of others are deleted.
+        self.lc_screenshot_urls: Callable[[], Iterable[str]] | None = lc_screenshot_urls
         self.disabled: bool = False
         self._stop: threading.Event = threading.Event()
         self._wake: threading.Event = threading.Event()
@@ -283,6 +377,8 @@ class CoverCacheService:
         self._thread: threading.Thread | None = None
         # url -> (failures, monotonic time it may be tried again)
         self._failed: dict[str, tuple[int, float]] = {}
+        # Monotonic time background LC fetches may start again after the hourly limit.
+        self._lc_resume_at: float = 0.0
 
     def start(self) -> None:
         if self._thread is None and not self._stop.is_set():
@@ -310,6 +406,11 @@ class CoverCacheService:
                         sizes.append(path.stat().st_size)
                 except OSError:
                     pass
+            for path in self._lc_copies():
+                try:
+                    sizes.append(path.stat().st_size)
+                except OSError:
+                    pass
             return {"success": True, "count": len(sizes), "bytes": sum(sizes),
                     "running": bool(self._thread and self._thread.is_alive() and not self.disabled)}
 
@@ -329,21 +430,52 @@ class CoverCacheService:
             if game:
                 delete_cached_cover(game.get("cover_cache"))
 
+    @staticmethod
+    def _lc_copies() -> list[Path]:
+        folder = cache_covers_dir()
+        if not folder.exists():
+            return []
+        return [path for path in folder.iterdir() if LC_COPY_RE.fullmatch(path.name) and path.is_file()]
+
     def _sweep(self) -> None:
         with self._store_lock:
             names = database.referenced_cover_cache_names()
             if cache_covers_dir().exists():
                 for path in cache_covers_dir().iterdir():
+                    if LC_COPY_RE.fullmatch(path.name):
+                        continue
                     if path.name not in names and (path.is_file() or path.is_symlink()):
                         path.unlink(missing_ok=True)
+        self._sweep_lc_copies()
+
+    def _sweep_lc_copies(self) -> None:
+        """Delete LC screenshot copies that no library game shows any more."""
+        if self.lc_screenshot_urls is None:
+            return
+        keys = {lc_image_key(url) for url in self.lc_screenshot_urls() if lewdcorner.fetchable_image_url(url)}
+        with self._store_lock:
+            for path in self._lc_copies():
+                match = LC_COPY_RE.fullmatch(path.name)
+                if match is not None and match.group(1) not in keys:
+                    path.unlink(missing_ok=True)
+
+    def store_lc_screenshot(self, key: str, data: bytes) -> Path | None:
+        """Keep a copy of a fetched LC screenshot; None after a purge turned the cache off."""
+        with self._store_lock:
+            if self.disabled:
+                return None
+            return store_lc_copy(key, data)
 
     def _fill(self) -> None:
+        from core import extension_bridge
         from core.scraper import f95_get_bytes
 
         # URLs still waiting on a retry; a failure for any other URL (the game
         # was removed or its cover changed) is dropped after the pass, or its
         # past retry time would wake the loop every second.
         waiting: set[str] = set()
+        # LC covers go after the F95 ones, so LC pacing never delays them.
+        lc_work: list[tuple[int, str]] = []
         for game in database.get_cover_cache_work():
             if self.disabled or self._stop.is_set():
                 return
@@ -357,43 +489,95 @@ class CoverCacheService:
                     continue
                 delete_cached_cover(game.get("cover_cache"))
                 database.clear_game_cover_cache(game_id)
-            if not url or lewdcorner.hosts_url(url):
+            if not url:
                 continue
-            failure = self._failed.get(url)
-            if failure is not None and time.monotonic() < failure[1]:
-                waiting.add(url)
-                continue
+            if lewdcorner.hosts_url(url):
+                # Other LC images (thumbnails, proxy images) are never fetched.
+                if lewdcorner.fetchable_image_url(url):
+                    lc_work.append((game_id, url))
+            elif not self._fetch_and_store(game_id, url, lambda url: f95_get_bytes(url, MAX_COVER_SIZE), waiting):
+                return
+        for index, (game_id, url) in enumerate(lc_work):
+            # A missing extension is not a failure: the URL waits, without a
+            # timer, until an extension with LC image support connects. The
+            # hourly limit is not a failure either: the rest waits for it.
+            # Waiting URLs keep their failure counts.
+            if time.monotonic() < self._lc_resume_at or not extension_bridge.can_fetch_lc_images():
+                waiting.update(url for _game_id, url in lc_work[index:])
+                break
             try:
-                data = f95_get_bytes(url, MAX_COVER_SIZE)
-                if not image_looks_complete(data):
-                    # Cached for good otherwise: the URL never changes.
-                    raise ValueError("The cover download was cut off")
-                with self._store_lock:
-                    if self.disabled or self._stop.is_set():
-                        return
-                    name = store_cached_cover(data)
-                    try:
-                        if not database.set_game_cover_cache(game_id, url, name):
-                            delete_cached_cover(name)
-                        elif self.on_change is not None:
-                            self.on_change()
-                    except Exception:
-                        delete_cached_cover(name)
-                        raise
-                _ = self._failed.pop(url, None)
-            except Exception as exc:
-                count = (failure[0] if failure else 0) + 1
-                delay = min(RETRY_BASE_SECONDS * (1 << (count - 1)), RETRY_MAX_SECONDS)
-                self._failed[url] = (count, time.monotonic() + delay)
-                waiting.add(url)
-                logging.getLogger(__name__).info("Cover cache skipped %s: %s", game_id, exc)
+                if not self._fetch_and_store(game_id, url, lambda url: fetch_lc_image(url, background=True), waiting):
+                    return
+                if self.on_lc_cover is not None and url not in self._failed:
+                    self.on_lc_cover()
+            except extension_bridge.LcImageLimitReached as exc:
+                self._lc_resume_at = time.monotonic() + max(1.0, exc.retry_in)
+                waiting.update(url for _game_id, url in lc_work[index:])
+                break
+            except extension_bridge.BridgeUnavailable:
+                waiting.update(url for _game_id, url in lc_work[index:])
+                break
         for url in [url for url in self._failed if url not in waiting]:
             del self._failed[url]
 
+    def _fetch_and_store(
+        self, game_id: int, url: str, download: Callable[[str], bytes], waiting: set[str],
+    ) -> bool:
+        """Cache one remote cover; False when the pass must stop (purge or stop).
+
+        Re-raises ``BridgeUnavailable`` and ``LcImageLimitReached``, which
+        are not failures of the URL."""
+        from core import extension_bridge
+
+        failure = self._failed.get(url)
+        if failure is not None and time.monotonic() < failure[1]:
+            waiting.add(url)
+            return True
+        try:
+            data = download(url)
+            if not image_looks_complete(data):
+                # Cached for good otherwise: the URL never changes.
+                raise ValueError("The cover download was cut off")
+            with self._store_lock:
+                if self.disabled or self._stop.is_set():
+                    return False
+                name = store_cached_cover(data)
+                try:
+                    if not database.set_game_cover_cache(game_id, url, name):
+                        delete_cached_cover(name)
+                    elif self.on_change is not None:
+                        self.on_change()
+                except Exception:
+                    delete_cached_cover(name)
+                    raise
+            _ = self._failed.pop(url, None)
+        except (extension_bridge.BridgeUnavailable, extension_bridge.LcImageLimitReached):
+            raise
+        except Exception as exc:
+            count = (failure[0] if failure else 0) + 1
+            delay = min(RETRY_BASE_SECONDS * (1 << (count - 1)), RETRY_MAX_SECONDS)
+            self._failed[url] = (count, time.monotonic() + delay)
+            waiting.add(url)
+            logging.getLogger(__name__).info("Cover cache skipped %s: %s", game_id, exc)
+        return True
+
     def _next_retry_in(self) -> float | None:
-        if not self._failed:
+        from core import extension_bridge
+
+        # LC URLs wait without a timer while no extension can fetch them (its
+        # connection wakes the cache), and at least until the hourly limit ends.
+        lc_ready = extension_bridge.can_fetch_lc_images()
+        dues: list[float] = []
+        for url, (_count, due) in self._failed.items():
+            if not lewdcorner.hosts_url(url):
+                dues.append(due)
+            elif lc_ready:
+                dues.append(max(due, self._lc_resume_at))
+        if lc_ready and self._lc_resume_at > time.monotonic():
+            dues.append(self._lc_resume_at)
+        if not dues:
             return None
-        return max(1.0, min(due for _count, due in self._failed.values()) - time.monotonic())
+        return max(1.0, min(dues) - time.monotonic())
 
     def _run(self) -> None:
         log = logging.getLogger(__name__)

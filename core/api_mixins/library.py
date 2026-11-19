@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from typing import TYPE_CHECKING, cast
 
-from core import database
+from core import database, game_lookup, lewdcorner
 from core.f95zone import extract_thread_id, thread_urls_match
 from core.database import (
     normalize_launch_mode,
@@ -54,30 +54,51 @@ class LibraryMixin(ApiBase):
         from core.cover_cards import resolve_cover_folders
 
         games = get_all_games()
+        lc_ids = [lewdcorner.extract_thread_id(game.get("lc_url")) for game in games]
+        lc_tiers = game_lookup.lc_thread_tiers([thread_id for thread_id in lc_ids if thread_id])
         with self._metadata_lock:
             pending = set(self._metadata_pending)
         folders = resolve_cover_folders()
-        for game in games:
+        for game, lc_id in zip(games, lc_ids, strict=True):
+            if tier := lc_tiers.get(lc_id):
+                game["lc_catalog_tier"] = tier
             self._add_local_cover_url(game, folders)
             if game.get("id") in pending:
                 game["metadata_pending"] = True
         return games
 
     def get_game_screenshots(self, game_id: int) -> dict[str, object]:
-        from core.database import get_game
-        from core.game_lookup import f95_thread_screenshots, screenshot_urls
+        from core.database import get_game, get_setting
+        from core.game_covers import LC_IMAGE_ADDRESS
+        from core.game_lookup import f95_thread_screenshots, lc_thread_screenshots, screenshot_urls
 
         game = get_game(game_id)
         if game is None:
             return {"success": False, "error": "Game was not found"}
         thread_id = extract_thread_id(str(game.get("f95_url") or ""))
         catalog = f95_thread_screenshots(str(thread_id)) if thread_id else None
+        lc_id = lewdcorner.extract_thread_id(game.get("lc_url"))
+        if not catalog and lc_id and lewdcorner.lc_active(game, lewdcorner.setting_enabled(get_setting("lc_enabled"))):
+            lc_catalog = lc_thread_screenshots(lc_id)
+            if lc_catalog or catalog is None:
+                catalog = lc_catalog
         try:
             stored = cast(object, json.loads(str(game.get("screenshots") or "[]")))
         except ValueError:
             stored = []
         library = [item for item in cast(list[object], stored) if isinstance(item, str)] if isinstance(stored, list) else []
-        return {"success": True, "screenshots": [screenshot_urls(url) for url in (catalog or library)],
+        screenshots: list[dict[str, str]] = []
+        for url in catalog or library:
+            if lewdcorner.hosts_url(url):
+                if not lewdcorner.fetchable_image_url(url):
+                    continue  # The extension fetches only full LC attachments.
+                # The wLib window never loads LC URLs; the local address fetches
+                # the image through the browser extension (core/extension_server.py).
+                local = f"{LC_IMAGE_ADDRESS}{self.lc_image_keys.add(url)}"
+                screenshots.append({"thumb": local, "full": local})
+            else:
+                screenshots.append(screenshot_urls(url))
+        return {"success": True, "screenshots": screenshots,
                 "source": "catalog" if catalog else "library", "in_catalog": catalog is not None}
 
     def _add_local_cover_url(
@@ -465,6 +486,7 @@ class LibraryMixin(ApiBase):
         lc_mode: str = "",
         lc_dismissed: str = "",
         thread_completed: bool | None = None,
+        screenshots: object = None,
     ) -> dict[str, object]:
         import sqlite3
 
@@ -613,6 +635,8 @@ class LibraryMixin(ApiBase):
                     lc_url=normalized_lc,
                     lc_mode=lc_mode,
                     lc_dismissed=lc_dismissed if lc_dismissed.isascii() and lc_dismissed.isdigit() else "",
+                    # Image URLs read from an LC page; F95 adds get theirs from the thread scrape.
+                    screenshots=lewdcorner.page_screenshots(screenshots) if normalized_lc else [],
                 )
             if game_id is not None and attach_id is None and normalized_lc:
                 details = {field: entry[field] for field in THREAD_DETAIL_FIELDS if entry.get(field)}

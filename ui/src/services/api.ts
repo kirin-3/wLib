@@ -546,7 +546,14 @@ export interface ArchiveInspectResponse extends ApiBasicResponse {
 
 export interface UpdateMirror { link_id: string; host: string; label: string; part: string; split: boolean; /** False when wLib cannot download it itself (a direct Buzzheavier link). */ in_app?: boolean }
 export interface UpdateBuild { label: string; section: string; platform: string; kind: string; mirrors: UpdateMirror[] }
-export interface UpdateDownloadLinks extends ApiBasicResponse { version?: string; builds?: UpdateBuild[] }
+export type DownloadSite = "f95" | "lc";
+export interface DownloadSiteOption { site: DownloadSite; version: string; older: boolean }
+export interface UpdateDownloadLinks extends ApiBasicResponse {
+  site?: DownloadSite;
+  sites?: DownloadSiteOption[];
+  version?: string;
+  builds?: UpdateBuild[];
+}
 export interface UpdateDownloadJob {
   job_id: string;
   game_id: number;
@@ -601,7 +608,7 @@ export interface DownloadJobDetails {
   installed?: boolean;
   restarting?: boolean;
 }
-export interface DownloadJobSource { label?: string; section?: string; platform?: string; host?: string; part?: string; rpdl_id?: number }
+export interface DownloadJobSource { site?: DownloadSite; label?: string; section?: string; platform?: string; host?: string; part?: string; rpdl_id?: number }
 export interface DownloadQueueJob {
   job_id: string;
   kind: "host" | "torrent";
@@ -1120,6 +1127,7 @@ export interface GameRecord {
   exe_path: string;
   f95_url?: string;
   lc_url?: string;
+  lc_catalog_tier?: string;
   lc_mode?: "" | "on" | "off";
   version?: string;
   latest_version?: string;
@@ -1682,6 +1690,7 @@ class ApiService {
     lc_mode: GameRecord["lc_mode"] = "",
     lc_dismissed = "",
     thread_completed?: boolean,
+    screenshots: string[] = [],
   ): Promise<AddGameResponse> {
     return this.invokeLibraryChange(
       "add_game",
@@ -1706,6 +1715,7 @@ class ApiService {
       lc_mode,
       lc_dismissed,
       thread_completed ?? null,
+      screenshots,
     );
   }
 
@@ -2302,8 +2312,8 @@ class ApiService {
     return this.invoke<ApiBasicResponse>("cancel_game_move", cancelAll);
   }
 
-  async getUpdateDownloadLinks(gameId: number): Promise<UpdateDownloadLinks> {
-    return this.invoke<UpdateDownloadLinks>("get_update_download_links", gameId);
+  async getUpdateDownloadLinks(gameId: number, site: DownloadSite | "" = ""): Promise<UpdateDownloadLinks> {
+    return this.invoke<UpdateDownloadLinks>("get_update_download_links", gameId, site);
   }
   async closeUpdateDownloadLinks(gameId: number): Promise<ApiBasicResponse> {
     return this.invoke<ApiBasicResponse>("close_update_download_links", gameId);

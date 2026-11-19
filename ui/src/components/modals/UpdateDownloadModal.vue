@@ -3,9 +3,9 @@
 import {computed, ref, useTemplateRef, watch} from 'vue';
 import {IconAlertTriangle, IconCheck, IconChevronRight, IconCircleCheck, IconCopy, IconDeviceFloppy, IconDownload, IconExternalLink, IconInfoCircle, IconLoader2, IconRefresh, IconSend, IconX} from '@tabler/icons-vue';
 import {useRouter} from 'vue-router';
-import {api, type RpdlSearchResponse, type RpdlTorrent, type UpdateBuild, type UpdateMirror} from '../../services/api';
+import {api, type DownloadSite, type DownloadSiteOption, type RpdlSearchResponse, type RpdlTorrent, type UpdateBuild, type UpdateMirror} from '../../services/api';
 import {useUpdateDownloads} from '../../composables/useUpdateDownloads';
-import {downloadFailureMessage, inAppMirror, orderBuilds, pickerTargetVersion, preselect, selectableBuild, suitable, type HostPlatform} from '../../utils/updateDownloads';
+import {downloadFailureMessage, inAppMirror, orderBuilds, pickerTargetVersion, preselect, selectableBuild, siteUnavailable, suitable, type HostPlatform} from '../../utils/updateDownloads';
 import {isWishlisted} from '../../utils/libraryGames';
 import {loadPlatformCapabilities} from '../../utils/platformCapabilities';
 import {formatSize, formatUploadDate, rpdlMarks, rpdlNote, rpdlPreselected, rpdlPrimaryAction, rpdlPrimaryLabel, torrentSentMessage} from '../../utils/torrentDownloads';
@@ -22,6 +22,9 @@ const builds = ref<UpdateBuild[]>([]);
 const chosenBuild = ref<UpdateBuild | null>(null);
 const chosenMirror = ref<UpdateMirror | null>(null);
 const version = ref('');
+const sites = ref<DownloadSiteOption[]>([]);
+const activeSite = ref<DownloadSite | ''>('');
+const siteNames = {f95: 'F95Zone', lc: 'LewdCorner'};
 const error = ref('');
 const loading = ref(false);
 const rpdl = ref<RpdlSearchResponse | null>(null);
@@ -50,19 +53,25 @@ const rpdlNoteText = computed(() => rpdlNote(rpdl.value));
 const ordered = computed(()=>orderBuilds(builds.value,platform.value));
 const onlySuitablePatches = computed(() => wishlisted.value && ordered.value.suitable.length > 0
   && ordered.value.suitable.every(build => !canSelect(build)));
-const close = () => { generation++; if (game.value) void api.closeUpdateDownloadLinks(game.value.id); downloads.close(); };
+const close = () => { generation++; rpdlGeneration++; if (game.value) void api.closeUpdateDownloadLinks(game.value.id); downloads.close(); };
 useModalKeyboard(modal,()=>!!game.value,close);
-async function load() {
+async function loadLinks(site: DownloadSite | '' = activeSite.value) {
   if (!game.value) return;
   const current = ++generation;
-  loading.value = true; error.value = ''; version.value = ''; builds.value = []; chosenBuild.value = null; chosenMirror.value = null;
-  chosenTorrent.value = null; userChose = false;
-  exportNotice.value = ''; exportError.value = ''; sentMessage.value = '';
-  void loadRpdl(false);
-  void loadExportSettings();
+  activeSite.value = site;
+  loading.value = true; error.value = ''; version.value = ''; builds.value = [];
+  chosenBuild.value = null; chosenMirror.value = null;
+  // A selected torrent remains selected when changing thread sites.
+  userChose = !!chosenTorrent.value;
   try {
-    const [response, capabilities] = await Promise.all([api.getUpdateDownloadLinks(game.value.id),loadPlatformCapabilities()]);
+    const [response, capabilities] = await Promise.all([
+      api.getUpdateDownloadLinks(game.value.id, site), loadPlatformCapabilities(),
+    ]);
     if (current !== generation) return;
+    if (response.sites) sites.value = response.sites;
+    // The asked-for site is gone (LC turned off, or an LC Plus thread): show the default site.
+    if (!response.success && !response.site && siteUnavailable(site, response.sites)) { void loadLinks(''); return; }
+    if (response.site) activeSite.value = response.site;
     if (!response.success) throw new Error(response.error || 'Could not load links');
     platform.value = capabilities.platform === 'windows' ? 'windows' : 'linux';
     builds.value = response.builds || []; version.value = response.version || 'Unknown';
@@ -75,6 +84,18 @@ async function load() {
       if (wishlisted.value) preselectTorrent();
     }
   }
+}
+function openPicker() {
+  sites.value = [];
+  chosenTorrent.value = null;
+  userChose = false;
+  exportNotice.value = ''; exportError.value = ''; sentMessage.value = '';
+  void loadLinks(downloads.initialSite.value);
+  void loadRpdl(false);
+  void loadExportSettings();
+}
+function selectSite(site: DownloadSite) {
+  if (site !== activeSite.value) void loadLinks(site);
 }
 function preselectTorrent() {
   if (userChose || (wishlisted.value && (loading.value || onlySuitablePatches.value))) return;
@@ -102,7 +123,7 @@ async function loadExportSettings() {
     exportWarningAccepted.value = settings.torrent_export_warning_accepted === true;
   } catch { watchFolder.value = ''; exportWarningAccepted.value = false; }
 }
-watch(game, current => { if (current) void load(); });
+watch(game, current => { if (current) openPicker(); });
 function choose(build: UpdateBuild, mirror: UpdateMirror) {
   if (!canSelect(build)) return;
   userChose=true; chosenTorrent.value=null; chosenBuild.value=build; chosenMirror.value=mirror; exportNotice.value=''; exportError.value=''; sentMessage.value='';
@@ -177,7 +198,7 @@ async function openBrowser() {
   try {
     const response = chosenMirror.value
       ? await api.openUpdateDownloadInBrowser(current.id,chosenMirror.value.link_id)
-      : await api.openInBrowser(current.f95_url || '');
+      : await api.openInBrowser((activeSite.value === 'lc' ? current.lc_url : current.f95_url) || '');
     if (!response.success) error.value=response.error || 'Could not open browser';
   } catch (e) { error.value=String(e instanceof Error ? e.message : e) || 'Could not open browser'; }
 }
@@ -213,6 +234,22 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
       </header>
 
       <div class="p-6 space-y-5 overflow-y-auto flex-1 min-h-0">
+        <div v-if="sites.length > 1" class="flex flex-wrap gap-2" role="group" aria-label="Download site">
+          <button
+            v-for="option in sites"
+            :key="option.site"
+            type="button"
+            class="mirror site-option"
+            :class="{ selected: activeSite === option.site }"
+            :aria-pressed="activeSite === option.site"
+            :disabled="busy || exporting"
+            @click="selectSite(option.site)"
+          >
+            <span>{{ siteNames[option.site] }}</span>
+            <span class="chip font-mono">{{ option.version || 'Unknown' }}</span>
+            <span v-if="option.older" class="chip chip-warn">Older</span>
+          </button>
+        </div>
         <div v-if="loading" class="flex items-center gap-3 py-8 justify-center text-sm" style="color: var(--text-muted)">
           <IconLoader2 class="w-5 h-5 animate-spin" />
           Loading download links…
@@ -221,8 +258,8 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
         <div v-else-if="error && !builds.length" class="callout callout-danger">
           <IconAlertTriangle class="w-4 h-4 shrink-0 mt-0.5" />
           <div class="flex-1 min-w-0">
-            <p>{{ downloadFailureMessage(error) }}</p>
-            <button class="modal-btn mt-3" @click="load"><IconRefresh class="w-4 h-4" />Retry</button>
+            <p>{{ downloadFailureMessage(error, activeSite || undefined) }}</p>
+            <button class="modal-btn mt-3" @click="loadLinks()"><IconRefresh class="w-4 h-4" />Retry</button>
           </div>
         </div>
 
@@ -305,7 +342,7 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
           </div>
           <div v-if="error" role="alert" class="callout callout-danger">
             <IconAlertTriangle class="w-4 h-4 shrink-0 mt-0.5" />
-            <p>{{ downloadFailureMessage(error) }}</p>
+            <p>{{ downloadFailureMessage(error, activeSite || undefined) }}</p>
           </div>
 
         </template>
@@ -402,6 +439,10 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
 </template>
 
 <style scoped>
+.site-option {
+  gap: 0.5rem;
+  width: auto;
+}
 .modal-content {
   background: var(--bg-surface);
   border: 1px solid var(--border);

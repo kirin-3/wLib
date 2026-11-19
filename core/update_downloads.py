@@ -6,23 +6,33 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import final
-from collections.abc import Callable
+from typing import NamedTuple, TypedDict, cast, final
+from collections.abc import Callable, Mapping
 
-from core import database, scraper
+from core import database, extension_bridge, game_lookup, lewdcorner, scraper
+from core.download_links import Build, masked_download_site
 from core.downloads.manager import DownloadManager, Resolve
 from core.downloads.queue import DownloadQueue, QueueJob
 from core.downloads.transfer import DownloadError
 
 # A build identity: what a saved download stores instead of its link.
-KEY_FIELDS = ('label', 'section', 'platform', 'host', 'part')
+class _LinkKey(NamedTuple):
+    site: lewdcorner.Site
+    label: str
+    section: str
+    platform: str
+    host: str
+    part: str
+
+
+KEY_FIELDS = _LinkKey._fields
 LINK_SECONDS = 300
 
 
 @dataclass
 class _Link:
     game_id: int
-    key: tuple[str, str, str, str, str]
+    key: _LinkKey
     url: str
     created: float
     version: str = ''
@@ -30,13 +40,44 @@ class _Link:
     fetch: int = 0
 
 
-def _in_app(host: str, url: str) -> bool:
-    """Whether wLib can download this mirror itself.
+    @property
+    def site(self) -> lewdcorner.Site:
+        return self.key.site
 
-    A Buzzheavier file is only reachable through its share page, which the
-    extension opens for F95Zone's masked /dl/ links; a direct Buzzheavier link
-    has no such page to resolve, so it is opened in the browser."""
-    return host != 'buzzheavier' or url.startswith('https://f95zone.to/dl/')
+
+class DownloadSite(TypedDict):
+    site: lewdcorner.Site
+    version: str
+    older: bool
+
+
+def download_sites(
+    game: Mapping[str, object], *, lc_enabled: bool, lc_plus: bool, catalog_tier: str = "",
+) -> list[DownloadSite]:
+    sites: list[lewdcorner.Site] = []
+    if game.get("f95_url"):
+        sites.append("f95")
+    if lewdcorner.lc_active(game, lc_enabled) and (lc_plus or catalog_tier.casefold() != "premium"):
+        sites.append("lc")
+    latest = game.get("latest_site")
+    options: list[DownloadSite] = []
+    for site in sites:
+        version = str(game.get(f"{site}_latest_version") or "")
+        # An unknown version is not "older"; only a known version can lose.
+        options.append({"site": site, "version": version,
+                        "older": bool(version) and latest in ("f95", "lc") and latest != site})
+    return options
+
+
+def default_download_site(game: Mapping[str, object], sites: list[DownloadSite]) -> lewdcorner.Site | None:
+    if game.get("latest_site") == "lc" and any(item["site"] == "lc" for item in sites):
+        return "lc"
+    return sites[0]["site"] if sites else None
+
+
+def _in_app(host: str, url: str) -> bool:
+    """Buzzheavier needs a masked link so the extension can open the share page."""
+    return host != 'buzzheavier' or masked_download_site(url) is not None
 
 
 @final
@@ -49,8 +90,9 @@ class UpdateDownloads:
         # Bumped only when the picker closes (`clear`).
         self.generations: dict[int, int] = {}
         self.fetches: dict[int, int] = {}
+        self.picker_fetches: dict[int, int] = {}
 
-    def get_links(self, game_id: int, *, picker: bool = True) -> dict[str, object]:
+    def get_links(self, game_id: int, site: str = "", *, picker: bool = True) -> dict[str, object]:
         """Read the thread's builds and hold their links.
 
         `picker` is False for a background read (a queued job's relink): it
@@ -59,18 +101,40 @@ class UpdateDownloads:
         game = database.get_game(game_id)
         if not game:
             return {'success':False, 'error':'Game not found'}
-        f95_url = str(game.get('f95_url') or '')
-        if not f95_url:
-            return {'success':False, 'error':'Game has no F95Zone thread'}
+        lc_id = lewdcorner.extract_thread_id(game.get("lc_url"))
+        catalog = game_lookup.lc_thread_entries([lc_id]).get(lc_id, {}) if lc_id else {}
+        lc_enabled = bool(lc_id) and lewdcorner.setting_enabled(database.get_setting("lc_enabled"))
+        lc_plus = bool(lc_id) and lewdcorner.setting_enabled(database.get_setting("lc_plus"))
+        tier = str(catalog.get("tier") or "")
+        sites = download_sites(game, lc_enabled=lc_enabled, lc_plus=lc_plus, catalog_tier=tier)
+        selected: lewdcorner.Site | None
+        if site:
+            selected = next((item["site"] for item in sites if item["site"] == site), None)
+        else:
+            selected = default_download_site(game, sites)
+        if selected is None:
+            error = (
+                "This is an LC Plus thread. Use F95Zone or an LC Plus account."
+                if site in ("", "lc") and tier.casefold() == "premium" and not lc_plus and lewdcorner.lc_active(game, lc_enabled)
+                else "This game has no available thread for downloads"
+            )
+            return {"success": False, "error": error, "sites": sites}
+        thread_url = str(game.get(f"{selected}_url") or "")
         with self.lock:
             generation = self.generations.get(game_id, 0)
             fetch = self.fetches.get(game_id, 0) + 1
             self.fetches[game_id] = fetch
-        result = scraper.fetch_thread_download_links(f95_url)
+            if picker:
+                self.picker_fetches[game_id] = fetch
+        result = (
+            scraper.fetch_thread_download_links(thread_url, site="lc")
+            if selected == "lc" else scraper.fetch_thread_download_links(thread_url)
+        )
         if not result.get('success'):
-            return {'success':False, 'error':str(result.get('error') or 'Could not load download links')}
-        from core.download_links import Build
-        from typing import cast
+            return {
+                "success": False, "site": selected, "sites": sites, "code": result.get("code"),
+                "error": str(result.get("error") or "Could not load download links"),
+            }
         builds = cast(list[Build], result['builds'])
         output: list[dict[str, object]] = []
         now = time.monotonic()
@@ -79,7 +143,7 @@ class UpdateDownloads:
             mirrors: list[dict[str, object]] = []
             for mirror in build['mirrors']:
                 identifier = uuid.uuid4().hex
-                key = (build['label'], build['section'], build['platform'], mirror['host'], mirror['part'])
+                key = _LinkKey(selected, build['label'], build['section'], build['platform'], mirror['host'], mirror['part'])
                 new_links[identifier] = _Link(game_id, key, mirror['url'], now, str(result.get('version') or ''), fetch)
                 mirrors.append({'link_id':identifier, 'host':mirror['host'], 'label':mirror['label'], 'part':mirror['part'], 'split':mirror['split'],
                                 'in_app':_in_app(mirror['host'], mirror['url'])})
@@ -87,6 +151,8 @@ class UpdateDownloads:
         with self.lock:
             if picker and self.generations.get(game_id, 0) != generation:
                 return {'success':False, 'error':'Download picker was closed'}
+            if picker and self.picker_fetches.get(game_id) != fetch:
+                return {'success':False, 'error':'The picker has changed download sites'}
             # Retain stale identities for refresh matching, but discard their URLs.
             # A read that finished after a newer one keeps the newer links.
             for link in self.links.values():
@@ -103,11 +169,12 @@ class UpdateDownloads:
         timer = threading.Timer(LINK_SECONDS, expire)
         timer.daemon = True
         timer.start()
-        return {'success':True, 'version':result['version'], 'builds':output}
+        return {'success':True, 'site':selected, 'sites':sites, 'version':result['version'], 'builds':output}
 
     def clear(self, game_id: int) -> None:
         with self.lock:
             self.generations[game_id] = self.generations.get(game_id, 0) + 1
+            _ = self.picker_fetches.pop(game_id, None)
             for link in self.links.values():
                 if link.game_id == game_id:
                     link.url = ""
@@ -122,7 +189,7 @@ class UpdateDownloads:
                 return link
             key = link.key
             link.url = ''
-        result = self.get_links(game_id)
+        result = self.get_links(game_id, link.site)
         if not result.get('success'):
             raise DownloadError(str(result.get('error') or 'Could not reload links'))
         with self.lock:
@@ -134,8 +201,29 @@ class UpdateDownloads:
     @staticmethod
     def _resolver(url: str, host: str) -> Resolve:
         def resolve(progress: Callable[[str], None], cancel: threading.Event) -> dict[str, object]:
-            if url.startswith('https://f95zone.to/dl/'):
+            site = masked_download_site(url)
+            if site == "f95":
                 return scraper.resolve_download_link(url, host, progress, cancel)
+            if site == "lc":
+                try:
+                    result = scraper.resolve_download_link(url, host, progress, cancel, site=site)
+                except extension_bridge.BridgeUnavailable as exc:
+                    if not extension_bridge.is_available(site="lc"):
+                        raise DownloadError(
+                            "Open a browser with the wLib extension and turn on its LewdCorner switch"
+                        ) from exc
+                    raise DownloadError("Turn on LewdCorner downloads in the wLib extension settings") from exc
+                except extension_bridge.BridgeFailed as exc:
+                    if "time" in str(exc).lower():
+                        raise DownloadError("Finish the LewdCorner check in your browser") from exc
+                    raise
+                if result.get("ok") is not True:
+                    error = str(result.get("error") or "")
+                    if "timed out" in error or (error == "cancelled" and not cancel.is_set()):
+                        raise DownloadError("Finish the LewdCorner check in your browser")
+                    if "LewdCorner downloads" in error:
+                        raise DownloadError(error)
+                return result
             return {'ok':True, 'url':url, 'host':host}
         return resolve
 
@@ -146,9 +234,9 @@ class UpdateDownloads:
         if self.queue is None:
             raise DownloadError('Downloads are not ready yet')
         link = self._find(game_id, link_id)
-        if link.key[4]:
+        if link.key.part:
             raise DownloadError('Split archives are not supported yet; open in browser')
-        url, host = link.url, link.key[3]
+        url, host = link.url, link.key.host
         if not _in_app(host, url):
             raise DownloadError('This Buzzheavier link cannot be downloaded in-app; open in browser')
         game = database.get_game(game_id) or {}
@@ -163,8 +251,9 @@ class UpdateDownloads:
 
         Raises DownloadError when the thread cannot be read or no longer offers the mirror.
         """
-        key = (
-            str(job.source.get('label') or ''), str(job.source.get('section') or ''),
+        site = "lc" if job.source.get("site") == "lc" else "f95"
+        key = _LinkKey(
+            site, str(job.source.get('label') or ''), str(job.source.get('section') or ''),
             str(job.source.get('platform') or ''), str(job.source.get('host') or ''),
             str(job.source.get('part') or ''),
         )
@@ -174,7 +263,7 @@ class UpdateDownloads:
                          if candidate.game_id == job.game_id and candidate.key == key and candidate.url
                          and now - candidate.created < LINK_SECONDS), None)
         if link is None:
-            result = self.get_links(job.game_id, picker=False)
+            result = self.get_links(job.game_id, site, picker=False)
             if not result.get('success'):
                 raise DownloadError(str(result.get('error') or 'Could not reload links'))
             with self.lock:
@@ -182,7 +271,7 @@ class UpdateDownloads:
                              if candidate.game_id == job.game_id and candidate.key == key and candidate.url), None)
         if link is None:
             raise DownloadError('Mirror no longer available; choose another mirror')
-        return self._resolver(link.url, key[3])
+        return self._resolver(link.url, key.host)
 
     def browser_link(self, game_id: int, link_id: str) -> str:
         return self._find(game_id, link_id).url

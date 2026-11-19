@@ -1127,6 +1127,7 @@ def add_game(
     lc_url: str = "",
     lc_mode: str = "",
     lc_dismissed: str = "",
+    screenshots: Sequence[str] = (),
 ) -> int | None:
     # tags might be a list, so convert to comma-separated string if needed
     if isinstance(tags, list):
@@ -1153,7 +1154,7 @@ def add_game(
             raise sqlite3.IntegrityError("duplicate f95_url")
 
         _ = cursor.execute(
-            "INSERT INTO games (title, exe_path, f95_url, lc_url, lc_mode, lc_dismissed, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status, command_line_args, sandbox_enabled, block_network) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO games (title, exe_path, f95_url, lc_url, lc_mode, lc_dismissed, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status, command_line_args, sandbox_enabled, block_network, screenshots) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 title,
                 exe_path,
@@ -1178,6 +1179,7 @@ def add_game(
                 command_line_args,
                 _coerce_bool_int(sandbox_enabled),
                 _coerce_bool_int(block_network),
+                json.dumps(list(screenshots)),
             ),
         )
         game_id = cursor.lastrowid
@@ -1523,6 +1525,38 @@ def _lc_enabled_in(connection: sqlite3.Connection) -> bool:
     return row is not None and lewdcorner.setting_enabled(cast(object, row[0]))
 
 
+def refresh_latest_versions() -> int:
+    """Pick each LC game's newest version again under the current setting.
+
+    "Use LewdCorner" changes which games count LC; the stored winner must
+    follow it. Returns the number of games changed.
+    """
+    changed = 0
+    with closing(get_connection()) as conn, conn:
+        conn.row_factory = sqlite3.Row
+        _ = conn.execute("BEGIN IMMEDIATE")
+        lc_enabled = _lc_enabled_in(conn)
+        rows = cast(list[sqlite3.Row], conn.execute(
+            "SELECT id, f95_url, lc_url, lc_mode, f95_latest_version, f95_latest_at, "
+            + "lc_latest_version, lc_latest_at, latest_version, latest_site "
+            + "FROM games WHERE COALESCE(lc_url, '') != ''"
+        ).fetchall())
+        for row in rows:
+            game = {str(key): cast(object, row[key]) for key in row.keys()}
+            latest, site = _latest_for_game(game, lc_enabled)
+            # The same rule as update_game: a row with no winner yet keeps a
+            # version that came from an older wLib.
+            if not (site or game.get("latest_site")):
+                continue
+            if (latest, site) != (game.get("latest_version") or "", game.get("latest_site") or ""):
+                _ = conn.execute(
+                    "UPDATE games SET latest_version = ?, latest_site = ? WHERE id = ?",
+                    (latest, site, game["id"]),
+                )
+                changed += 1
+    return changed
+
+
 def store_thread_update(
     game_id: int,
     site: lewdcorner.Site,
@@ -1741,6 +1775,15 @@ def referenced_cover_cache_names() -> set[str]:
         return {row[0] for row in rows}
 
 
+def lc_screenshot_sources() -> list[tuple[str, list[str]]]:
+    """``(lc_url, stored screenshots)`` of each game that has either."""
+    with closing(get_connection()) as conn:
+        rows = cast(list[tuple[object, object]], conn.execute(
+            "SELECT lc_url, screenshots FROM games WHERE COALESCE(lc_url, '') != '' OR COALESCE(screenshots, '[]') != '[]'"
+        ).fetchall())
+    return [(str(lc_url or ""), _decode_game_screenshots(screens)) for lc_url, screens in rows]
+
+
 def referenced_cover_local_names() -> set[str]:
     with closing(get_connection()) as conn:
         rows = cast(list[tuple[str]], conn.execute("SELECT cover_local FROM games WHERE cover_local IS NOT NULL AND cover_local != ''").fetchall())
@@ -1926,7 +1969,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
             if lc_url and _find_lc_game_row(conn, lc_url, game_id):
                 raise sqlite3.IntegrityError(f"LewdCorner thread already in the library: {lc_url}")
             row = cast(sqlite3.Row | None, conn.execute(
-                "SELECT lc_url FROM games WHERE id = ?", (game_id,)
+                "SELECT lc_url, screenshots FROM games WHERE id = ?", (game_id,)
             ).fetchone())
             old_id = lewdcorner.extract_thread_id(cast(object, row[0])) if row else ""
             if old_id and old_id != lewdcorner.extract_thread_id(lc_url):
@@ -1934,6 +1977,12 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
                 safe_fields["lc_latest_version"] = ""
                 safe_fields["lc_latest_at"] = ""
                 refresh_winner = True
+                # LC screenshots show the old thread; F95 and other ones stay.
+                if row is not None and "screenshots" not in safe_fields:
+                    stored = _decode_game_screenshots(cast(object, row[1]))
+                    kept = [url for url in stored if not lewdcorner.hosts_url(url)]
+                    if kept != stored:
+                        safe_fields["screenshots"] = json.dumps(kept)
 
         updated_url = safe_fields.get("f95_url")
         if updated_url and find_matching_game_row(

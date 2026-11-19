@@ -16,7 +16,7 @@ import { openInstallArchive } from "../../utils/installArchive";
 import PathStatus from "../PathStatus.vue";
 
 import { normalizeLcThreadUrl } from "../../utils/lewdcorner";
-import { queryText, readStoreLinks, storeLabel } from "../../utils/storeLinks";
+import { queryText, readQueryScreenshots, readStoreLinks, storeLabel } from "../../utils/storeLinks";
 
 interface AddGamePayload {
   links: StoreLink[];
@@ -34,6 +34,7 @@ interface AddGamePayload {
   engine: string;
   launch_mode: LaunchMode;
   command_line_args: string;
+  screenshots: string[];
 }
 
 // saving: the parent is still adding (it fetches F95 metadata, which can take minutes).
@@ -63,6 +64,9 @@ const findingPartner = ref(false);
 let partnerRequest = 0;
 const version = ref("");
 const coverImage = ref("");
+// Screenshots sent by an LC page add, kept only for that LC thread.
+const screenshots = ref<string[]>([]);
+const screenshotsFor = ref("");
 const tags = ref("");
 const rating = ref("");
 const developer = ref("");
@@ -198,6 +202,8 @@ watch(
       threadCompleted.value = completed ? completed === "true" : undefined;
       version.value = readQueryValue(query.version);
       coverImage.value = readQueryValue(query.coverImage);
+      screenshots.value = readQueryScreenshots(query.screenshots);
+      screenshotsFor.value = normalizeLcThreadUrl(lcUrl.value);
       tags.value = parseImportedTags(readQueryValue(query.tags));
       rating.value = readQueryValue(query.rating);
       developer.value = readQueryValue(query.developer);
@@ -229,6 +235,8 @@ watch(
     partnerRequest++;
     version.value = "";
     coverImage.value = "";
+    screenshots.value = [];
+    screenshotsFor.value = "";
     tags.value = "";
     rating.value = "";
     developer.value = "";
@@ -326,6 +334,7 @@ const save = () => {
     engine: engine.value,
     launch_mode: launchMode.value,
     command_line_args: commandLineArgs.value,
+    screenshots: screenshotsFor.value && normalizeLcThreadUrl(lcUrl.value) === screenshotsFor.value ? screenshots.value : [],
   });
 };
 </script>

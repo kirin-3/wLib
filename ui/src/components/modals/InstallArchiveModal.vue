@@ -788,7 +788,6 @@ watch(phase, (next, prev) => {
             <IconLoader2 class="w-4 h-4 animate-spin" aria-hidden="true" />
             <span class="flex-1">
               {{ installStage || "Working…" }}{{ installPercent !== null ? ` ${installPercent}%` : "" }}
-              — the rest of the app stays usable.
             </span>
             <button
               v-if="installCancellable || cancelRequested"

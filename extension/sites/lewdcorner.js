@@ -11,7 +11,15 @@
         cleanHeading?.querySelectorAll('.label').forEach(label => label.remove());
         const post = document.querySelector('article.message--post, article.message');
         const text = node => node?.textContent?.trim() || '';
-        const image = post?.querySelector('.message-userContent img');
+        // A screenshot is a small /data/attachments/ copy inside a link to the
+        // full /attachments/<name>.<id>/ image; the link is the URL to keep.
+        const imageUrl = img => {
+            const link = img.closest('a[href]')?.href || '';
+            if (/^https:\/\/lewdcorner\.com\/attachments\/[^/?#]+\.\d+\/$/.test(link)) return link;
+            return img.currentSrc || img.src || '';
+        };
+        const images = [...new Set(Array.from(post?.querySelectorAll('.message-userContent img') || [], imageUrl)
+            .filter(url => /^https:\/\//i.test(url)))];
         WLibSiteWidget.show(null, [], {
             url: threadUrl(threadId),
             title: text(cleanHeading) || document.title,
@@ -19,7 +27,8 @@
             developer: text(post?.querySelector('[data-field="Developer" i] dd')),
             version: text(post?.querySelector('[data-field="version" i] dd')),
             tags: Array.from(document.querySelectorAll('.tagList .tagItem'), text).filter(Boolean),
-            coverImage: image?.currentSrc || image?.src || '',
+            coverImage: images[0] || '',
+            screenshots: images.slice(1),
         });
         return;
     }

@@ -113,7 +113,7 @@ function wlibFailure(action, error) {
 
 // Minimum wLib app version this extension works with. Raise by hand only when
 // the extension starts depending on app behavior older apps lack.
-const MIN_APP_VERSION = "0.4.6";
+const MIN_APP_VERSION = "0.4.8";
 // LewdCorner pages need the first app release with LC thread identity (after 0.4.7).
 const MIN_LC_APP_VERSION = "0.4.8";
 
@@ -234,13 +234,17 @@ function pageQuery(message) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "dl-owned?") {
         const entry = resolveEntryFor(sender, message.url);
-        sendResponse(entry ? {owned:true, host:entry.host, buzzAllowed:entry.buzzAllowed} : {owned:false});
+        sendResponse(entry ? {owned:true, host:entry.host, buzzAllowed:entry.buzzAllowed, site:entry.site} : {owned:false});
         return;
     }
-    if (message.type === "dl-progress" || message.type === "dl-result") {
+    if (["dl-progress", "dl-result", "lc-exit-continue"].includes(message.type)) {
         const entry = resolveWindows.get(sender.tab?.id);
-        if (!entry) return;
-        if (message.type === "dl-progress" && message.stage === "needs_user") {
+        if (!entry || (sender.frameId != null && sender.frameId !== 0)) return;
+        if (message.type === "lc-exit-continue") {
+            if (entry.site === "lc" && resolveSite(sender.url || "") === "lc" && !entry.lcHandoff) {
+                finishLcHandoff(entry, message.url, true);
+            }
+        } else if (message.type === "dl-progress" && message.stage === "needs_user") {
             resolveNeedsUser(entry);
         } else if (message.type === "dl-result") {
             finishResolve(entry, message);
@@ -358,6 +362,12 @@ const F95_THREAD_FETCH_RE = /^https:\/\/f95zone\.to\/threads\/\d+\/$/;
 const F95_BATCH_FETCH_RE = /^https:\/\/f95zone\.to\/sam\/checker\.php\?threads=\d+(,\d+){0,99}$/;
 const LC_FETCH_RE = /^https:\/\/lewdcorner\.com\/(?:(?:threads\/\d+\/)|(?:latest-updates\/api\?page=(?:[1-9]|10)&per_page=90&cat=Games&sort=date))$/;
 const LC_ORIGIN = "https://lewdcorner.com/*";
+// LC attachment images only (covers and screenshots), never proxied or masked links.
+const LC_IMAGE_RE = /^https:\/\/lewdcorner\.com\/attachments\/[^/?#\s]+\.\d+\/$/;
+const BRIDGE_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+// Image data per bridge message; base64 makes it about 5.4 MiB, under wLib's 8 MiB message cap.
+const BRIDGE_IMAGE_CHUNK_BYTES = 4 * 1024 * 1024;
+const BRIDGE_IMAGE_TIMEOUT_MS = 55000;
 const BRIDGE_URL = "ws://localhost:8183/api/bridge";
 const BRIDGE_FETCH_TIMEOUT_MS = 25000;
 const BRIDGE_MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -451,6 +461,143 @@ async function bridgeFetchUrl(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS, site = "
         return { ok: false, error: "network" };
     } finally {
         clearTimeout(timer);
+    }
+}
+
+// Fetches one LC attachment image in the background context. The body is
+// read only for an image answer of at most 20 MiB that stayed on LC.
+async function bridgeFetchImage(url, timeoutMs = BRIDGE_IMAGE_TIMEOUT_MS) {
+    if (typeof url !== "string" || /\s/.test(url) || !LC_IMAGE_RE.test(url)) {
+        return { ok: false, error: "refused" };
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, {
+            method: "GET",
+            credentials: "include",
+            redirect: "follow",
+            cache: "no-store",
+            signal: controller.signal,
+        });
+        const finalUrl = response.url || url;
+        try {
+            if (new URL(finalUrl).hostname !== "lewdcorner.com") {
+                try { controller.abort(); } catch (_abortError) {}
+                return { ok: false, error: "offsite_redirect" };
+            }
+        } catch (_urlError) {
+            return { ok: false, error: "offsite_redirect" };
+        }
+        const status = response.status || 200;
+        const contentType = String(response.headers?.get?.("content-type") || "").trim().slice(0, 200);
+        const head = { ok: true, status, content_type: contentType, final_url: finalUrl };
+        if (!/^image\//i.test(contentType)) {
+            try { controller.abort(); } catch (_abortError) {}
+            return { ...head, bytes: null };
+        }
+        const declared = Number(response.headers?.get?.("content-length") || 0);
+        if (declared > BRIDGE_MAX_IMAGE_BYTES) {
+            try { controller.abort(); } catch (_abortError) {}
+            return { ok: false, error: "too_large" };
+        }
+        const chunks = [];
+        let total = 0;
+        if (response.body && typeof response.body.getReader === "function") {
+            const reader = response.body.getReader();
+            try {
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const bytes = value instanceof Uint8Array ? value : new Uint8Array(value || []);
+                    total += bytes.byteLength;
+                    if (total > BRIDGE_MAX_IMAGE_BYTES) {
+                        try { controller.abort(); } catch (_abortError) {}
+                        try { await reader.cancel(); } catch (_cancelError) {}
+                        return { ok: false, error: "too_large" };
+                    }
+                    chunks.push(bytes);
+                }
+            } finally {
+                try { reader.releaseLock(); } catch (_lockError) {}
+            }
+        } else {
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            total = bytes.byteLength;
+            if (total > BRIDGE_MAX_IMAGE_BYTES) {
+                return { ok: false, error: "too_large" };
+            }
+            chunks.push(bytes);
+        }
+        const bytes = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+            bytes.set(chunk, offset);
+            offset += chunk.byteLength;
+        }
+        return { ...head, bytes };
+    } catch (error) {
+        if (error && error.name === "AbortError") {
+            return { ok: false, error: "timeout" };
+        }
+        return { ok: false, error: "network" };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+function bridgeBase64(bytes) {
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i += 0x8000) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(binary);
+}
+
+// The answer as fetch_image_chunk messages: the first carries the result,
+// each carries at most 4 MiB of image data, and the last one says so.
+function bridgeImageMessages(id, fetched) {
+    if (!fetched.ok) {
+        return [{ type: "fetch_image_chunk", id, index: 0, last: true, ok: false, error: fetched.error }];
+    }
+    const head = { ok: true, status: fetched.status, content_type: fetched.content_type, final_url: fetched.final_url };
+    const bytes = fetched.bytes || new Uint8Array(0);
+    const messages = [];
+    let index = 0;
+    for (let offset = 0; offset < bytes.byteLength || index === 0; offset += BRIDGE_IMAGE_CHUNK_BYTES) {
+        const part = bytes.subarray(offset, offset + BRIDGE_IMAGE_CHUNK_BYTES);
+        messages.push({
+            type: "fetch_image_chunk", id, index, ...(index === 0 ? head : {}),
+            data: bridgeBase64(part), last: offset + BRIDGE_IMAGE_CHUNK_BYTES >= bytes.byteLength,
+        });
+        index += 1;
+    }
+    return messages;
+}
+
+async function bridgeHandleFetchImage(message) {
+    const id = message && typeof message.id === "string" ? message.id : "";
+    if (!id) {
+        return;
+    }
+    let fetched;
+    try {
+        fetched = await bridgeGetCanFetch(LC_ORIGIN)
+            ? await bridgeFetchImage(message.url)
+            : { ok: false, error: "refused" };
+    } catch (error) {
+        console.warn("wLib extension: image fetch failed.", error);
+        fetched = { ok: false, error: "network" };
+    }
+    try {
+        for (const part of bridgeImageMessages(id, fetched)) {
+            if (!bridgeSocket || bridgeSocket.readyState !== 1) {
+                return;
+            }
+            bridgeSocket.send(JSON.stringify(part));
+        }
+    } catch (error) {
+        console.warn("wLib extension: image result send failed.", error);
     }
 }
 
@@ -604,12 +751,12 @@ async function bridgeGetCanFetch(origin = "https://f95zone.to/*") {
 function bridgeGetVersion() {
     try {
         if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
-            return String(chrome.runtime.getManifest().version || "1.2.8");
+            return String(chrome.runtime.getManifest().version || "1.2.10");
         }
     } catch (error) {
         console.warn("wLib extension: version read failed.", error);
     }
-    return "1.2.8";
+    return "1.2.10";
 }
 
 // Firefox suspends an idle event page after 30 seconds, and WebSocket traffic
@@ -668,19 +815,29 @@ function bridgeScheduleReconnect() {
     }
 }
 
+async function bridgeCapabilities() {
+    const [canFetch, canFetchLc, webRequest] = await Promise.all([
+        bridgeGetCanFetch(), bridgeGetCanFetch(LC_ORIGIN), bridgeGetCanWatchLcRedirects(),
+    ]);
+    return {can_fetch:canFetch, can_fetch_lc:canFetchLc, can_resolve_lc:canFetchLc && webRequest, can_fetch_lc_images:canFetchLc};
+}
+
+async function bridgeGetCanWatchLcRedirects() {
+    return !!await chrome.permissions.contains({permissions:['webRequest']});
+}
+
 async function bridgeSendHello() {
     if (!bridgeSocket || bridgeSocket.readyState !== 1) {
         return;
     }
     try {
-        const [canFetch, canFetchLc] = await Promise.all([bridgeGetCanFetch(), bridgeGetCanFetch(LC_ORIGIN)]);
+        const capabilities = await bridgeCapabilities();
         bridgeSocket.send(JSON.stringify({
             type: "hello",
             protocol: 2,
             can_resolve: true,
             extension_version: bridgeGetVersion(),
-            can_fetch: canFetch,
-            can_fetch_lc: canFetchLc,
+            ...capabilities,
         }));
     } catch (error) {
         console.warn("wLib extension: hello failed.", error);
@@ -692,8 +849,8 @@ async function bridgeSendStatus() {
         return;
     }
     try {
-        const [canFetch, canFetchLc] = await Promise.all([bridgeGetCanFetch(), bridgeGetCanFetch(LC_ORIGIN)]);
-        bridgeSocket.send(JSON.stringify({ type: "status", can_fetch: canFetch, can_fetch_lc: canFetchLc }));
+        const capabilities = await bridgeCapabilities();
+        bridgeSocket.send(JSON.stringify({ type: "status", ...capabilities }));
     } catch (error) {
         console.warn("wLib extension: status update failed.", error);
     }
@@ -820,6 +977,7 @@ function ensureBridge() {
             if (message.type === "fetch") {
                 bridgeHandleFetchMessage(message);
             }
+            if (message.type === "fetch_image") bridgeHandleFetchImage(message);
             if (message.type === "resolve") bridgeHandleResolve(message);
             if (message.type === "resolve_cancel") {
                 resolveOpening.get(message.id)?.abort();
@@ -876,12 +1034,18 @@ try {
 
 try {
     if (typeof chrome !== "undefined" && chrome.permissions && chrome.permissions.onAdded) {
-        chrome.permissions.onAdded.addListener(() => bridgeSendStatus());
+        chrome.permissions.onAdded.addListener(onBridgePermissionChange);
     }
     if (typeof chrome !== "undefined" && chrome.permissions && chrome.permissions.onRemoved) {
-        chrome.permissions.onRemoved.addListener(() => bridgeSendStatus());
+        chrome.permissions.onRemoved.addListener(onBridgePermissionChange);
     }
 } catch (_permissionListenerError) {}
+
+async function onBridgePermissionChange() {
+    try { syncLcRedirectListener(await bridgeGetCanWatchLcRedirects()); }
+    catch (_) { syncLcRedirectListener(false); }
+    await bridgeSendStatus();
+}
 
 // Optional sites are registered only while their permission is granted.
 const WLIB_OPTIONAL_SITES = {
@@ -902,6 +1066,17 @@ async function syncSiteScripts() {
         const exists = registered.some(script=>script.id === id);
         if (allowed && !exists) await siteApi.scripting.registerContentScripts([{id,matches:[origin],js:['bzzhr-resolve.js'],runAt:'document_start'}]);
         if (!allowed && exists) await siteApi.scripting.unregisterContentScripts({ids:[id]});
+    }
+
+    const lcExitId = 'wlib-lc-exit-resolve';
+    const lcAllowed = await siteApi.permissions.contains({origins:[LC_ORIGIN]});
+    const lcExitExists = registered.some(script => script.id === lcExitId);
+    if (lcAllowed && !lcExitExists) {
+        await siteApi.scripting.registerContentScripts([{
+            id:lcExitId, matches:['https://lewdcorner.com/masked/out*'], js:['lc-exit-resolve.js'], runAt:'document_start',
+        }]);
+    } else if (!lcAllowed && lcExitExists) {
+        await siteApi.scripting.unregisterContentScripts({ids:[lcExitId]});
     }
 
     for (const [site, origin] of Object.entries(WLIB_OPTIONAL_SITES)) {
@@ -974,7 +1149,7 @@ function closeTab(tabId) {
 }
 function resolveEntryFor(sender, url) {
     const tabId = sender?.tab?.id;
-    if (!Number.isInteger(tabId)) return null;
+    if (!Number.isInteger(tabId) || (sender.frameId != null && sender.frameId !== 0)) return null;
     const known = resolveWindows.get(tabId);
     if (known) {
         known.bound = true;
@@ -987,6 +1162,8 @@ function resolveEntryFor(sender, url) {
     }
     for (const entry of new Set(resolveWindows.values())) {
         if (entry.finished || !sameUrl(entry.url, url)) continue;
+        // For LC, a matching URL outside the window we opened does not confer ownership.
+        if (entry.site === 'lc' && sender.tab.windowId !== entry.windowId) continue;
         if (entry.bound) {
             entry.duplicates.add(tabId);
             closeTab(tabId);
@@ -1019,7 +1196,7 @@ function finishResolve(entry, result) {
     // A late copy of this URL (Zen and Firefox can load it twice) is closed
     // on sight, but only briefly and only after a success: after a failure
     // the user's own "Open in browser" loads the same URL and must stay.
-    if (answer.ok) resolveFinishedUrls.set(entry.url, Date.now() + 10000);
+    if (answer.ok && entry.site !== "lc") resolveFinishedUrls.set(entry.url, Date.now() + 10000);
     for (const tabId of entry.duplicates) closeTab(tabId);
     if (entry.tabWindowId != null && entry.tabWindowId !== entry.windowId) {
         try { const p = chrome.tabs.remove(entry.tabId); p?.catch?.(()=>{}); } catch (_) {}
@@ -1035,10 +1212,62 @@ function resolveNeedsUser(entry) {
     try { const p = chrome.windows.update(entry.tabWindowId ?? entry.windowId,{state:'normal',focused:true}); p?.catch?.(()=>{}); } catch (_) {}
     try { const p = chrome.tabs.update(entry.tabId,{active:true}); p?.catch?.(()=>{}); } catch (_) {}
 }
+function resolveSite(url) {
+    if (url !== url.trim() || /[\r\n\t]/.test(url)) return '';
+    if (/^https:\/\/f95zone\.to\/dl\/\d+\/\?[^#]+$/.test(url)) return 'f95';
+    if (/^https:\/\/lewdcorner\.com\/masked\/out\?[^#]+$/.test(url)) return 'lc';
+    return '';
+}
+function lcMirror(value) {
+    try {
+        const url = new URL(value);
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password
+            || url.hostname === 'lewdcorner.com' || url.hostname.endsWith('.lewdcorner.com')) return '';
+        return url.href;
+    } catch (_) { return ''; }
+}
+function finishLcHandoff(entry, value, navigate) {
+    const url = lcMirror(value);
+    if (!url || entry.finished || entry.lcHandoff) return;
+    const origin = safeBuzzOrigin(url);
+    if (!origin) {
+        finishResolve(entry, {ok:true, url, host:entry.host});
+    } else if (!entry.buzzAllowed.includes(origin)) {
+        finishResolve(entry, {ok:true, url, host:'buzzheavier', needs_permission:'buzzheavier'});
+    } else {
+        entry.lcHandoff = true;
+        entry.url = url;
+        entry.host = 'buzzheavier';
+        if (navigate) {
+            Promise.resolve(chrome.tabs.update(entry.tabId, {url})).catch(() =>
+                finishResolve(entry, {ok:false, error:'could not open Buzzheavier share page'}));
+        }
+    }
+}
+function onLcRedirect(details) {
+    const entry = resolveWindows.get(details.tabId);
+    if (!entry || entry.site !== 'lc' || details.type !== 'main_frame'
+        || !/^https:\/\/lewdcorner\.com\/masked\/continue(?:\?|$)/.test(details.url)) return;
+    finishLcHandoff(entry, details.redirectUrl, false);
+}
+let lcRedirectEvent;
+function syncLcRedirectListener(allowed = true) {
+    const event = allowed ? chrome.webRequest?.onBeforeRedirect : undefined;
+    if (event === lcRedirectEvent) return;
+    try {
+        lcRedirectEvent?.removeListener(onLcRedirect);
+        lcRedirectEvent = event;
+        event?.addListener(onLcRedirect, {
+            urls:['https://lewdcorner.com/masked/continue*'], types:['main_frame'],
+        });
+    } catch (_) { lcRedirectEvent = undefined; }
+}
+syncLcRedirectListener();
 async function bridgeHandleResolve(message) {
     const id = typeof message.id === 'string' ? message.id : '';
     const url = typeof message.url === 'string' ? message.url : '';
-    if (!id || !/^https:\/\/f95zone\.to\/dl\/\d+\/\?[^#]+/.test(url)) {
+    const site = resolveSite(url);
+    if (!id || !site) {
         if (id) sendResolveMessage({type:'resolve_result',id,ok:false,error:'invalid download URL'});
         return;
     }
@@ -1048,6 +1277,14 @@ async function bridgeHandleResolve(message) {
     resolveOpening.set(id, opening);
     try {
         await resolveRecovery;
+        if (site === 'lc') {
+            await siteRegistrationQueue;
+            if (!await bridgeGetCanFetch(LC_ORIGIN) || !await bridgeGetCanWatchLcRedirects()) {
+                sendResolveMessage({type:'resolve_result',id,ok:false,error:'Turn on LewdCorner downloads in the wLib extension settings'});
+                return;
+            }
+            syncLcRedirectListener();
+        }
         const buzzChecks = await Promise.all(buzzOrigins.map(origin => Promise.resolve(chrome.permissions.contains({origins:[origin]}))));
         const buzzAllowed = buzzOrigins.filter((_, index) => buzzChecks[index]);
         if (opening.signal.aborted || !socket || bridgeSocket !== socket || socket.readyState !== 1) return;
@@ -1063,7 +1300,7 @@ async function bridgeHandleResolve(message) {
         }
         const tabId = win.tabs?.[0]?.id;
         if (!Number.isInteger(tabId) || !Number.isInteger(win.id)) throw new Error('window unavailable');
-        const entry = {id,url,host:message.host,buzzAllowed,tabId,windowId:win.id,tabWindowId:win.id,bound:false,duplicates:new Set(),finished:false,needsUser:false};
+        const entry = {id,url,site,host:message.host,buzzAllowed,tabId,windowId:win.id,tabWindowId:win.id,bound:false,duplicates:new Set(),finished:false,needsUser:false};
         resolveWindows.set(tabId,entry);
         entry.timer = setTimeout(()=>finishResolve(entry,{ok:false,error:'timed out'}),30000);
         saveResolveWindows();

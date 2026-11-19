@@ -31,7 +31,7 @@ import { openInstallArchive } from "../utils/installArchive";
 import {useUpdateDownloads} from "../composables/useUpdateDownloads";
 import { gameDownloadStatus, isUnfinished } from "../utils/downloadQueue";
 const updateDownloads = useUpdateDownloads();
-import { latestSiteLabel, updateCheckUrl } from "../utils/lewdcorner";
+import { downloadSites, latestSiteLabel, updateCheckUrl } from "../utils/lewdcorner";
 import { hasAvailableUpdate } from "../utils/libraryGames";
 import { getSafeNotesLinkUrl, renderedLinkHref } from "../utils/notesLinks";
 import { libraryOpenQuery } from "../utils/storeLinks";
@@ -157,11 +157,16 @@ const savingNotifications = ref(false);
 const notificationSettingLoaded = ref(false);
 const notificationSettingError = ref("");
 const lcEnabled = ref(false);
+const lcPlus = ref(false);
+const hasDownloadSite = (game: GameRecord) => downloadSites(game, {
+  lc_enabled: lcEnabled.value, lc_plus: lcPlus.value,
+}).length > 0;
 const loadUpdateSettings = async () => {
   notificationSettingError.value = "";
   try {
     const settings = await api.getSettings();
     lcEnabled.value = !!settings.lc_enabled;
+    lcPlus.value = !!settings.lc_plus;
     desktopNotifications.value = settings.update_notifications !== false;
     notificationSettingLoaded.value = true;
   } catch (error) {
@@ -427,10 +432,10 @@ const bulkDownload = async () => {
     for (const [index, game] of selected.entries()) {
       if (bulkDownloadCancelled.value) break;
       bulkDownloadProgress.value = { index: index + 1, total: selected.length, title: game.title };
-      if (downloadDisabledReason(game) || !game.f95_url) { skipped++; continue; }
+      if (downloadDisabledReason(game) || !hasDownloadSite(game)) { skipped++; continue; }
       let reason = "";
       try {
-        const decision = bulkDownloadDecision(await api.getUpdateDownloadLinks(game.id), host);
+        const decision = bulkDownloadDecision(await api.getUpdateDownloadLinks(game.id, ""), host);
         if (decision.kind === "start") {
           const started = await api.startUpdateDownload(game.id, decision.mirror.link_id, null);
           if (!started.success) reason = `Download did not start: ${started.error || "unknown error"}`;
@@ -489,7 +494,7 @@ const CHECK_RUNNING_REASON = "Wait for the update check to finish";
 
 const updateMainAction = (game: GameRecord): UpdateMainAction => {
   if (downloadOffers.value.get(game.id)) return "install-offer";
-  if (game.f95_url) return "download";
+  if (hasDownloadSite(game)) return "download";
   return "install-file";
 };
 
@@ -505,7 +510,7 @@ const updateMainDisabled = (game: GameRecord): boolean =>
 const updateMainTitle = (game: GameRecord): string => {
   if (bulkDownloading.value) return BULK_DOWNLOAD_REASON;
   const action = updateMainAction(game);
-  if (action === "download") return downloadDisabledReason(game) || "Choose a build from the F95Zone thread and download it";
+  if (action === "download") return downloadDisabledReason(game) || "Choose a build from the game thread and download it";
   if (status.value.running) return CHECK_RUNNING_REASON;
   if (action === "install-offer") return `Install from ${downloadOffers.value.get(game.id)?.archive_path ?? ""}`;
   return "Install the new version from a downloaded archive";
@@ -515,7 +520,7 @@ const updateMenuItems = (game: GameRecord): MenuButtonItem[] => {
   const main = updateMainAction(game);
   const running = status.value.running;
   const items: MenuButtonItem[] = [];
-  if (game.f95_url && main !== "download") {
+  if (hasDownloadSite(game) && main !== "download") {
     const reason = downloadDisabledReason(game);
     items.push({ id: "download", label: "Download update", icon: IconDownload, disabled: !!reason, disabledReason: reason });
   }
@@ -726,7 +731,7 @@ onUnmounted(() => {
             border-left: 2px solid var(--brand);
           "
         >
-          Check F95Zone and active LewdCorner threads for new game versions.
+          {{ lcEnabled ? "Check F95Zone and active LewdCorner threads for new game versions." : "Check F95Zone for new game versions." }}
         </p>
         <p class="mt-2 text-xs" style="color: var(--text-secondary)" data-testid="updates-last-checked">
           Last checked: {{ formatLastCheck }} · {{ frequencyLabel }}
@@ -847,10 +852,10 @@ onUnmounted(() => {
           class="text-sm"
           style="color: var(--text-secondary)"
         >
-          Choose "Check All Games" to scan F95Zone and LewdCorner for new
+          Choose "Check All Games" to scan {{ lcEnabled ? "F95Zone and LewdCorner" : "F95Zone" }} for new
           versions. Games are checked one-by-one with a {{ statusDelaySeconds }}-second
-          delay to avoid rate limiting. LewdCorner Plus games need a LewdCorner
-          login in the browser with the wLib extension.
+          delay to avoid rate limiting.<template v-if="lcEnabled && lcPlus"> LewdCorner Plus games need a LewdCorner
+          login in the browser with the wLib extension.</template>
         </p>
       </div>
     </div>

@@ -495,10 +495,13 @@ class SettingsMixin(ApiBase):
             if save_backup_keep is not None:
                 update_setting_fn("save_backup_keep", save_backup_keep)
             fill_lc = False
+            lc_changed = False
             for key in lewdcorner.LC_SETTINGS:
                 if key in settings_map:
                     enabled = lewdcorner.setting_enabled(settings_map[key])
-                    fill_lc |= enabled and not lewdcorner.setting_enabled(get_setting_fn(key))
+                    was_enabled = lewdcorner.setting_enabled(get_setting_fn(key))
+                    fill_lc |= enabled and not was_enabled
+                    lc_changed |= key == "lc_enabled" and enabled != was_enabled
                     pending[key] = "1" if enabled else "0"
             pending.update(torrent_values)
             pending.update(queue_values)
@@ -509,8 +512,10 @@ class SettingsMixin(ApiBase):
                 if "custom_play_statuses" in settings_map
                 else None,
             )
-            if fill_lc:
-                threading.Thread(target=self._apply_lc_setting_change, daemon=True).start()
+            if fill_lc or lc_changed:
+                threading.Thread(
+                    target=self._apply_lc_setting_change, kwargs={"turned_on": fill_lc}, daemon=True
+                ).start()
             if catalog_change is False:
                 self.catalog.remove()
             elif catalog_change is True:

@@ -488,7 +488,7 @@ test('timeout also covers a response body that never finishes', async () => {
 
 test('manifest 1.1.x grants f95 host and alarms without tabs or cookies', () => {
   const manifest = JSON.parse(readFileSync(path.join(__dirname, '..', 'extension', 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '1.2.8');
+  assert.equal(manifest.version, '1.2.10');
   assert.ok((manifest.permissions || []).includes('storage'));
   assert.ok((manifest.permissions || []).includes('alarms'));
   assert.ok(!(manifest.permissions || []).includes('tabs'));
@@ -1019,10 +1019,10 @@ test('a refused check tells the widget to ask for approval in wLib', () => {
 
 test('LC bridge uses only allowlisted background fetches and its own permission', async () => {
   const { context, sent, instances } = makeBridgeHarness({ canFetch: true });
-  let lcAllowed = false;
+  let lcAllowed = false, webRequest = false;
   const requests = [];
-  context.chrome.permissions.contains = async ({ origins }) => (
-    origins[0] === 'https://f95zone.to/*' || lcAllowed
+  context.chrome.permissions.contains = async ({ origins, permissions }) => (
+    permissions ? webRequest : origins[0] === 'https://f95zone.to/*' || lcAllowed
   );
   context.chrome.tabs = { query: async () => { assert.fail('LC should not use tabs'); } };
   context.fetch = async (url, options) => {
@@ -1038,6 +1038,8 @@ test('LC bridge uses only allowlisted background fetches and its own permission'
   await vm.runInContext('bridgeSendHello()', context);
   assert.equal(JSON.parse(sent.at(-1)).can_fetch, true);
   assert.equal(JSON.parse(sent.at(-1)).can_fetch_lc, false);
+  assert.equal(JSON.parse(sent.at(-1)).can_resolve_lc, false);
+  assert.equal(JSON.parse(sent.at(-1)).can_fetch_lc_images, false);
 
   const fetchThroughBridge = async (url, site) => {
     await vm.runInContext(
@@ -1051,7 +1053,13 @@ test('LC bridge uses only allowlisted background fetches and its own permission'
   assert.equal((await fetchThroughBridge(feed, 'lc')).error, 'refused');
   lcAllowed = true;
   await vm.runInContext('bridgeSendStatus()', context);
-  assert.deepEqual(JSON.parse(sent.at(-1)), { type: 'status', can_fetch: true, can_fetch_lc: true });
+  assert.deepEqual(JSON.parse(sent.at(-1)), { type: 'status', can_fetch: true, can_fetch_lc: true, can_resolve_lc: false, can_fetch_lc_images: true });
+  webRequest = true;
+  await vm.runInContext('bridgeSendStatus()', context);
+  assert.equal(JSON.parse(sent.at(-1)).can_resolve_lc, true);
+  webRequest = false;
+  await vm.runInContext('bridgeSendStatus()', context);
+  assert.equal(JSON.parse(sent.at(-1)).can_resolve_lc, false);
 
   assert.equal((await fetchThroughBridge(feed, 'lc')).body, 'response');
   assert.equal(requests[0].options.credentials, 'include');
@@ -1062,4 +1070,82 @@ test('LC bridge uses only allowlisted background fetches and its own permission'
   assert.equal(redirected.error, 'offsite_redirect');
   assert.equal(redirected.body, undefined);
   assert.equal(requests.length, 2);
+});
+
+
+test('LC image fetch allows only attachment images and answers in chunks', async () => {
+  const { context, sent, instances } = makeBridgeHarness({ canFetch: true });
+  let lcAllowed = true;
+  context.chrome.permissions.contains = async ({ origins, permissions }) => (permissions ? false : origins[0] === 'https://f95zone.to/*' || lcAllowed);
+  context.chrome.tabs = { query: async () => { assert.fail('LC images must not use tabs'); } };
+  context.btoa = btoa;
+  context.Uint8Array = Uint8Array;
+  const requests = [];
+  let answer = () => ({});
+  context.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return answer(url);
+  };
+  const headers = values => ({ get: name => values[name.toLowerCase()] ?? null });
+  const streamed = (parts, contentType = 'image/webp', extra = {}) => ({
+    status: 200, url: requests.at(-1).url, headers: headers({ 'content-type': contentType, ...extra }),
+    body: { getReader() { let i = 0; return { read: async () => (i < parts.length ? { done: false, value: parts[i++] } : { done: true }), cancel: async () => {}, releaseLock() {} }; } },
+  });
+  vm.runInContext('ensureBridge()', context);
+  instances[0].readyState = 1;
+  await vm.runInContext('bridgeSendHello()', context);
+  assert.equal(JSON.parse(sent.at(-1)).can_fetch_lc_images, true);
+
+  const fetchImage = async url => {
+    const before = sent.length;
+    await vm.runInContext(`bridgeHandleFetchImage(${JSON.stringify({ id: 'img', url })})`, context);
+    return sent.slice(before).map(raw => JSON.parse(raw));
+  };
+  const cover = 'https://lewdcorner.com/attachments/cover-webp.891912/';
+  for (const url of [
+    'https://lewdcorner.com/proxy.php?link=https%3A%2F%2Fexample.com%2F',
+    'https://lewdcorner.com/masked/out?t=x',
+    'https://lewdcorner.com/threads/1/',
+    'https://lewdcorner.com/data/attachments/888/888308-c9.jpg?hash=a',
+    'https://evil.test/attachments/cover-webp.1/',
+    'https://lewdcorner.com/attachments/a b.1/',
+    `${cover}?x=1`,
+  ]) {
+    assert.deepEqual(await fetchImage(url), [{ type: 'fetch_image_chunk', id: 'img', index: 0, last: true, ok: false, error: 'refused' }]);
+  }
+  assert.equal(requests.length, 0);
+
+  answer = () => streamed([new Uint8Array([1, 2, 3])]);
+  let messages = await fetchImage(cover);
+  assert.equal(requests[0].options.credentials, 'include');
+  assert.deepEqual(messages, [{ type: 'fetch_image_chunk', id: 'img', index: 0, ok: true, status: 200, content_type: 'image/webp', final_url: cover, data: 'AQID', last: true }]);
+
+  answer = () => ({ ...streamed([new Uint8Array([1])]), url: 'https://cdn.example/x.webp' });
+  messages = await fetchImage(cover);
+  assert.deepEqual(messages.map(m => [m.ok, m.error, m.data]), [[false, 'offsite_redirect', undefined]]);
+  answer = () => ({ ...streamed([new Uint8Array([1])]), url: 'https://lewdcorner.com/data/attachments/1/1.webp' });
+  assert.equal((await fetchImage(cover))[0].ok, true);
+
+  answer = () => ({ ...streamed([new TextEncoder().encode('<html>error</html>')], 'text/html; charset=utf-8'), status: 500 });
+  messages = await fetchImage(cover);
+  assert.deepEqual(messages, [{ type: 'fetch_image_chunk', id: 'img', index: 0, ok: true, status: 500, content_type: 'text/html; charset=utf-8', final_url: cover, data: '', last: true }]);
+
+  const mib = 1024 * 1024;
+  answer = () => streamed([new Uint8Array(10 * mib)]);
+  messages = await fetchImage(cover);
+  assert.deepEqual(messages.map(m => [m.index, m.last, Buffer.from(m.data, 'base64').length]), [[0, false, 4 * mib], [1, false, 4 * mib], [2, true, 2 * mib]]);
+  assert.ok(messages.every(m => JSON.stringify(m).length < 8 * mib));
+  assert.equal(messages[1].status, undefined);
+
+  answer = () => streamed([new Uint8Array(15 * mib), new Uint8Array(6 * mib)]);
+  assert.deepEqual((await fetchImage(cover)).map(m => [m.ok, m.error]), [[false, 'too_large']]);
+  answer = () => streamed([new Uint8Array(1)], 'image/png', { 'content-length': String(21 * mib) });
+  assert.deepEqual((await fetchImage(cover)).map(m => [m.ok, m.error]), [[false, 'too_large']]);
+
+  lcAllowed = false;
+  const count = requests.length;
+  assert.equal((await fetchImage(cover))[0].error, 'refused');
+  assert.equal(requests.length, count);
+  await vm.runInContext('bridgeSendStatus()', context);
+  assert.equal(JSON.parse(sent.at(-1)).can_fetch_lc_images, false);
 });

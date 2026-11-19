@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { extensionAddQuery, extensionGameId, extensionOpenQuery, gamePageUrl, libraryOpenQuery, readStoreLinks } from "./storeLinks.ts";
+import { extensionAddQuery, extensionGameId, extensionOpenQuery, gamePageUrl, libraryOpenQuery, readQueryScreenshots, readStoreLinks } from "./storeLinks.ts";
 const link = {source:"vndb", id:"v1", url:"https://vndb.org/v1"};
 test("extension link-only import and game-ID open survive query transport", () => {
   const query = extensionAddQuery({title:"Novel", links:[link], tags:["Fantasy"]});
@@ -41,4 +41,13 @@ test("LC thread identity survives extension add and takes priority over store li
   assert.equal(gamePageUrl({ f95_url: f95, lc_url: lc, links: [link] }), f95);
   assert.equal(gamePageUrl({ lc_url: lc, links: [link] }), lc);
   assert.deepEqual(readStoreLinks([{ source: "other", id: lc, url: lc }]), []);
+});
+
+test("LC page screenshots travel through the add query", () => {
+  const shots = ["https://lewdcorner.com/attachments/a-png.1/", "https://lewdcorner.com/attachments/b-png.2/"];
+  const query = extensionAddQuery({ lc_url: "https://lewdcorner.com/threads/123/", screenshots: shots });
+  assert.deepEqual(readQueryScreenshots(query.screenshots), shots);
+  assert.equal(extensionAddQuery({ url: "https://f95zone.to/threads/1/", screenshots: shots }).screenshots, undefined);
+  assert.deepEqual(readQueryScreenshots("not json"), []);
+  assert.deepEqual(readQueryScreenshots(JSON.stringify(["http://x/", 3, "https://ok/"])), ["https://ok/"]);
 });

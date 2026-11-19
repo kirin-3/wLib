@@ -104,16 +104,29 @@ class ApiBase:
         self.library_sync: SyncManager = hide_from_js(
             SyncManager(on_pull=self._refresh_synced_library)
         )
-        from core.game_covers import CoverCacheService
+        from core.game_covers import CoverCacheService, LcImageKeys
 
         from core.cover_cards import CoverCardService
 
         self.cover_cards: CoverCardService = hide_from_js(
             CoverCardService(on_copies_ready=self._notify_card_copies_ready)
         )
+        # Grouped library reloads after LC cover copies (_lc_cover_cached).
+        self._lc_cover_refresh_lock: threading.Lock = threading.Lock()
+        self._lc_cover_refresh_timer: threading.Timer | None = None
+        self._lc_cover_refreshed_at: float = float("-inf")
         self.cover_cache: CoverCacheService = hide_from_js(
-            CoverCacheService(on_change=self._cover_cache_changed)
+            CoverCacheService(
+                on_change=self._cover_cache_changed,
+                lc_screenshot_urls=self._library_lc_screenshot_urls,
+                on_lc_cover=self._lc_cover_cached,
+            )
         )
+        # Local addresses handed out for LC screenshots (core/extension_server.py).
+        self.lc_image_keys: LcImageKeys = hide_from_js(LcImageKeys())
+        from core import extension_bridge
+
+        extension_bridge.add_lc_images_listener(self.cover_cache.wake)
         self.controller_watcher: ControllerWatcher = hide_from_js(
             ControllerWatcher(on_change=self._controller_presence_changed)
         )
@@ -854,6 +867,18 @@ class ApiBase:
         except Exception as e:
             return {"success": True, "reachable": False, "error": str(e)}
 
+    def _library_lc_screenshot_urls(self) -> list[str]:
+        """Every LC screenshot URL a library game can show: stored or from the LC catalog."""
+        from core.database import lc_screenshot_sources
+        from core.game_lookup import lc_threads_screenshots
+
+        sources = lc_screenshot_sources()
+        urls = [url for _lc_url, stored in sources for url in stored]
+        thread_ids = [lewdcorner.extract_thread_id(lc_url) for lc_url, _stored in sources]
+        for screens in lc_threads_screenshots([thread_id for thread_id in thread_ids if thread_id]).values():
+            urls.extend(screens)
+        return urls
+
     def _cover_cache_changed(self) -> None:
         self._schedule_steam_sync()
         self.cover_cards.wake()
@@ -870,6 +895,31 @@ class ApiBase:
                         f"window.dispatchEvent(new CustomEvent('wlib-controller-presence', {{detail: {detail}}}));"
                     ),
                 )
+
+    LC_COVER_REFRESH_SECONDS: float = 15.0
+
+    def _lc_cover_cached(self) -> None:
+        """Reload the library after an LC cover copy, at most once per 15 s.
+
+        The window shows no LC cover until then. A pass caches one LC cover
+        every 5 s at most, so the reloads are grouped; the last one always runs."""
+        import time
+
+        with self._lc_cover_refresh_lock:
+            if self._lc_cover_refresh_timer is not None:
+                return
+            wait = max(0.0, self._lc_cover_refreshed_at + self.LC_COVER_REFRESH_SECONDS - time.monotonic())
+
+            def run() -> None:
+                with self._lc_cover_refresh_lock:
+                    self._lc_cover_refresh_timer = None
+                    self._lc_cover_refreshed_at = time.monotonic()
+                self._notify_card_copies_ready()
+
+            timer = threading.Timer(wait, run)
+            timer.daemon = True
+            self._lc_cover_refresh_timer = timer
+            timer.start()
 
     def _notify_card_copies_ready(self) -> None:
         # Device-local copies only: no sync or dirty marking, just a reload.
@@ -1192,14 +1242,19 @@ class ApiBase:
         _ = self._fill_ratings_from_catalog()
         _ = self._fill_thread_details_from_catalog()
 
-    def _apply_lc_setting_change(self) -> None:
-        """Runs in the background after "Use LewdCorner" or "I have LC Plus" turns on.
+    def _apply_lc_setting_change(self, *, turned_on: bool) -> None:
+        """Runs in the background after "Use LewdCorner" changes, or "I have LC Plus" turns on.
 
-        New LC threads, and games that the setting made LC-active, get their
-        catalog data now instead of after the next catalog install.
+        Each LC game's newest version is picked again for the new setting.
+        When a setting turned on, new LC threads, and games that the setting
+        made LC-active, also get their catalog data now instead of after the
+        next catalog install.
         """
-        _ = self._fill_lc_threads_from_catalog()
-        _ = self._fill_thread_details_from_catalog()
+        if database.refresh_latest_versions():
+            self._refresh_synced_library()
+        if turned_on:
+            _ = self._fill_lc_threads_from_catalog()
+            _ = self._fill_thread_details_from_catalog()
 
     def _fill_lc_threads_from_catalog(self) -> int:
         from core import lewdcorner

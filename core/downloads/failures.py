@@ -61,6 +61,7 @@ _PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (SIGN_IN, (
         "sign in to rpdl",
         "sign in to f95zone",
+        "sign in to lewdcorner",
         "mega session expired",
         "pixeldrain rejected your api key",
     )),
@@ -71,12 +72,15 @@ _PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (CHECK_TIMEOUT, (
         "resolving the link timed out",
         "the browser window was closed before the link resolved",
+        "finish the lewdcorner check",
     )),
-    (PERMISSION, ("enable buzzheavier downloads",)),
+    (PERMISSION, ("enable buzzheavier downloads", "turn on lewdcorner downloads")),
     (MIRROR_GONE, (
         "mirror no longer available",
         "download link is unavailable",
         "game has no f95zone thread",
+        "this game has no available thread for downloads",
+        "lewdcorner thread not found",
     )),
     (ENGINE, (
         "torrent downloads are unavailable",

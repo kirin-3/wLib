@@ -32,6 +32,16 @@ def hosts_url(url: str) -> bool:
         return False
 
 
+# The only LC image URLs the browser extension fetches (LC_IMAGE_RE in
+# extension/background.js): full attachments, not `/data/attachments/`
+# thumbnails or `/proxy.php` images.
+_IMAGE_URL = re.compile(r"https://lewdcorner\.com/attachments/[^/?#\s]+\.\d+/")
+
+
+def fetchable_image_url(url: str) -> bool:
+    return bool(_IMAGE_URL.fullmatch(url))
+
+
 def extract_thread_id(url: object) -> str:
     if not isinstance(url, str):
         return ""
@@ -88,6 +98,41 @@ def lc_active(game: Mapping[str, object], lc_enabled: bool) -> bool:
     )
 
 
+_TRAILING_GROUP_RE = re.compile(r"\s*\[[^\[\]]*\]\s*$")
+
+
+def page_title(text: object) -> str:
+    """An LC thread heading without its trailing bracket groups.
+
+    LC headings read "Title [v1.2.0] [Developer]"; the catalog stores the
+    title alone, and so do F95 games. A heading that is only bracket groups
+    is kept as it is."""
+    title = str(text or "").strip()
+    rest = title
+    while (match := _TRAILING_GROUP_RE.search(rest)) is not None and match.start() > 0:
+        rest = rest[: match.start()].rstrip()
+    return rest or title
+
+
+MAX_PAGE_SCREENSHOTS = 20
+
+
+def page_screenshots(raw: object) -> list[str]:
+    """Screenshot URLs sent from an LC page: ``https://`` strings, in order, once each."""
+    if not isinstance(raw, list):
+        return []
+    urls: list[str] = []
+    for item in cast(list[object], raw):
+        if not isinstance(item, str):
+            continue
+        url = item.strip()
+        if len(url) <= 2048 and url.lower().startswith("https://") and not any(c.isspace() for c in url) and url not in urls:
+            urls.append(url)
+            if len(urls) >= MAX_PAGE_SCREENSHOTS:
+                break
+    return urls
+
+
 def prefix_details(prefixes: Iterable[object]) -> tuple[str, bool]:
     labels = [normalize_prefix_label(prefix) for prefix in prefixes]
     engine = next((_ENGINES[label] for label in labels if label in _ENGINES), "")
@@ -140,6 +185,8 @@ LC_UPDATE_ERRORS = {
     "lc_login_required": "Sign in to LewdCorner in the browser with the wLib extension",
     "lc_plus_required": "LewdCorner Plus access is required to check this thread",
     "lc_extract_failed": "Could not read the latest version from LewdCorner",
+    "not_found": "LewdCorner thread not found",
+    "blocked": "Finish the LewdCorner check in your browser",
 }
 
 
@@ -286,12 +333,18 @@ class _ThreadPage(HTMLParser):
             self._prefix_text.append(data)
 
 
-def parse_thread_page(body: str, status: int, *, premium: bool = False) -> LcVersion:
+def parse_thread_page(
+    body: str, status: int, *, premium: bool = False, for_downloads: bool = False
+) -> LcVersion:
     page = _ThreadPage()
     page.feed(body)
     page.close()
     if status == 404:
-        raise LcUpdateError("lc_extract_failed")
+        raise LcUpdateError("not_found" if for_downloads else "lc_extract_failed")
+    if for_downloads and page.challenge:
+        raise LcUpdateError("blocked")
+    if for_downloads and page.logged_in is False:
+        raise LcUpdateError("lc_login_required")
     if status == 401 or page.template.startswith("login") or page.challenge:
         raise LcUpdateError("lc_login_required")
     if status == 403 or page.template == "error":

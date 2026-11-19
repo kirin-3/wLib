@@ -79,8 +79,8 @@ class DownloadsMixin(ApiBase):
             "engine_pending": "{engine}" in pattern and not engine,
         }
 
-    def get_update_download_links(self, game_id: int) -> dict[str, object]:
-        return self._update_downloads.get_links(game_id)
+    def get_update_download_links(self, game_id: int, site: str = "") -> dict[str, object]:
+        return self._update_downloads.get_links(game_id, site)
 
     def close_update_download_links(self, game_id: int) -> dict[str, object]:
         self._update_downloads.clear(game_id)

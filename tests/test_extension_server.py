@@ -1190,6 +1190,23 @@ def test_extension_lc_check_open_add_wishlist_and_attach(monkeypatch, tmp_path, 
         status, duplicate = send("POST", route, {"url": lc, "title": "Page title"})
         assert status == 409 and duplicate["error_code"] == "duplicate_url"
 
+    # A thread the catalog does not list yet keeps the page heading without its bracket groups.
+    shots = [f"https://lewdcorner.com/attachments/shot{i}-png.{i}/" for i in range(8)]
+    status, uncatalogued = send(
+        "POST", "/api/wishlist", {
+            "url": "https://lewdcorner.com/threads/99/", "title": "New Game [v0.1] [Dev Name]",
+            "coverImage": "https://lewdcorner.com/attachments/cover-png.9/",
+            "screenshots": [*shots, shots[0], "http://example.com/a.png", "javascript:alert(1)", 5],
+        },
+    )
+    assert status == 200
+    stored = database.get_game(uncatalogued["id"])
+    assert stored["title"] == "New Game"
+    assert stored["cover_image_path"] == "https://lewdcorner.com/attachments/cover-png.9/"
+    assert json.loads(stored["screenshots"]) == shots
+    # F95 adds get screenshots from the thread scrape, not from the page.
+    assert json.loads(database.get_game(game_id)["screenshots"] or "[]") == []
+
     partner = database.add_game("Existing game", "", "https://f95zone.to/threads/102/")
     status, available = send("GET", "/api/check?" + urlencode({"url": partner_lc}))
     assert status == 200 and available["gameId"] == partner and available["attach_lc_available"]
@@ -1204,3 +1221,70 @@ def test_extension_lc_check_open_add_wishlist_and_attach(monkeypatch, tmp_path, 
     other = database.add_game("Other partner", "", "https://f95zone.to/threads/103/")
     status, auto_attach = send("POST", "/api/wishlist", {"url": other_lc, "title": "LC"})
     assert status == 200 and auto_attach["attached"] and auto_attach["id"] == other
+
+
+class _ImageKeys:
+    def __init__(self, urls):
+        self.urls = urls
+
+    def get(self, key):
+        return self.urls.get(key)
+
+
+def test_lc_image_route_serves_only_handed_out_keys(tmp_path, monkeypatch):
+    from core import database, game_covers
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path))
+    url = "https://lewdcorner.com/attachments/shot-png.1/"
+    key = game_covers.lc_image_key(url)
+    png = b"\x89PNG\r\n\x1a\nimage\x00\x00\x00\x00IEND\xaeB`\x82"
+    fetched = []
+    monkeypatch.setattr(game_covers, "fetch_lc_image", lambda u, *, background: fetched.append((u, background)) or png)
+    api = MagicMock()
+    api.lc_image_keys = _ImageKeys({key: url})
+    api.cover_cache = game_covers.CoverCacheService()
+    monkeypatch.setattr(server_module, "api_ref", api)
+
+    for path in ("/lc-images/" + "f" * 32, "/lc-images/../wlib.db", "/lc-images/" + key.upper()):
+        handler = _make_extension_handler(path)
+        handler.send_error = MagicMock()
+        handler.do_GET()
+        handler.send_error.assert_called_once_with(404)
+    assert fetched == []
+
+    handler = _make_extension_handler("/lc-images/" + key)
+    handler.do_GET()
+    handler.send_response.assert_called_once_with(200)
+    headers = dict(call.args for call in handler.send_header.call_args_list)
+    assert headers["Content-Type"] == "image/png" and "immutable" in headers["Cache-Control"]
+    assert handler.wfile.getvalue() == png
+    assert fetched == [(url, False)]
+    assert game_covers.lc_copy_file(key) is not None
+
+    handler = _make_extension_handler("/lc-images/" + key)
+    handler.do_GET()
+    assert handler.wfile.getvalue() == png
+    assert fetched == [(url, False)]
+
+
+def test_lc_image_route_fetch_failure_is_a_404(tmp_path, monkeypatch):
+    from core import database, game_covers
+    from core.extension_bridge import BridgeUnavailable
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path))
+    url = "https://lewdcorner.com/attachments/shot-png.1/"
+    key = game_covers.lc_image_key(url)
+
+    def fail(_url, *, background):
+        raise BridgeUnavailable("no extension")
+
+    monkeypatch.setattr(game_covers, "fetch_lc_image", fail)
+    api = MagicMock()
+    api.lc_image_keys = _ImageKeys({key: url})
+    api.cover_cache = game_covers.CoverCacheService()
+    monkeypatch.setattr(server_module, "api_ref", api)
+    handler = _make_extension_handler("/lc-images/" + key)
+    handler.send_error = MagicMock()
+    handler.do_GET()
+    handler.send_error.assert_called_once_with(404)
+    assert game_covers.lc_copy_file(key) is None

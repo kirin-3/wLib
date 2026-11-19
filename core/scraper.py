@@ -16,7 +16,7 @@ from typing import Protocol, cast, override
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from core import extension_bridge
+from core import extension_bridge, lewdcorner
 from core.store_links import StoreLink, parse_store_link
 from .f95zone import NON_ENGINE_PREFIXES, extract_thread_id, normalize_prefix_label
 
@@ -1136,8 +1136,40 @@ def f95_get_bytes(url: str, max_bytes: int) -> bytes:
     return _run_paced_f95_request(transport, background=True)
 
 
-def fetch_thread_download_links(f95_url: str) -> dict[str, object]:
+def _fetch_lc_thread_download_links(url: str) -> dict[str, object]:
+    from core.download_links import parse_download_links
+
+    thread = lewdcorner.normalize_thread_url(url)
+    if not thread:
+        return {"success": False, "code": "invalid_url", "error": "Invalid LewdCorner thread URL"}
+    try:
+        response = extension_bridge.fetch(thread, site="lc")
+    except (extension_bridge.BridgeFailed, extension_bridge.BridgeUnavailable):
+        return {
+            "success": False, "code": "lc_extension_unavailable",
+            "error": "Open a browser with the wLib extension and turn on its LewdCorner switch",
+        }
+    login = "Sign in to LewdCorner in your browser"
+    try:
+        page = lewdcorner.parse_thread_page(response.body, response.status, for_downloads=True)
+    except lewdcorner.LcUpdateError as exc:
+        message = {
+            "lc_login_required": login,
+            "lc_plus_required": "This is an LC Plus thread. Use F95Zone or an LC Plus account.",
+            "lc_extract_failed": "Could not read download links from LewdCorner",
+        }.get(exc.code, str(exc))
+        return {"success": False, "code": exc.code, "error": message}
+    result = parse_download_links(response.body, "lc", page_version=page.version)
+    if not result["signed_in"]:
+        return {"success": False, "code": "lc_login_required", "error": login}
+    return {"success": True, **result}
+
+
+def fetch_thread_download_links(f95_url: str, site: lewdcorner.Site = "f95") -> dict[str, object]:
     """Fetch fresh download links through the signed-in browser session."""
+    if site == "lc":
+        return _fetch_lc_thread_download_links(f95_url)
+
     from core.download_links import parse_download_links
 
     thread_id = extract_thread_id(f95_url)
@@ -1166,9 +1198,9 @@ def fetch_thread_download_links(f95_url: str) -> dict[str, object]:
 
 def resolve_download_link(
     url: str, host: str, on_progress: Callable[[str], None] | None = None,
-    cancel: threading.Event | None = None,
+    cancel: threading.Event | None = None, *, site: lewdcorner.Site = "f95",
 ) -> dict[str, object]:
     """Pace only the start of a browser resolve, not its user interaction."""
     return extension_bridge.resolve(
-        url, host, on_progress=on_progress, start=_run_paced_f95_request, cancel=cancel
+        url, host, on_progress=on_progress, start=_run_paced_f95_request, cancel=cancel, site=site
     )

@@ -8,6 +8,7 @@ import {
   api,
   type DownloadQueueJob,
   type DownloadQueueSummary,
+  type DownloadSite,
   type GameRecord,
   type UpdateDownloadJob,
 } from '../services/api';
@@ -35,6 +36,7 @@ const loaded = ref(false);
 /** The game the build picker is open for, and the failed download it replaces. */
 const selectedGame = ref<GameRecord | null>(null);
 const replacing = ref<string | null>(null);
+const initialSite = ref<DownloadSite | "">("");
 const handled = new Set<string>();
 let timer: ReturnType<typeof setTimeout> | undefined;
 let enabled = false;
@@ -139,7 +141,7 @@ export function useUpdateDownloads() {
   const router = useRouter();
   openDownloadsPage = () => { void router.push('/downloads'); };
   return {
-    jobs, queue, seeding, runningGames, selectedGame, replacing, loaded, badge,
+    jobs, queue, seeding, runningGames, selectedGame, replacing, initialSite, loaded, badge,
     setInstallDialogOpen(value: boolean) {
       installDialogOpen = value;
       // Closed without installing: it stays under "Ready to install".
@@ -159,8 +161,10 @@ export function useUpdateDownloads() {
       refresh();
     },
     /** Opens the build picker; `replaces` puts the new download in a failed one's place. */
-    open(game: GameRecord, replaces: string | null = null) { replacing.value = replaces; selectedGame.value = game; },
-    close() { selectedGame.value = null; replacing.value = null; },
+    open(game: GameRecord, replaces: string | null = null, site: DownloadSite | "" = "") {
+      replacing.value = replaces; initialSite.value = site; selectedGame.value = game;
+    },
+    close() { selectedGame.value = null; replacing.value = null; initialSite.value = ""; },
     jobFor(gameId: number) { return jobForGame(jobs.value, gameId); },
     install,
     startPolling() { if (!enabled) { enabled = true; void poll(); } },

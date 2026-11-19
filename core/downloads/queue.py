@@ -594,7 +594,9 @@ class DownloadQueue:
             # The same build and mirror again resumes the old partial file.
             # Workers add their own keys (part_file, archive) to the old source.
             same = replaced is not None and replaced.kind == kind and bool(source) and all(
-                replaced.source.get(key) == value for key, value in source.items()
+                (replaced.source.get(key) or "f95") == value
+                if kind == "host" and key == "site" else replaced.source.get(key) == value
+                for key, value in source.items()
             )
             if same and replaced is not None and replaced.source.get("part_file"):
                 # Startup cleanup keeps the partial files that jobs name.
@@ -1038,7 +1040,7 @@ class QueueStore:
             _log(f"could not remove a download: {type(exc).__name__}")
 
 
-_PUBLIC_SOURCE_KEYS = ("label", "section", "platform", "host", "part", "rpdl_id")
+_PUBLIC_SOURCE_KEYS = ("site", "label", "section", "platform", "host", "part", "rpdl_id")
 
 
 def _public_source(job: QueueJob) -> dict[str, object]:

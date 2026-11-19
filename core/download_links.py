@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Parse ephemeral download mirrors from a signed-in F95 thread."""
+"""Parse ephemeral download mirrors from a signed-in forum thread."""
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
+
+from core import lewdcorner
 from typing import TypedDict, final, override
 
 
@@ -17,7 +21,7 @@ HOST_DOMAINS: dict[str, tuple[str, ...]] = {
     "buzzheavier": ("buzzheavier.com", "bzzhr.to"),
     "gofile": ("gofile.io",),
     "datanodes": ("datanodes.to",),
-    "mixdrop": ("mixdrop.ag", "mixdrop.co", "mixdrop.to", "mixdrop.ps", "mixdrop.sx"),
+    "mixdrop": ("mixdrop.ag", "mixdrop.co", "mixdrop.to", "mixdrop.ps", "mixdrop.sx", "mxdrop.sx"),
     "workupload": ("workupload.com",),
     "mediafire": ("mediafire.com",),
     "vikingfile": ("vikingfile.com",),
@@ -76,13 +80,76 @@ def _host_of_domain(domain: str) -> str:
     return ""
 
 
-def _host_of_favicon(style: str) -> str:
+def _host_of_f95_favicon(style: str) -> str:
     """XenForo's has-favicon style names the destination: ``.../ip3/<host>.ico``."""
     match = re.search(r"ip3/([a-z0-9.-]+?)\.ico", style, re.I)
     if not match:
         return ""
     domain = match.group(1).lower().removeprefix("www.")
     return _host_of_domain(domain) or domain
+
+
+def _host_of_lc_favicon(style: str) -> str:
+    match = re.search(r"s2/favicons\?domain=([a-z0-9.-]+)", style, re.I)
+    if not match:
+        return ""
+    domain = match.group(1).lower().removeprefix("www.")
+    return _host_of_domain(domain) or domain
+
+
+def _title_version(html: str) -> str:
+    title = re.search(r"""<h1\b[^>]*class=["'][^"']*p-title-value[^"']*["'][^>]*>(.*?)</h1>""", html, re.I | re.S)
+    version = re.search(
+        r"\[((?:v(?:ersion)?\s*)?\d[^\]]*|(?:chapter|ch\.|episode|ep\.|part)\s*\d[^\]]*)\]",
+        re.sub(r"<[^>]*>", "", title.group(1)), re.I,
+    ) if title else None
+    return version.group(1) if version else "Unknown"
+
+
+def _lc_version(html: str) -> str:
+    try:
+        return lewdcorner.parse_thread_page(html, 200).version or _title_version(html)
+    except lewdcorner.LcUpdateError:
+        return _title_version(html)
+
+
+@dataclass(frozen=True)
+class _SiteProfile:
+    domain: str
+    masked: Callable[[SplitResult], bool]
+    keep_own_link: Callable[[SplitResult], bool]
+    favicon_host: Callable[[str], str]
+    version: Callable[[str], str]
+
+
+def _f95_masked(url: SplitResult) -> bool:
+    return bool(re.match(r"/dl/\d+/", url.path))
+
+
+def _lc_masked(url: SplitResult) -> bool:
+    return (
+        url.scheme == "https" and url.netloc == "lewdcorner.com"
+        and url.path == "/masked/out" and bool(url.query) and not url.fragment
+    )
+
+
+def _f95_attachment(url: SplitResult) -> bool:
+    return url.hostname == "attachments.f95zone.to" or url.path.startswith("/attachments/")
+
+
+_PROFILES = {
+    "f95": _SiteProfile("f95zone.to", _f95_masked, _f95_attachment, _host_of_f95_favicon, _title_version),
+    "lc": _SiteProfile("lewdcorner.com", _lc_masked, lambda _: False, _host_of_lc_favicon, _lc_version),
+}
+
+
+def masked_download_site(url: str) -> lewdcorner.Site | None:
+    if url.startswith("https://f95zone.to/dl/"):
+        return "f95"
+    try:
+        return "lc" if _lc_masked(urlsplit(url)) else None
+    except ValueError:
+        return None
 
 
 def _host_of_label(text: str) -> str:
@@ -143,7 +210,7 @@ class _Elements(HTMLParser):
 
     @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        a = {k: v or "" for k, v in attrs}
+        a = {k: v or "" for k, v in attrs if k in ("class", "href", "style")}
         classes = a.get("class", "").split()
         if tag == "article" and not self.seen and ("message-threadStarterPost" in classes or "message--post" in classes):
             self.article = 1
@@ -157,6 +224,8 @@ class _Elements(HTMLParser):
                 self.wrapper = 1
         if not self.wrapper:
             return
+        if "messageHide--link" in classes:
+            self.events.append(("hidden_link", "", {}))
         if tag == "span" and (self.hidden or "u-hidden" in classes):
             self.hidden += 1
         if self.hidden:
@@ -214,11 +283,20 @@ def _heading_lines(value: str) -> list[str]:
     return [line for line in lines if re.search(r"[A-Za-z0-9]", line)]
 
 
-def parse_download_links(html: str) -> ThreadDownloads:
-    """Return first-post builds and ephemeral URLs; callers must not persist them."""
+def parse_download_links(
+    html: str, site: lewdcorner.Site = "f95", *, page_version: str | None = None,
+) -> ThreadDownloads:
+    """Return first-post builds and ephemeral URLs; callers must not persist them.
+
+    ``page_version`` is the version an earlier parse of the same page read, so
+    the page is not parsed again for it; an empty one falls back to the title.
+    """
+    profile = _PROFILES[site]
     parser = _Elements()
     parser.feed(html)
     events = parser.events
+    signed = re.search(r'\bdata-logged-in=["\'](true|false)["\']', html[:4096], re.I)
+    signed_in = bool(signed and signed.group(1).lower() == "true")
     heading_present = any(
         t == "b" and any(_DOWNLOAD_HEADING.fullmatch(line) for line in _heading_lines(s))
         for t, s, _ in events
@@ -239,6 +317,8 @@ def parse_download_links(html: str) -> ThreadDownloads:
         pending_part, part_linked, glue = line, False, False
 
     for typ, value, attrs in events:
+        if typ == "hidden_link" and active and site == "lc":
+            return {"version": "Unknown", "signed_in": False, "builds": []}
         if typ == "break":
             glue = False
         elif typ == "text":
@@ -287,18 +367,19 @@ def parse_download_links(html: str) -> ThreadDownloads:
                 continue
             if parsed.scheme not in ("http", "https") or not domain or attrs.get("_image"):
                 continue
-            f95 = domain == "f95zone.to" or domain.endswith(".f95zone.to")
-            dl = f95 and bool(re.match(r"/dl/\d+/", parsed.path))
-            attachment = f95 and (domain == "attachments.f95zone.to" or parsed.path.startswith("/attachments/"))
-            if (f95 and not dl and not attachment) or any(domain == d or domain.endswith("." + d) for d in DENIED_HOSTS):
+            own = domain == profile.domain or domain.endswith("." + profile.domain)
+            masked = own and profile.masked(parsed)
+            if (own and not masked and not profile.keep_own_link(parsed)) or any(
+                domain == d or domain.endswith("." + d) for d in DENIED_HOSTS
+            ):
                 continue
             known = _host_of_domain(domain)
             if not started:
-                if not dl and not known:
+                if not masked and not known:
                     continue
                 started = True
-            if dl:
-                host = _host_of_favicon(attrs.get("style", "")) or _host_of_label(value) or "unknown"
+            if masked:
+                host = profile.favicon_host(attrs.get("style", "")) or _host_of_label(value) or "unknown"
             else:
                 host = known or domain.removeprefix("www.")
             platform, kind = classify_build(label)
@@ -322,7 +403,5 @@ def parse_download_links(html: str) -> ThreadDownloads:
                 builds.append(build)
             build["mirrors"].append({"url": url, "host": host, "label": value, "part": part, "split": bool(part)})
             glue = False
-    title = re.search(r'<h1\b[^>]*class=["\'][^"\']*p-title-value[^"\']*["\'][^>]*>(.*?)</h1>', html, re.I | re.S)
-    version = re.search(r"\[((?:v(?:ersion)?\s*)?\d[^\]]*|(?:chapter|ch\.|episode|ep\.|part)\s*\d[^\]]*)\]", re.sub(r"<[^>]*>", "", title.group(1)), re.I) if title else None
-    signed = re.search(r'\bdata-logged-in=["\'](true|false)["\']', html[:4096], re.I)
-    return {"version": version.group(1) if version else "Unknown", "signed_in": bool(signed and signed.group(1).lower() == "true"), "builds": builds}
+    version = profile.version(html) if page_version is None else page_version or _title_version(html)
+    return {"version": version, "signed_in": signed_in, "builds": builds}

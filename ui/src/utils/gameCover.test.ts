@@ -65,4 +65,7 @@ test("LC-hosted cover URLs stay in metadata without being loaded", () => {
   const cover_image_path = "https://attachments.lewdcorner.com/cover.webp";
   assert.equal(gameCoverSrc({ cover_image_path }), "");
   assert.equal(gameCoverSrc({ cover_image_path, cover_local_url: "local-cover.png" }), "local-cover.png");
+  const attachment = "https://lewdcorner.com/attachments/cover-webp.891912/";
+  assert.equal(gameCoverSrc({ cover_image_path: attachment }), "");
+  assert.equal(gameCoverSrc({ cover_image_path: attachment, cover_cache_url: "http://127.0.0.1:8183/covers/cache/a.webp" }), "http://127.0.0.1:8183/covers/cache/a.webp");
 });

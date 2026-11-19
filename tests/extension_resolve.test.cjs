@@ -153,3 +153,107 @@ test('a tab that loaded the requested URL is claimed even if the window reported
     assert.equal(reply.owned,false);
     assert.ok(removedTabs.includes(23), 'a copy that loads after the request ended is closed too');
 });
+
+test('LC resolve accepts only masked links with permission and captures a redirect in its own tab', async () => {
+    const messages = [], created = [], removed = [];
+    let redirect, ownedMessage, permission = false;
+    const chrome = {
+        runtime:{onMessage:{addListener(fn){ownedMessage = fn;}}},
+        permissions:{contains:async ({origins}) => origins ? origins[0] === 'https://lewdcorner.com/*' : permission},
+        webRequest:{onBeforeRedirect:{addListener(fn, filter){
+            assert.equal(filter.urls[0], 'https://lewdcorner.com/masked/continue*');
+            assert.equal(filter.types[0], 'main_frame');
+            redirect = fn;
+        }}},
+        windows:{create:async ({url})=>{created.push(url);return {id:7,state:'minimized',tabs:[{id:9}]};},
+            remove:async id=>{removed.push(id);}},
+    };
+    const context = vm.createContext({chrome,console,URL,AbortController,setTimeout,clearTimeout,output:messages});
+    vm.runInContext(source('background.js'), context);
+    vm.runInContext('bridgeSocket = {readyState:1,send:value=>output.push(JSON.parse(value))}', context);
+    const masked = 'https://lewdcorner.com/masked/out?t=fake&r=fake';
+    const run = url => vm.runInContext(`bridgeHandleResolve({id:"lc",url:${JSON.stringify(url)},host:"mega"})`, context);
+    await run('https://lewdcorner.com/proxy.php?link=fake');
+    await run(masked + '#fragment');
+    await run(masked);
+    assert.deepEqual(created, []);
+    assert.match(messages.at(-1).error, /Turn on LewdCorner downloads/);
+    permission = true;
+    await run(masked);
+    assert.deepEqual(created, [masked]);
+    let ownership;
+    ownedMessage({type:'dl-owned?',url:masked}, {tab:{id:12,windowId:5},frameId:0}, reply=>ownership=reply);
+    assert.equal(ownership.owned, false);
+    const event = {tabId:9,type:'main_frame',url:'https://lewdcorner.com/masked/continue',redirectUrl:'https://mega.nz/file/abc#key'};
+    for (const changes of [
+        {tabId:12}, {type:'sub_frame'}, {url:event.url + 'other'}, {redirectUrl:'javascript:alert(0)'},
+        {redirectUrl:'https://www.lewdcorner.com/masked/out?t=fake'},
+    ]) redirect({...event,...changes});
+    assert.deepEqual(removed, []);
+    redirect(event);
+    assert.deepEqual(removed, [7]);
+    assert.equal(messages.at(-1).url, event.redirectUrl);
+});
+
+test('LC hands Buzzheavier redirects to the owned share tab or asks for permission', () => {
+    const messages = [], removed = [];
+    const chrome = {runtime:{onMessage:{addListener(){}}},windows:{remove:async id=>{removed.push(id);}}};
+    const context = vm.createContext({chrome,console,URL,AbortController,setTimeout,clearTimeout,output:messages});
+    vm.runInContext(source('background.js'), context);
+    vm.runInContext(`
+        bridgeSocket = {readyState:1,send:value=>output.push(JSON.parse(value))};
+        const lcEntry = {id:'lc',site:'lc',url:'https://lewdcorner.com/masked/out?t=fake',buzzAllowed:['https://bzzhr.to/*'],
+            windowId:7,tabId:9,bound:true,duplicates:new Set()};
+        const event = {tabId:9,type:'main_frame',url:'https://lewdcorner.com/masked/continue',redirectUrl:'https://bzzhr.to/fixture'};
+        resolveWindows.set(9,lcEntry);
+        onLcRedirect(event);
+    `, context);
+    assert.equal(vm.runInContext('resolveEntryFor({tab:{id:9}}, event.redirectUrl) === lcEntry', context), true);
+    assert.equal(vm.runInContext('lcEntry.url === event.redirectUrl', context), true);
+    assert.deepEqual(removed, []);
+    vm.runInContext(`
+        const denied = {...lcEntry,lcHandoff:false,buzzAllowed:[],id:'denied',tabId:10,windowId:8};
+        resolveWindows.set(10,denied);
+        onLcRedirect({...event,tabId:10});
+    `, context);
+    assert.deepEqual(removed, [8]);
+    assert.equal(messages.at(-1).needs_permission, 'buzzheavier');
+    assert.equal(messages.at(-1).url, 'https://bzzhr.to/fixture');
+});
+
+test('LC exit waits for the user and presses Continue once per answer', async () => {
+    const html = readFileSync(join(__dirname,'fixtures/lc_exit_page.html'),'utf8');
+    const response = {value:''};
+    const sent = [];
+    let clickCount = 0, poll, submit;
+    const button = {disabled:false,click(){clickCount++;}};
+    const exit = {dataset:{captchaRequired:/data-captcha-required="([^"]+)"/.exec(html)[1]},
+        querySelector(selector){
+            if (selector === 'textarea[name="h-captcha-response"]' && html.includes('name="h-captcha-response"')) return response;
+            if (selector === 'form[action="/masked/continue"] button[type="submit"]'
+                && html.includes('action="/masked/continue"') && html.includes('type="submit"')) return button;
+            return null;
+        }};
+    const document = {readyState:'complete',querySelector:()=>exit,addEventListener:(_, listener)=>{submit=listener;}};
+    class Observer {observe(){}}
+    vm.runInNewContext(source('lc-exit-resolve.js'),{
+        document,location:{href:'https://lewdcorner.com/masked/out?t=fake'},MutationObserver:Observer,
+        setTimeout:()=>0,setInterval:callback=>{poll=callback;},
+        chrome:{runtime:{sendMessage:async message=>{sent.push(message);return {owned:true,site:'lc'};}}},
+    });
+    await flush();
+    assert.equal(sent.filter(message=>message.stage==='needs_user').length, 1);
+    poll();
+    assert.equal(clickCount, 0);
+    response.value = 'form-owned-fixture';
+    poll();
+    poll();
+    assert.equal(clickCount, 1);
+    response.value = '';
+    poll();
+    response.value = 'second-fixture';
+    submit({target:{matches:()=>true,querySelector:()=>response}});
+    poll();
+    assert.equal(clickCount, 1);
+    assert.equal(sent.some(message=>JSON.stringify(message).includes('form-owned-fixture')), false);
+});

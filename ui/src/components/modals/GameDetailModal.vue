@@ -37,7 +37,7 @@ import {
   IconDeviceGamepad2Filled,
 } from "@tabler/icons-vue";
 import { gamePageUrl, storeLabel } from "../../utils/storeLinks";
-import { latestSiteLabel, normalizeLcThreadUrl, updateCheckUrl, type LewdCornerMode } from "../../utils/lewdcorner";
+import { downloadSites, latestSiteLabel, lcActive, normalizeLcThreadUrl, showLcFields, updateCheckUrl, type LewdCornerMode } from "../../utils/lewdcorner";
 import { api, onWebviewReady } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
 import { marked } from "marked";
@@ -50,7 +50,7 @@ import { gameDownloadStatus, isUnfinished } from "../../utils/downloadQueue";
 const updateDownloads = useUpdateDownloads();
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import ScreenshotLightbox from "../ScreenshotLightbox.vue";
-import { screenshotUrls, type ScreenshotUrls } from "../../utils/screenshots";
+import { displayScreenshots, screenshotUrls, type ScreenshotUrls } from "../../utils/screenshots";
 import { defaultTargetLabel, hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion } from "../../utils/libraryGames";
 import { LANGUAGE_TAG_PREFIX, languageNames, linkLabel, parseLinkLines } from "../../utils/threadDetails";
 import type {
@@ -177,7 +177,11 @@ const f95Url = ref("");
 const lcUrl = ref("");
 const lcMode = ref<LewdCornerMode>("");
 const lcEnabled = ref(false);
-const showLc = computed(() => lcEnabled.value || !!props.game?.lc_url || !!props.game?.lc_mode);
+const lcPlus = ref(false);
+const showLc = computed(() => showLcFields(props.game ?? {}, lcEnabled.value));
+// Whether this game uses its LC thread now; "Use LewdCorner" off hides LC
+// labels and links for Default-mode games that have an F95 thread.
+const gameLcActive = computed(() => !!props.game && lcActive(props.game, lcEnabled.value));
 const lcError = computed(() =>
   lcUrl.value.trim() && !normalizeLcThreadUrl(lcUrl.value) ? "Enter a LewdCorner thread URL." : "",
 );
@@ -270,7 +274,7 @@ const loadedScreenshots = ref<ScreenshotUrls[] | null>(null);
 const inCatalog = ref(false);
 const fullFallbacks = ref<Set<string>>(new Set());
 let screenshotsRequest = 0;
-const gameScreenshots = computed(() => loadedScreenshots.value ?? (props.game?.screenshots ?? []).map(screenshotUrls));
+const gameScreenshots = computed(() => displayScreenshots(loadedScreenshots.value ?? (props.game?.screenshots ?? []).map(screenshotUrls)));
 const loadScreenshots = async () => {
   const id = props.game?.id;
   const request = ++screenshotsRequest;
@@ -620,7 +624,7 @@ const selectedEngineStyle = computed(() => getEngineBadgeStyle(engine.value));
 
 const summaryItems = computed(() => [
   {
-    label: props.game?.lc_url ? (props.game.f95_url ? "Thread rating" : "LC rating") : "F95 Rating",
+    label: gameLcActive.value ? (props.game?.f95_url ? "Thread rating" : "LC rating") : "F95 Rating",
     value: pageRating.value || "Unavailable",
     accent: pageRating.value ? "color: var(--rating-accent)" : "",
     showStar: !!pageRating.value,
@@ -1029,6 +1033,7 @@ watch(
       void api.getSettings().then(value => {
         htmlBuiltinDefault.value = value.html_builtin_player !== false;
         lcEnabled.value = !!value.lc_enabled;
+        lcPlus.value = !!value.lc_plus;
         performanceDefaults.value = { gamemode: !!value.gamemode_enabled, mangohud: !!value.mangohud_enabled, gamescope: !!value.gamescope_enabled };
       }).catch(console.error);
       if (capabilities.platform === "linux") {
@@ -1346,8 +1351,9 @@ const statusMenuItems = computed<MenuButtonItem[]>(() => statuses.value.map(s =>
   checked: playStatus.value === s.value,
 })));
 
-// Header update split button: Download update when the game has an F95 thread, otherwise Install update.
-const canDownloadUpdate = computed(() => !!props.game?.f95_url);
+const canDownloadUpdate = computed(() => !!props.game && downloadSites(props.game, {
+  lc_enabled: lcEnabled.value, lc_plus: lcPlus.value,
+}).length > 0);
 const hasUnfinishedDownload = computed(() => !!downloadJob.value && isUnfinished(downloadJob.value));
 const downloadUpdateDisabled = computed(() => !!props.isRunning || hasUnfinishedDownload.value);
 const setupMenuItems: MenuButtonItem[] = [
@@ -2410,7 +2416,7 @@ const removeAttachment = async (name: string) => {
                 {{ f95Url.trim() ? "Open F95 thread" : normalizeLcThreadUrl(lcUrl) ? "Open LC thread" : "Open in browser" }}
               </button>
               <button
-                v-if="f95Url.trim() && normalizeLcThreadUrl(lcUrl)"
+                v-if="f95Url.trim() && normalizeLcThreadUrl(lcUrl) && gameLcActive"
                 @click="openInBrowser(normalizeLcThreadUrl(lcUrl))"
                 class="modal-toolbar-action ui-action-btn"
                 style="color: var(--text-primary)"
@@ -2490,7 +2496,8 @@ const removeAttachment = async (name: string) => {
               </button>
             </div>
           </div>
-          <div v-if="game.f95_url">
+          <!-- LC-only games have no F95 thread to load from, so they show the strip only when it has images. -->
+          <div v-if="game.f95_url || gameScreenshots.length">
             <h3 class="modal-label mb-3">Screenshots</h3>
             <div v-if="gameScreenshots.length" class="screenshot-strip" role="group" aria-label="Game screenshots">
               <button

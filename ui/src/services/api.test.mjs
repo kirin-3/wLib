@@ -687,7 +687,9 @@ test("browser mock URM detection matches the tools engine label", async () => {
 });
 
 test('update downloads expose browser mock payloads', async () => {
-  const storage = {getItem:()=>null,setItem(){},removeItem(){}};
+  const game = {id:1,title:'Game',exe_path:'/game',f95_url:'https://f95zone.to/threads/1/',
+    lc_url:'https://lewdcorner.com/threads/2/',lc_mode:'on',latest_site:'f95'};
+  const storage = {getItem:key=>key === 'wlib-mock-games' ? JSON.stringify([game]) : null,setItem(){},removeItem(){}};
   globalThis.localStorage = storage;
   globalThis.window = {localStorage:storage,dispatchEvent(){},addEventListener(){},navigator:{userAgent:'node'}};
   const server = await createServer({server:{middlewareMode:true},appType:'custom'});
@@ -695,6 +697,10 @@ test('update downloads expose browser mock payloads', async () => {
     const {api} = await server.ssrLoadModule('/src/services/api.ts');
     const links = await api.getUpdateDownloadLinks(1);
     assert.equal(links.success,true);
+    assert.equal(links.site,'f95');
+    const lcLinks = await api.getUpdateDownloadLinks(1,'lc');
+    assert.equal(lcLinks.site,'lc');
+    assert.equal(lcLinks.builds[0].mirrors[1].host,'buzzheavier');
     assert.equal(links.builds[0].mirrors[0].link_id,'mock-pixeldrain');
     const before = await api.getDownloadQueue();
     assert.equal(before.success,true);
@@ -702,7 +708,7 @@ test('update downloads expose browser mock payloads', async () => {
     const added = await api.startUpdateDownload(1,'mock-pixeldrain');
     assert.equal(added.success,true);
     const after = await api.getDownloadQueue(true);
-    assert.ok(after.jobs.some((job)=>job.job_id===added.job_id));
+    assert.equal(after.jobs.find((job)=>job.job_id===added.job_id).source.site,'f95');
     assert.ok(Array.isArray(after.queue.history));
     assert.equal((await api.pauseDownload(added.job_id)).success,true);
     assert.equal((await api.getDownloadQueue()).jobs.find((job)=>job.job_id===added.job_id).state,'paused');

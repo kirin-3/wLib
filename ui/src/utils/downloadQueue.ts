@@ -2,6 +2,7 @@
 // Pure helpers for the Downloads page, the sidebar entry and the download
 // status on a game. The backend reports states and failure codes; the words
 // and the actions live here.
+import { lcDownloadFailureMessage } from "./updateDownloads.ts";
 import type {
   DownloadFailureCode,
   DownloadForecast,
@@ -135,7 +136,9 @@ export function stateText(job: DownloadQueueJob): string {
       return percent === null || percent === 0 ? "Paused" : `Paused at ${percent}%`;
     }
     case "attention":
-      if (job.reason === "browser_check") return "Finish the check in the browser window that opened";
+      if (job.reason === "browser_check") return job.source.site === "lc"
+        ? "Finish the LewdCorner check in your browser"
+        : "Finish the check in the browser window that opened";
       return "Needs you";
     case "ready":
       if (awaitsSeedAnswer(job)) return "Finished · Keep seeding?";
@@ -189,8 +192,10 @@ export function failureInfo(job: DownloadQueueJob, freeBytes: number | null = nu
   const at = stoppedAt(job);
   const text = job.error_text.toLowerCase();
   if (job.reason === "browser_check" && !code) {
-    return { sentence: "Finish the check in the browser window that opened. The download continues after it.", actions: ["remove"] };
+    return { sentence: `${stateText(job)}. The download continues after it.`, actions: ["remove"] };
   }
+  const lcMessage = lcDownloadFailureMessage(job.error_text, job.source.site);
+  if (lcMessage) return { sentence: lcMessage, actions: ["retry", another, "remove"] };
   switch (code) {
     case "network":
       return {

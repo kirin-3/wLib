@@ -213,3 +213,41 @@ def test_switching_thread_or_mode_recomputes_the_winning_version():
 ])
 def test_usable_catalog_entry_needs_a_version_and_no_import(entry, usable):
     assert lewdcorner.usable_catalog_entry(entry) is usable
+
+
+@pytest.mark.parametrize(("heading", "title"), [
+    ("BreedVille [v0.10.0] [Redsky]", "BreedVille"),
+    ("Acmesia: Harem [Impregnation] Life [v1.2.0] [opopoworld]", "Acmesia: Harem [Impregnation] Life"),
+    ("Plain Title", "Plain Title"),
+    ("[Only Brackets]", "[Only Brackets]"),
+    ("", ""),
+])
+def test_page_title_drops_trailing_bracket_groups(heading, title):
+    assert lewdcorner.page_title(heading) == title
+
+
+def test_changing_use_lewdcorner_recomputes_the_winning_version():
+    from core import database
+
+    database.init_db()
+    database.update_setting("lc_enabled", "1")
+    f95 = "https://f95zone.to/threads/123/"
+    game_id = database.add_game("Game", "", f95, lc_url=URL)
+    lc_only = database.add_game("LC game", "", "", lc_url="https://lewdcorner.com/threads/77/")
+    early, late = "2026-11-01T00:00:00Z", "2026-11-10T00:00:00Z"
+    assert database.store_thread_update(game_id, "f95", f95, ("0.5", early))
+    assert database.store_thread_update(game_id, "lc", URL, ("0.6", late))
+    assert database.store_thread_update(lc_only, "lc", "https://lewdcorner.com/threads/77/", ("2", late))
+
+    database.update_setting("lc_enabled", "0")
+    assert database.refresh_latest_versions() == 1
+    stored = database.get_game(game_id)
+    assert (stored["latest_version"], stored["latest_site"]) == ("0.5", "f95")
+    assert stored["lc_latest_version"] == "0.6"
+    assert database.get_game(lc_only)["latest_version"] == "2"
+    assert database.refresh_latest_versions() == 0
+
+    database.update_setting("lc_enabled", "1")
+    assert database.refresh_latest_versions() == 1
+    stored = database.get_game(game_id)
+    assert (stored["latest_version"], stored["latest_site"]) == ("0.6", "lc")

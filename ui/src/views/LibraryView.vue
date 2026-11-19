@@ -169,6 +169,7 @@ interface AddGamePayload {
   engine?: string;
   launch_mode?: LaunchMode;
   command_line_args?: string;
+  screenshots?: string[];
 }
 
 interface PlaytimeTickDetail {
@@ -1719,6 +1720,7 @@ const handleAddGame = async (gameData: AddGamePayload) => {
       "",
       gameData.lc_dismissed || "",
       gameData.thread_completed,
+      gameData.screenshots || [],
     );
     if (result && result.success === false) {
       notifyError(`Failed to add game:\n\n${result.error || "Unknown error"}`);

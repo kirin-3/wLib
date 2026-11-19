@@ -14,7 +14,8 @@ interface CoverGame {
 // all cover views, and a newly chosen cover is always eligible again.
 const failedSources = reactive(new Set<string>());
 
-function isLewdCornerMedia(url: string): boolean {
+// The wLib window never loads LC images: they need the user's LC login.
+export function isLewdCornerMedia(url: string): boolean {
   try {
     const host = new URL(url).hostname;
     return host === "lewdcorner.com" || host.endsWith(".lewdcorner.com");

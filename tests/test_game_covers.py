@@ -618,13 +618,218 @@ def test_file_helpers_need_a_regular_file_inside(helper, folder_of):
     assert helper("../wlib.db") is None
 
 
-def test_cache_does_not_request_lewdcorner_media(monkeypatch):
+class _LcBridge:
+    """A connected extension that answers fetch_image like the real one."""
+
+    def __init__(self, monkeypatch, answer, *, flag=True):
+        import base64
+        import json
+
+        from core import extension_bridge as bridge
+
+        bridge.reset_for_tests()
+        monkeypatch.setattr(bridge, "LC_BACKGROUND_GAP_SECONDS", 0)
+        self.requests = []
+
+        def send(raw):
+            message = json.loads(raw)
+            self.requests.append(message["url"])
+            status, content_type, body = answer(message["url"])
+            bridge._handle_message(self.conn, {
+                "type": "fetch_image_chunk", "id": message["id"], "index": 0, "ok": True,
+                "status": status, "content_type": content_type, "final_url": message["url"],
+                "data": base64.b64encode(body).decode(), "last": True,
+            })
+
+        self.conn = bridge.BridgeConnection(send)
+        bridge._register_connection(self.conn)
+        bridge._handle_message(self.conn, {
+            "type": "hello", "protocol": 2, "can_fetch_lc": True, "can_fetch_lc_images": flag,
+        })
+
+
+LC_COVER = "https://lewdcorner.com/attachments/cover-webp.891912/"
+WEBP = b"RIFF\x08\x00\x00\x00WEBPVP8 "
+
+
+def test_lc_cover_is_cached_through_the_extension_only(monkeypatch):
     from core import scraper
 
-    url = "https://attachments.lewdcorner.com/cover.webp"
-    game_id = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/", cover_image=url)
-    fetched = []
-    monkeypatch.setattr(scraper, "f95_get_bytes", lambda url, _limit: fetched.append(url))
+    f95 = "https://attachments.f95zone.to/f95.png"
+    lc_game = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/", cover_image=LC_COVER)
+    f95_game = database.add_game("F95", "", "", cover_image=f95)
+    order = []
+    monkeypatch.setattr(scraper, "f95_get_bytes", lambda url, _limit: order.append(url) or b"\x89PNG\r\n\x1a\nx" + PNG_END)
+    lc = _LcBridge(monkeypatch, lambda url: order.append(url) or (200, "image/webp", WEBP))
     game_covers.CoverCacheService()._fill()
-    assert fetched == []
-    assert database.get_game(game_id)["cover_image_path"] == url
+    # F95 covers first; the LC URL never reaches the plain HTTP path.
+    assert order == [f95, LC_COVER]
+    assert lc.requests == [LC_COVER]
+    name = database.get_game(lc_game)["cover_cache"]
+    assert name.endswith(".webp") and game_covers.cached_cover_path(name).read_bytes() == WEBP
+    assert database.get_game(f95_game)["cover_cache"]
+
+
+def test_lc_cover_waits_without_an_extension_and_without_a_failure(monkeypatch):
+    from core import extension_bridge as bridge, scraper
+
+    game_id = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/", cover_image=LC_COVER)
+    monkeypatch.setattr(scraper, "f95_get_bytes", lambda *_args: pytest.fail("plain HTTP for an LC URL"))
+    old = _LcBridge(monkeypatch, lambda _url: pytest.fail("older extension asked"), flag=False)
+    service = game_covers.CoverCacheService()
+    woken = []
+    monkeypatch.setattr(service, "wake", lambda: woken.append(True))
+    bridge.add_lc_images_listener(service.wake)
+    service._fill()
+    assert old.requests == []
+    assert service._failed == {} and service._next_retry_in() is None
+    assert database.get_game(game_id)["cover_cache"] is None
+    bridge._handle_message(old.conn, {"type": "status", "can_fetch_lc_images": True})
+    assert woken == [True]
+
+
+def test_lc_covers_the_extension_refuses_are_never_fetched(monkeypatch):
+    from core import scraper
+
+    for thread, url in enumerate((
+        "https://lewdcorner.com/data/attachments/891/891912-abc.jpg?hash=x",
+        "https://lewdcorner.com/proxy.php?image=https%3A%2F%2Fexample.org%2Fa.png",
+        "https://lewdcorner.com/attachments/cover-webp.891912/extra",
+    ), start=31):
+        database.add_game(f"LC {thread}", "", lc_url=f"https://lewdcorner.com/threads/{thread}/", cover_image=url)
+    monkeypatch.setattr(scraper, "f95_get_bytes", lambda *_args: pytest.fail("plain HTTP for an LC URL"))
+    lc = _LcBridge(monkeypatch, lambda _url: pytest.fail("extension asked for a URL it refuses"))
+    service = game_covers.CoverCacheService()
+    service._fill()
+    # No request, no failure and no retry timer.
+    assert lc.requests == [] and service._failed == {} and service._next_retry_in() is None
+
+
+def test_lc_error_page_stores_nothing_and_retries_later(monkeypatch):
+    game_id = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/", cover_image=LC_COVER)
+    answers = [(500, "text/html; charset=utf-8", b""), (200, "text/html", b"<html>login</html>")]
+    lc = _LcBridge(monkeypatch, lambda _url: answers.pop(0) if answers else (200, "image/webp", WEBP))
+    service = game_covers.CoverCacheService()
+    service._fill()
+    assert database.get_game(game_id)["cover_cache"] is None
+    assert not game_covers.cache_covers_dir().exists() or not any(game_covers.cache_covers_dir().iterdir())
+    first_due = service._failed[LC_COVER][1]
+    service._fill()
+    assert lc.requests == [LC_COVER]  # still waiting on its delay
+    service._failed[LC_COVER] = (1, 0.0)
+    service._fill()
+    assert service._failed[LC_COVER][0] == 2
+    assert service._failed[LC_COVER][1] - first_due > game_covers.RETRY_BASE_SECONDS / 2
+    service._failed[LC_COVER] = (2, 0.0)
+    service._fill()
+    assert database.get_game(game_id)["cover_cache"]
+    assert LC_COVER not in service._failed
+
+
+def test_lc_hourly_limit_waits_for_the_hour_without_failures(monkeypatch):
+    from core import extension_bridge as bridge
+
+    urls = [f"https://lewdcorner.com/attachments/c{i}-webp.{i}/" for i in range(3)]
+    for i, url in enumerate(urls):
+        _ = database.add_game(f"LC {i}", "", lc_url=f"https://lewdcorner.com/threads/{i + 1}/", cover_image=url)
+    lc = _LcBridge(monkeypatch, lambda _url: (200, "image/webp", WEBP))
+    monkeypatch.setattr(bridge, "LC_BACKGROUND_PER_HOUR", 1)
+    monkeypatch.setattr(bridge, "_lc_background_fetches", __import__("collections").deque(maxlen=1))
+    service = game_covers.CoverCacheService()
+    # An earlier failure of the last URL keeps its count while the limit holds.
+    service._failed[urls[2]] = (3, 0.0)
+    service._fill()
+    assert lc.requests == [urls[0]]
+    # The limit is not a failure of the URL that met it.
+    assert set(service._failed) == {urls[2]} and service._failed[urls[2]][0] == 3
+    assert 3500 < service._next_retry_in() <= 3600
+    service._fill()
+    assert lc.requests == [urls[0]]
+    # The hour is over: the next pass goes on.
+    bridge._lc_background_fetches.clear()
+    service._lc_resume_at = 0.0
+    service._fill()
+    # One more fetch, then the limit of one per hour holds again.
+    assert lc.requests == [urls[0], urls[1]]
+
+
+def test_waiting_lc_failures_set_no_timer_without_an_extension(monkeypatch):
+    from core import extension_bridge as bridge
+
+    _ = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/", cover_image=LC_COVER)
+    lc = _LcBridge(monkeypatch, lambda _url: pytest.fail("older extension asked"), flag=False)
+    service = game_covers.CoverCacheService()
+    service._failed[LC_COVER] = (2, 0.0)
+    service._fill()
+    # Kept for the next connection, but no wake-up every second until then.
+    assert service._failed[LC_COVER][0] == 2
+    assert service._next_retry_in() is None
+    bridge._handle_message(lc.conn, {"type": "status", "can_fetch_lc_images": True})
+    assert service._next_retry_in() == 1.0
+
+
+def test_lc_screenshot_copies_count_purge_and_cleanup(monkeypatch):
+    kept_url = "https://lewdcorner.com/attachments/kept-png.1/"
+    gone_url = "https://lewdcorner.com/attachments/gone-png.2/"
+    png = b"\x89PNG\r\n\x1a\nx" + PNG_END
+    kept = game_covers.store_lc_copy(game_covers.lc_image_key(kept_url), png)
+    gone = game_covers.store_lc_copy(game_covers.lc_image_key(gone_url), png)
+    assert kept.name == f"lc-{game_covers.lc_image_key(kept_url)}.png"
+    assert game_covers.lc_copy_file(game_covers.lc_image_key(kept_url)) == kept.resolve()
+    service = game_covers.CoverCacheService(lc_screenshot_urls=lambda: [kept_url])
+    assert service.status()["bytes"] == 2 * len(png)
+    service._sweep()
+    assert kept.exists() and not gone.exists()
+    service.purge()
+    assert not kept.exists()
+    assert service.status()["bytes"] == 0
+
+
+def test_library_lc_screenshot_urls_cover_stored_and_catalog_lists(monkeypatch):
+    from core import game_lookup
+
+    stored = "https://lewdcorner.com/attachments/stored-png.1/"
+    game_id = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/", screenshots=[stored])
+    assert game_id
+    monkeypatch.setattr(game_lookup, "lc_threads_screenshots", lambda ids: {"21": ["https://lewdcorner.com/attachments/c-png.2/"]} if ids == ["21"] else {})
+    api = Api()
+    assert api._library_lc_screenshot_urls() == [stored, "https://lewdcorner.com/attachments/c-png.2/"]
+
+
+def test_saved_lc_cover_asks_the_window_to_reload(monkeypatch):
+    lc_game = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/", cover_image=LC_COVER)
+    answers = [(500, "text/html", b"")]
+    _ = _LcBridge(monkeypatch, lambda _url: answers.pop(0) if answers else (200, "image/webp", WEBP))
+    reloads = []
+    service = game_covers.CoverCacheService(on_lc_cover=lambda: reloads.append(True))
+    service._fill()
+    assert reloads == []  # nothing saved, nothing to show
+    service._failed[LC_COVER] = (1, 0.0)
+    service._fill()
+    assert database.get_game(lc_game)["cover_cache"] and reloads == [True]
+
+
+def test_lc_cover_reloads_are_grouped(monkeypatch):
+    import threading
+
+    api = Api()
+    sent = []
+    monkeypatch.setattr(api, "_notify_card_copies_ready", lambda: sent.append(True))
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, wait, run):
+            self.wait, self.run, self.daemon = wait, run, False
+            timers.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(threading, "Timer", FakeTimer)
+    api._lc_cover_cached()
+    api._lc_cover_cached()
+    assert len(timers) == 1 and timers[0].wait == 0.0
+    timers[0].run()
+    assert sent == [True]
+    api._lc_cover_cached()
+    assert len(timers) == 2 and 14 < timers[1].wait <= api.LC_COVER_REFRESH_SECONDS

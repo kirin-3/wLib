@@ -40,13 +40,28 @@ export interface ExtensionGameDetail {
   developer?: string;
   engine?: string;
   links?: StoreLink[];
+  // Image URLs read from an LC page (the first post's images after the cover).
+  screenshots?: string[];
 }
 export function extensionAddQuery(data: ExtensionGameDetail): Record<string, string> {
   return { action: "import", f95url: data.url || "", title: data.title || "", version: data.version || "", coverImage: data.coverImage || "", tags: JSON.stringify(data.tags || []), rating: String(data.rating || ""), developer: data.developer || "", engine: data.engine || "", links: JSON.stringify(readStoreLinks(data.links)),
     ...(data.lc_url ? { lcurl: data.lc_url } : {}),
     ...(data.lc_suggested ? { lcSuggested: data.lc_suggested } : {}),
     ...(typeof data.thread_completed === "boolean" ? { threadCompleted: String(data.thread_completed) } : {}),
+    ...(data.lc_url && Array.isArray(data.screenshots) && data.screenshots.length
+      ? { screenshots: JSON.stringify(data.screenshots.filter((url): url is string => typeof url === "string")) }
+      : {}),
   };
+}
+
+// The screenshot URLs an extension add put in the query (see extensionAddQuery).
+export function readQueryScreenshots(value: unknown): string[] {
+  try {
+    const parsed = JSON.parse(queryText(value) || "[]") as unknown;
+    return Array.isArray(parsed) ? parsed.filter((url): url is string => typeof url === "string" && url.startsWith("https://")) : [];
+  } catch {
+    return [];
+  }
 }
 export function extensionOpenQuery(data: ExtensionGameDetail): Record<string, string> {
   return { action: "open", f95url: data.url || "", ...(extensionGameId(data.gameId) ? { gameId: String(data.gameId) } : {}) };

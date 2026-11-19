@@ -610,7 +610,7 @@ def test_same_mirror_again_keeps_the_partial_file(worker, clock):
     queue.get(a).source["part_file"] = "resume-abc.part"
     worker.fail(a, "link expired or removed")
     queue.tick()
-    new = queue.add("host", 1, "Game 1", "1.0", {"host": "pixeldrain"}, replaces=a)
+    new = queue.add("host", 1, "Game 1", "1.0", {"site": "f95", "host": "pixeldrain"}, replaces=a)
     assert worker.removed == [a] and worker.kept == [True]
     # Startup cleanup keeps the partial files that jobs name.
     assert new.source["part_file"] == "resume-abc.part"

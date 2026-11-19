@@ -20,7 +20,8 @@
     "lc_url",
     "lc_mode",
     "lc_dismissed",
-    "thread_completed"
+    "thread_completed",
+    "screenshots"
   ],
   "add_game_attachment": [
     "game_id",
@@ -247,7 +248,8 @@
   "get_umu_runtime_status": [],
   "get_umu_status": [],
   "get_update_download_links": [
-    "game_id"
+    "game_id",
+    "site"
   ],
   "get_update_status": [],
   "get_urm_status": [

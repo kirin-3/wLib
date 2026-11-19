@@ -246,6 +246,9 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         resolved = resolve_page(page_url, [f"{link['source']}:{link['id']}" for link in links])
         expanded = resolved["ids"]
         if lc_url:
+            # A catalog title, when there is one, replaces this below.
+            payload["title"] = lewdcorner.page_title(payload.get("title"))
+            payload["screenshots"] = lewdcorner.page_screenshots(payload.get("screenshots"))
             raw_prefixes = payload.get("prefixes")
             if isinstance(raw_prefixes, list):
                 engine, completed = lewdcorner.prefix_details(cast(list[object], raw_prefixes))
@@ -271,6 +274,9 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 links = coerce_store_links(fallback.get("links"))
         else:
             entry = resolved["catalog_entry"]
+        if not lc_url:
+            # Only LC page adds send screenshots; F95 adds get them from the thread scrape.
+            _ = payload.pop("screenshots", None)
         for key, value in entry.items():
             if key != "links" and (value or (key == "thread_completed" and value is False)):
                 payload[key] = value
@@ -428,6 +434,41 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         finally:
             self.close_connection = True
 
+    def _serve_lc_image(self, key: str) -> None:
+        """An LC screenshot by the key ``get_game_screenshots`` handed out.
+
+        The copy in the cover cache folder when there is one; otherwise one
+        fetch through the browser extension, kept as a copy. An unknown key
+        or a failed fetch is a 404, with no request to anyone."""
+        from core.extension_bridge import BridgeFailed, BridgeUnavailable
+        from core.game_covers import COVER_TYPES, LC_KEY_RE, fetch_lc_image, lc_copy_file, validate_image_bytes
+
+        api = api_ref
+        url = api.lc_image_keys.get(key) if api is not None and LC_KEY_RE.fullmatch(key) else None
+        if api is None or url is None:
+            self.send_error(404)
+            return
+        path = lc_copy_file(key)
+        try:
+            if path is not None:
+                data = path.read_bytes()
+                content_type = COVER_TYPES[path.suffix[1:]]
+            else:
+                data = fetch_lc_image(url, background=False)
+                stored = api.cover_cache.store_lc_screenshot(key, data)
+                content_type = COVER_TYPES[stored.suffix[1:] if stored is not None else validate_image_bytes(data)]
+        except (OSError, ValueError, BridgeFailed, BridgeUnavailable) as exc:
+            logging.getLogger(__name__).info("LewdCorner screenshot %s not served: %s", key, exc)
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "private, max-age=31536000, immutable")
+        self.end_headers()
+        _ = self.wfile.write(data)
+
     def do_GET(self) -> None:
         from urllib.parse import urlparse as _urlparse
 
@@ -456,6 +497,10 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "private, max-age=31536000, immutable")
             self.end_headers()
             _ = self.wfile.write(data)
+            return
+
+        if _urlparse(self.path).path.startswith("/lc-images/"):
+            self._serve_lc_image(_urlparse(self.path).path.removeprefix("/lc-images/"))
             return
 
         if _urlparse(self.path).path == "/api/bridge":
@@ -799,6 +844,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                             links=payload.get("links"),
                             lc_url=str(payload.get("lc_url") or ""),
                             thread_completed=cast(bool | None, payload.get("thread_completed")),
+                            screenshots=payload.get("screenshots"),
                         )
                     if wishlist_response.get("attached") is True and not (
                         body.get("action") == "attach_lc" or wishlist_response.get("attached_lc")

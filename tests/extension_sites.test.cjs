@@ -49,18 +49,41 @@ test('optional sites register, inject into existing tabs, and unregister on perm
 
 test('optional site settings reset a declined request and revoke granted permission', () => {
     const granted = new Set(), inputs = [], callbacks = new Map(), status = {textContent:''};
-    for (const site of ['dlsite','vndb','ryuugames']) inputs.push({dataset:{site},checked:false,disabled:false,addEventListener:(_,callback)=>callbacks.set(site,callback)});
+    const lcDownloads = {checked:false,disabled:true,addEventListener:(_,change)=>callbacks.set('lc-downloads',change)};
+    const onRemoved = [];
+    for (const site of ['dlsite','vndb','ryuugames','lewdcorner']) inputs.push({dataset:{site},checked:false,disabled:false,addEventListener:(_,callback)=>callbacks.set(site,callback)});
+    const permissionName = ({origins, permissions}) => origins?.[0] || permissions[0];
     const permissions = {
-        contains:({origins},callback)=>callback(granted.has(origins[0])),
-        request:(_,callback)=>callback(false),
-        remove:({origins},callback)=>{granted.delete(origins[0]);callback(true);},
+        contains:(permission,callback)=>callback(granted.has(permissionName(permission))),
+        request:(permission,callback)=>{
+            const name = permissionName(permission);
+            if (name === 'webRequest') granted.add(name);
+            callback(name === 'webRequest');
+        },
+        remove:(permission,callback)=>{granted.delete(permissionName(permission));callback(true);},
+        onAdded:{addListener(){}},
+        onRemoved:{addListener(listener){onRemoved.push(listener);}},
     };
-    vm.runInNewContext(readFileSync(path.join(__dirname,'../extension/options.js'),'utf8'), {document:{querySelectorAll:()=>inputs,getElementById:()=>status},chrome:{permissions,runtime:{}}});
+    const document = {querySelectorAll:()=>inputs,getElementById:id=>id === 'lc-downloads' ? lcDownloads : status};
+    vm.runInNewContext(readFileSync(path.join(__dirname,'../extension/options.js'),'utf8'), {document,chrome:{permissions,runtime:{}}});
     inputs[0].checked=true; callbacks.get('dlsite')();
     assert.equal(inputs[0].checked,false);
     assert.equal(inputs[0].disabled,false);
     granted.add('https://vndb.org/*'); inputs[1].checked=false; callbacks.get('vndb')();
     assert.equal(granted.size,0);
+    assert.equal(lcDownloads.disabled,true);
+    granted.add('https://lewdcorner.com/*');
+    for (const notify of onRemoved) notify();
+    assert.equal(lcDownloads.disabled,false);
+    lcDownloads.checked=true; callbacks.get('lc-downloads')();
+    assert.equal(granted.has('webRequest'),true);
+    lcDownloads.checked=false; callbacks.get('lc-downloads')();
+    assert.equal(granted.has('webRequest'),false);
+    granted.add('webRequest');
+    granted.delete('https://lewdcorner.com/*');
+    for (const notify of onRemoved) notify();
+    assert.equal(lcDownloads.checked,false);
+    assert.equal(lcDownloads.disabled,true);
 });
 
 test('new sites remain optional and F95 scripts load the shared URL rules first', () => {
@@ -119,4 +142,46 @@ test('LewdCorner latest-updates badges sit on the card image, once, and follow p
     observerCallback(); timers.shift()();
     assert.deepEqual(calls[1],['7','8']);
     assert.equal(badges(tiles[0]).length,1);
+});
+
+test('LewdCorner thread widget sends the cover and the full-size screenshot URLs', () => {
+    // Shaped like a real LC first post: the cover is a full attachment image,
+    // each screenshot a /data/attachments/ thumbnail inside a link to the full image.
+    const attachment = name => `https://lewdcorner.com/attachments/${name}`;
+    const img = (src, href = '', currentSrc = '') => ({src, currentSrc, closest: selector => (selector === 'a[href]' && href ? {href} : null)});
+    const images = [
+        img(attachment('cover-png.891887/')),
+        img('https://lewdcorner.com/data/attachments/888/888308-c9.jpg?hash=a', attachment('shot1-png.891888/')),
+        img('https://lewdcorner.com/data/attachments/888/888309-fe.jpg?hash=b', attachment('shot2-png.891889/')),
+        img('https://lewdcorner.com/data/attachments/888/888308-c9.jpg?hash=a', attachment('shot1-png.891888/')),
+        img('http://insecure.example/a.png'),
+        img('https://i.imgur.com/x.png', '', 'https://i.imgur.com/x-current.png'),
+        img('https://lewdcorner.com/data/attachments/1/1.jpg', 'https://lewdcorner.com/threads/other.5/'),
+    ];
+    const text = value => ({textContent: value});
+    const heading = {cloneNode: () => ({textContent: 'BreedVille [v0.10.0] [Redsky]', querySelectorAll: () => []}), querySelectorAll: () => []};
+    const post = {
+        querySelector: selector => (selector.includes('Developer') ? {textContent: 'Redsky'} : selector.includes('version') ? {textContent: 'v0.10.0'} : null),
+        querySelectorAll: selector => (selector === '.message-userContent img' ? images : []),
+    };
+    let shown = null;
+    const context = vm.createContext({
+        location: {pathname: '/threads/breedville.25000/'},
+        document: {
+            title: 'BreedVille',
+            querySelector: selector => (selector === 'h1.p-title-value' ? heading : selector.startsWith('article.message') ? post : null),
+            querySelectorAll: selector => (selector === '.tagList .tagItem' ? [text('3dcg')] : []),
+        },
+        WLibSiteWidget: {show: (_page, _extra, metadata) => { shown = metadata; }},
+        globalThis: {},
+    });
+    vm.runInContext(readFileSync(path.join(__dirname, '../extension/sites/lewdcorner.js'), 'utf8'), context);
+    assert.equal(shown.url, 'https://lewdcorner.com/threads/25000/');
+    assert.equal(shown.coverImage, attachment('cover-png.891887/'));
+    assert.deepEqual(Array.from(shown.screenshots), [
+        attachment('shot1-png.891888/'),
+        attachment('shot2-png.891889/'),
+        'https://i.imgur.com/x-current.png',
+        'https://lewdcorner.com/data/attachments/1/1.jpg',
+    ]);
 });

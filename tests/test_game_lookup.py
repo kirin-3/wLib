@@ -308,6 +308,17 @@ def test_lc_metadata_and_matching(lc_catalog):
     assert not by_store["attach_lc_available"]
 
 
+def test_lc_thread_tiers_match_the_full_entries(lc_catalog):
+    from core.game_lookup import lc_thread_entries, lc_thread_tiers
+
+    ids = ["21", "22", "23", "999", "bad"]
+    tiers = lc_thread_tiers(ids)
+    assert tiers["21"] == "Free" and tiers["22"] == "Premium"
+    assert tiers == {key: entry["tier"] for key, entry in lc_thread_entries(ids).items() if entry["tier"]}
+    database.update_setting("catalog_enabled", "0")
+    assert lc_thread_tiers(ids) == {}
+
+
 def test_lc_prefill(lc_catalog):
     from core.game_lookup import lookup_lc_partner
 
@@ -416,10 +427,13 @@ def test_lc_settings_trigger_catalog_fill(lc_catalog, monkeypatch):
 
     api = Api()
     monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
-    monkeypatch.setattr("core.api_mixins.settings.threading.Thread", lambda target, **_kw: type(
-        "ImmediateThread", (), {"start": staticmethod(target)}
+    monkeypatch.setattr("core.api_mixins.settings.threading.Thread", lambda target, kwargs=None, **_kw: type(
+        "ImmediateThread", (), {"start": staticmethod(lambda: target(**(kwargs or {})))}
     )())
     monkeypatch.setattr(api.catalog, "installed_sha256", lambda: "installed")
+    refreshes: list[bool] = []
+    real_refresh = database.refresh_latest_versions
+    monkeypatch.setattr(database, "refresh_latest_versions", lambda: refreshes.append(True) or real_refresh())
     free = database.add_game("Free", "", "https://f95zone.to/threads/101/")
     premium = database.add_game("Premium", "", "https://f95zone.to/threads/102/")
     # Default mode with an F95 thread: LC only becomes active with the setting.
@@ -436,6 +450,12 @@ def test_lc_settings_trigger_catalog_fill(lc_catalog, monkeypatch):
     assert api.save_settings({"lc_plus": True})["success"]
     assert api.get_settings()["lc_plus"] is True
     assert database.get_game(premium)["lc_url"].endswith("/22/")
+    # Turning "Use LewdCorner" off fills nothing, but picks each newest version again.
+    refreshes.clear()
+    assert api.save_settings({"lc_enabled": False})["success"]
+    assert refreshes == [True]
+    assert api.save_settings({"lc_enabled": False})["success"]
+    assert refreshes == [True]
 
 
 def test_version_lookups_distinguish_live_catalog_rows(lc_catalog):

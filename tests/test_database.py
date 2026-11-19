@@ -2411,6 +2411,27 @@ def test_lc_migration_and_identity():
         add_game("Bad mode", "", lc_mode="invalid")
 
 
+def test_changing_the_lc_thread_drops_its_screenshots_only():
+    import json
+
+    from core.database import add_game, get_game, update_game
+
+    def shots(game_id):
+        return json.loads(get_game(game_id)["screenshots"])
+
+    lc_shot = "https://lewdcorner.com/attachments/a-png.1/"
+    f95_shot = "https://attachments.f95zone.to/2024/01/a.png"
+    game = add_game("G", "", "https://f95zone.to/threads/5/", lc_url="https://lewdcorner.com/threads/21/",
+                    screenshots=[f95_shot, lc_shot])
+    update_game(game, {"lc_url": "https://lewdcorner.com/threads/21/"})
+    assert shots(game) == [f95_shot, lc_shot]
+    update_game(game, {"lc_url": "https://lewdcorner.com/threads/22/"})
+    assert shots(game) == [f95_shot]
+    lc_only = add_game("L", "", lc_url="https://lewdcorner.com/threads/30/", screenshots=[lc_shot])
+    update_game(lc_only, {"lc_url": ""})
+    assert shots(lc_only) == []
+
+
 
 def test_site_versions_migrate_legacy_f95_games_once():
     f95 = add_game("F95", "", "https://f95zone.to/threads/123/")

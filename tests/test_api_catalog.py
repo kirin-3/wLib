@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
 
+import json
+
 import pytest
 
 from core.api import Api
@@ -135,6 +137,37 @@ def test_game_screenshots_use_catalog_without_changing_library(started, monkeypa
         assert result["screenshots"] == [{"thumb": "https://stored/a", "full": "https://stored/a"}]
     assert database.get_game(game_id) == before
     assert api.get_game_screenshots(-1)["success"] is False
+
+
+def test_lc_only_game_gets_catalog_screenshots_as_local_addresses(started, monkeypatch):
+    from core import database, game_covers, game_lookup
+
+    lc_shots = ["https://lewdcorner.com/attachments/a-png.1/", "https://lewdcorner.com/attachments/b-png.2/"]
+    game_id = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/")
+    monkeypatch.setattr(game_lookup, "lc_thread_screenshots", lambda thread_id: lc_shots if thread_id == "21" else None)
+    api = Api()
+    result = api.get_game_screenshots(game_id)
+    local = [f"{game_covers.LC_IMAGE_ADDRESS}{game_covers.lc_image_key(url)}" for url in lc_shots]
+    assert result == {"success": True, "screenshots": [{"thumb": u, "full": u} for u in local],
+                      "source": "catalog", "in_catalog": True}
+    assert [api.lc_image_keys.get(u.rsplit("/", 1)[1]) for u in local] == lc_shots
+    assert "lewdcorner.com" not in json.dumps(result)
+    # An F95 game with an inactive LC thread keeps its own list.
+    both = database.add_game("Both", "", "https://f95zone.to/threads/5/", lc_url="https://lewdcorner.com/threads/22/", lc_mode="off")
+    monkeypatch.setattr(game_lookup, "f95_thread_screenshots", lambda _id: [])
+    assert api.get_game_screenshots(both)["screenshots"] == []
+
+
+def test_lc_screenshots_leave_out_images_the_extension_refuses(started, monkeypatch):
+    from core import database, game_covers, game_lookup
+
+    full = "https://lewdcorner.com/attachments/a-png.1/"
+    shots = ["https://lewdcorner.com/data/attachments/1/1-a.jpg?hash=x",
+             "https://lewdcorner.com/proxy.php?image=https%3A%2F%2Fexample.org%2Fa.png", full]
+    game_id = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/")
+    monkeypatch.setattr(game_lookup, "lc_thread_screenshots", lambda _id: shots)
+    local = f"{game_covers.LC_IMAGE_ADDRESS}{game_covers.lc_image_key(full)}"
+    assert Api().get_game_screenshots(game_id)["screenshots"] == [{"thumb": local, "full": local}]
 
 
 BUILT_AT = "2026-11-01T12:00:00Z"

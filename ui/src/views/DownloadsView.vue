@@ -114,7 +114,7 @@ async function onAction(job: DownloadQueueJob, action: RowAction) {
     case 'another': {
       const game = gameFor(job.game_id);
       if (!game) { notify('The game is no longer in the library.', 'error'); return; }
-      downloads.open(game, job.job_id); return;
+      downloads.open(game, job.job_id, job.kind === "host" ? job.source.site || "f95" : ""); return;
     }
     case 'remove':
       if (removeNeedsConfirm(job) && !(await confirmAction({

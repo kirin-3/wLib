@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {orderBuilds,preselect,downloadFailureMessage,bulkDownloadDecision,pickerTargetVersion,selectableBuild} from './updateDownloads.ts';
+import {orderBuilds,preselect,downloadFailureMessage,bulkDownloadDecision,pickerTargetVersion,selectableBuild,siteUnavailable} from './updateDownloads.ts';
 import type {UpdateBuild} from '../services/api.ts';
 const build = (platform: string, kind = 'full'): UpdateBuild => ({label:platform,section:'',platform,kind,mirrors:[{link_id:platform,host:'mega',label:'MEGA',part:'',split:false}]});
 test('prefers native full builds and separates unsuitable platforms',()=>{
@@ -50,4 +50,24 @@ test('only a first install falls back to the stored version for RPDL', () => {
   assert.equal(pickerTargetVersion({ ...game, latest_version: ' 0.9 ' }), '0.9');
   assert.equal(pickerTargetVersion({ ...game, exe_path: 'game.exe' }), '');
   assert.equal(pickerTargetVersion({ ...game, exe_path: 'game.exe', latest_version: '0.9' }), '0.9');
+});
+
+test("LewdCorner failures explain the required browser action", () => {
+  const check = "Finish the LewdCorner check in your browser";
+  assert.equal(downloadFailureMessage(check), check);
+  assert.equal(downloadFailureMessage("Resolving the link timed out", "lc"), check);
+  assert.equal(downloadFailureMessage("lc_login_required"), "Sign in to LewdCorner in your browser");
+  assert.equal(downloadFailureMessage("Sign in to LewdCorner in your browser"), "Sign in to LewdCorner in your browser");
+  const permission = "Turn on LewdCorner downloads in the wLib extension settings";
+  assert.equal(downloadFailureMessage(permission), permission);
+  assert.equal(downloadFailureMessage("lc_plus_required"), "This is an LC Plus thread. Use F95Zone or an LC Plus account.");
+});
+
+test('a site the game no longer offers falls back to the default', () => {
+  const f95 = [{site: 'f95' as const, version: '1.0', older: false}];
+  assert.equal(siteUnavailable('lc', f95), true);
+  assert.equal(siteUnavailable('f95', f95), false);
+  assert.equal(siteUnavailable('', f95), false);
+  assert.equal(siteUnavailable('lc', []), false);
+  assert.equal(siteUnavailable('lc', undefined), false);
 });

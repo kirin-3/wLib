@@ -300,3 +300,73 @@ def test_queue_reads_live_wishlist_status_once_per_game(monkeypatch):
 
     database.update_game(wishlist, {"exe_path": "game.exe"})
     assert not any(job["game_wishlisted"] for job in api.get_download_queue()["jobs"])
+
+
+@pytest.mark.parametrize(("latest_site", "expected"), [("lc", "lc"), ("f95", "f95"), ("both", "f95"), ("", "f95")])
+def test_default_download_site(latest_site, expected):
+    game = {"lc_url": "https://lewdcorner.com/threads/12/", "f95_url": "https://f95zone.to/threads/1/",
+            "latest_site": latest_site, "f95_latest_version": "v1", "lc_latest_version": "v2"}
+    sites = update_downloads.download_sites(game, lc_enabled=True, lc_plus=False)
+    assert update_downloads.default_download_site(game, sites) == expected
+    assert [item["version"] for item in sites] == ["v1", "v2"]
+    assert [item["older"] for item in sites] == [latest_site == "lc", latest_site == "f95"]
+    unknown = update_downloads.download_sites({**game, "lc_latest_version": ""}, lc_enabled=True, lc_plus=False)
+    assert not unknown[1]["older"]
+    blocked = update_downloads.download_sites(game, lc_enabled=True, lc_plus=False, catalog_tier="Premium")
+    assert update_downloads.default_download_site(game, blocked) == "f95"
+    assert update_downloads.download_sites(game, lc_enabled=True, lc_plus=True, catalog_tier="Premium") == sites
+
+
+def test_saved_job_relinks_its_site_even_when_the_default_has_changed(monkeypatch):
+    lc_url = "https://lewdcorner.com/threads/12/"
+    f95_url = "https://f95zone.to/threads/1/"
+    game = {"lc_url": lc_url, "f95_url": f95_url, "lc_mode": "on", "latest_site": "lc"}
+    database.init_db()
+    monkeypatch.setattr(database, "get_game", lambda _: game)
+    reads = []
+
+    def fetch(url, site="f95"):
+        reads.append((url, site))
+        return _thread([{"url": "https://pixeldrain.com/u/" + site, "host": "pixeldrain",
+                         "label": "PD", "part": "", "split": False}])
+
+    monkeypatch.setattr(update_downloads.scraper, "fetch_thread_download_links", fetch)
+    service = UpdateDownloads(DownloadManager())
+    assert service.get_links(1)["site"] == "lc"
+    service.clear(1)
+    old_job = _saved_job()
+    assert service.relink(old_job)(lambda _: None, None)["url"].endswith("/f95")
+    lc_job = _saved_job()
+    lc_job.source["site"] = "lc"
+    game["latest_site"] = "f95"
+    assert service.relink(lc_job)(lambda _: None, None)["url"].endswith("/lc")
+    assert reads == [(lc_url, "lc"), (f95_url, "f95"), (lc_url, "lc")]
+
+
+@pytest.mark.parametrize(("url", "expected"), [
+    ("https://f95zone.to/dl/1/?fake", True),
+    ("https://lewdcorner.com/masked/out?t=fake", True),
+    ("https://buzzheavier.com/share", False),
+])
+def test_buzzheavier_requires_a_masked_link(url, expected):
+    assert update_downloads._in_app("buzzheavier", url) is expected
+
+
+@pytest.mark.parametrize(("lc_extension", "message"), [
+    (False, "Open a browser with the wLib extension and turn on its LewdCorner switch"),
+    (True, "Turn on LewdCorner downloads in the wLib extension settings"),
+])
+def test_lc_resolve_without_support_names_the_missing_step(monkeypatch, lc_extension, message):
+    import threading
+
+    from core import extension_bridge, scraper
+    from core.downloads.transfer import DownloadError
+
+    def resolve(*_args, **_kwargs):
+        raise extension_bridge.BridgeUnavailable("no extension with LewdCorner download resolution connected")
+
+    monkeypatch.setattr(scraper, "resolve_download_link", resolve)
+    monkeypatch.setattr(extension_bridge, "is_available", lambda *, site="f95": lc_extension)
+    resolver = UpdateDownloads._resolver("https://lewdcorner.com/masked/out?t=fake", "pixeldrain")
+    with pytest.raises(DownloadError, match=message):
+        _ = resolver(lambda _: None, threading.Event())

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { GameRecord, UpdateBuild, UpdateMirror } from "../services/api";
+import type { DownloadSite, DownloadSiteOption, GameRecord, UpdateBuild, UpdateMirror } from "../services/api";
 import { isWishlisted } from "./libraryGames.ts";
 
 export const selectableBuild = (build: UpdateBuild, wishlisted: boolean): boolean =>
@@ -8,6 +8,10 @@ export const selectableBuild = (build: UpdateBuild, wishlisted: boolean): boolea
 export function pickerTargetVersion(game: Pick<GameRecord, "latest_version" | "version" | "exe_path">): string {
   return game.latest_version?.trim() || (isWishlisted(game) ? game.version?.trim() || "" : "");
 }
+
+/** A site the picker asked for that the game no longer offers (for example LC after "Use LewdCorner" is turned off). */
+export const siteUnavailable = (requested: DownloadSite | "", sites: DownloadSiteOption[] | undefined): boolean =>
+  !!requested && !!sites?.length && !sites.some(option => option.site === requested);
 
 export type HostPlatform = "linux" | "windows";
 export const inAppMirror = (mirror: UpdateMirror): boolean =>
@@ -47,7 +51,18 @@ export function bulkDownloadDecision(
   if (!usable.some(build => build.kind === "full")) return { kind: "needs-choice", reason: "Only patch builds were found" };
   return { kind: "needs-choice", reason: "No full build has an in-app mirror" };
 }
-export function downloadFailureMessage(error: string): string {
+export function lcDownloadFailureMessage(error: string, site?: DownloadSite): string | undefined {
+  const lower = error.toLowerCase();
+  if (lower.includes("lewdcorner check") || (site === "lc" && lower.includes("timed out"))) return "Finish the LewdCorner check in your browser";
+  if (lower.includes("lc_login_required") || lower.includes("sign in to lewdcorner")) return "Sign in to LewdCorner in your browser";
+  if (lower.includes("lewdcorner downloads")) return "Turn on LewdCorner downloads in the wLib extension settings";
+  if (lower.includes("lc_plus_required") || lower.includes("lc plus thread")) return "This is an LC Plus thread. Use F95Zone or an LC Plus account.";
+  if (lower.includes("lewdcorner switch")) return error;
+}
+
+export function downloadFailureMessage(error: string, site?: DownloadSite): string {
+  const lcMessage = lcDownloadFailureMessage(error, site);
+  if (lcMessage) return lcMessage;
   const lower = error.toLowerCase();
   // Most specific first: several messages also mention the browser or extension.
   if (lower.includes("disk space")) return `${error}. Free up space and retry.`;

@@ -132,17 +132,22 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Protocol (JSON text messages):** the current extension sends protocol 2; the app also accepts protocol 1 for older clients.
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 2, "extension_version": "1.2.8", "can_fetch": true, "can_fetch_lc": true, "can_resolve": true}
-  {"type": "status", "can_fetch": false, "can_fetch_lc": true}
+  {"type": "hello", "protocol": 2, "extension_version": "1.2.10", "can_fetch": true, "can_fetch_lc": true, "can_resolve": true, "can_resolve_lc": true, "can_fetch_lc_images": true}
+  {"type": "status", "can_fetch": false, "can_fetch_lc": true, "can_resolve_lc": false, "can_fetch_lc_images": true}
   {"type": "ping"}
   // app -> ext
   {"type": "pong"}
   {"type": "fetch", "id": "<uuid4>", "url": "https://f95zone.to/threads/123/"}
   {"type": "fetch", "id": "<uuid4>", "site": "lc", "url": "https://lewdcorner.com/threads/123/"}
+  {"type": "fetch_image", "id": "<uuid4>", "url": "https://lewdcorner.com/attachments/cover-webp.891912/"}
   // ext -> app
   {"type": "fetch_result", "id": "...", "ok": true, "status": 200,
    "final_url": "https://f95zone.to/threads/slug.123/", "body": "<html>..."}
   {"type": "fetch_result", "id": "...", "ok": false, "error": "refused|timeout|too_large|offsite_redirect|network"}
+  {"type": "fetch_image_chunk", "id": "...", "index": 0, "ok": true, "status": 200, "content_type": "image/webp",
+   "final_url": "https://lewdcorner.com/attachments/cover-webp.891912/", "data": "<base64>", "last": false}
+  {"type": "fetch_image_chunk", "id": "...", "index": 1, "data": "<base64>", "last": true}
+  {"type": "fetch_image_chunk", "id": "...", "index": 0, "ok": false, "error": "refused|timeout|too_large|offsite_redirect|network", "last": true}
   ```
   A connection is eligible for fetches only after `hello` with protocol 1 or 2 and `can_fetch == true` (from `permissions.contains({origins: ["https://f95zone.to/*"]})`). Download resolution also requires `can_resolve == true`. Unknown message types are ignored. A JSON `{"type":"ping"}` is answered with JSON `{"type":"pong"}`; WebSocket ping frames are answered with pong frames, and close frames are answered with a close frame.
 - **Login:** Firefox sends no site cookies with background-page fetches, so F95 answers them as a guest. Cloudflare likewise challenges them without the browser's clearance cookie. When a background fetch returns a guest page (`data-logged-in="false"`) or a managed challenge page, the extension repeats it once from an open, non-discarded `f95zone.to` tab via `scripting.executeScript` (Firefox `content.fetch`, page cookies) and, if that works, uses a tab first for later fetches while one is open. Without an F95 tab it keeps the background result.
@@ -151,6 +156,10 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
   - `https://lewdcorner.com/latest-updates/api?page=<1 to 10>&per_page=90&cat=Games&sort=date`
 
   The extension rejects responses that redirect outside `lewdcorner.com`.
+- **LewdCorner images:** `can_fetch_lc_images` in `hello` and `status` is true when the extension holds `https://lewdcorner.com/*` (the same check as `can_fetch_lc`). A connection that does not send it, such as an older extension, gets no image requests. The app sends `fetch_image` only for LC attachment URLs; the extension refuses any URL that does not match `^https://lewdcorner\.com/attachments/<name>.<number>/$` or contains white space, without a network request (so `/proxy.php`, `/masked/`, thread pages and `/data/attachments/` thumbnails are refused). It fetches in its background context with `credentials: "include"`, never through a tab. A redirect may stay on `lewdcorner.com` (for example to `/data/attachments/...`); one that leaves it fails with `offsite_redirect`.
+  - The first `fetch_image_chunk` (`index` 0) carries `ok`, `status`, `content_type` and `final_url`. The body comes only for an `image/*` answer of at most 20 MiB; any other answer, such as an HTTP 500 HTML page, sends `data: ""` with its status and content type. A larger image (by `Content-Length` or while streaming) fails with `too_large`.
+  - Each chunk carries at most 4 MiB of image data as base64 (about 5.4 MiB), under the 8 MiB message limit. Chunks come in `index` order and the last one has `last: true`. wLib fails the request for a missing or out-of-order chunk, a total over 20 MiB, bad base64 or no answer in 60 seconds.
+  - wLib keeps an image only when the status is 200, the type is JPEG, PNG, WebP, GIF or AVIF, and the image is complete. It never sends a request to `lewdcorner.com` itself.
 - **Firefox lifetime:** Firefox suspends an idle event page after 30 seconds and does not count WebSocket traffic as activity. In Firefox, each 20-second ping also writes `wlibBridgeKeepalive` to `storage.local`; the resulting `storage.onChanged` event keeps the page alive while the bridge is connected.
 - **Handshake:** the 101 reply uses an `HTTP/1.1` status line. Firefox drops WebSocket handshakes answered with `BaseHTTPRequestHandler`'s default `HTTP/1.0`.
 - **CSP:** the manifest sets `extension_pages` to `script-src 'self'; object-src 'self'`. Firefox's MV3 default adds `upgrade-insecure-requests`, which rewrites `ws://localhost:8183` to `wss://` and stops the bridge connecting.
@@ -168,7 +177,7 @@ Each returns a small static HTML completion page with `Cache-Control: no-store` 
 
 ## Installed Extension Files
 
-The bundled manifest is currently `1.2.7`, and its `MIN_APP_VERSION` floor is `0.4.6`.
+The bundled manifest is `1.2.10` and targets wLib `0.4.8`.
 
 Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 
@@ -253,6 +262,21 @@ Extensions implementing download resolution send `can_resolve: true` in their
 `needs_permission`. Buzzheavier results also include `share_url` for the file request's Referer. The app sends `{ "type": "resolve_cancel", "id": "..." }` to cancel a pending resolve. Addresses retain their fragments. Resolve requests are
 serialized and time out after 30 seconds, extended to five minutes when user
 interaction is needed.
+
+The LewdCorner downloads switch requests the optional `webRequest` permission and
+is available while LewdCorner site access is enabled. The extension reports
+`can_resolve_lc` in `hello` and `status` when it holds both permissions. LC resolves
+share the two-second LC request gap when they start. The accepted URL is
+`https://lewdcorner.com/masked/out?…`. The resolve window comes forward for the
+user to pass the human check. After the user completes it, the extension can
+press the page's own Continue button. It reads the redirect from
+`/masked/continue` in the resolve tab, or the page's continue link if verification
+is unnecessary. The Buzzheavier share page continues in that same resolve with
+its own optional site permission.
+
+For thread parsing, wLib reads the visible link's `href`. The parser never reads
+`data-proxy-href` or requests `/proxy.php`. Verification answers, cookies, and
+mirror addresses are excluded from persistent app data and logs.
 
 ## LewdCorner
 

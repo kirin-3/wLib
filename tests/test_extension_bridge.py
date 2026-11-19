@@ -531,3 +531,179 @@ def test_lc_bridge_capability_is_independent_and_paced(monkeypatch):
         bridge._handle_message(conn, {"type": "status", "can_fetch_lc": False})
     assert not bridge.is_available(site="lc")
     assert bridge.is_available()
+
+
+def test_lc_resolve_requires_its_capability_and_shares_lc_pacing(monkeypatch):
+    starts = []
+    now = [10.0]
+    conn: BridgeConnection
+
+    def send(message):
+        request = json.loads(message)
+        if request["type"] == "fetch":
+            response = {"type": "fetch_result", "ok": True, "status": 200, "body": "<html>"}
+        else:
+            response = {"type": "resolve_result", "ok": True, "url": "https://mega.nz/file/abc#key"}
+        assert bridge._lc_request_lock.locked()
+        starts.append((request["type"], now[0]))
+        bridge._handle_message(conn, {**response, "id": request["id"]})
+
+    def sleep(delay):
+        now[0] += delay
+
+    conn = BridgeConnection(send)
+    bridge._register_connection(conn)
+    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch_lc": True, "can_resolve": True})
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(time, "sleep", sleep)
+    url = "https://lewdcorner.com/masked/out?t=fake"
+    with pytest.raises(BridgeUnavailable):
+        bridge.resolve(url, "mega", site="lc")
+    assert starts == []
+    assert bridge.fetch("https://lewdcorner.com/threads/1/", site="lc").status == 200
+    bridge._handle_message(conn, {"type": "status", "can_resolve_lc": True})
+    assert bridge.status_snapshot()["can_resolve_lc"]
+    assert bridge.resolve(url, "mega", site="lc")["url"] == "https://mega.nz/file/abc#key"
+    assert starts == [("fetch", 10.0), ("resolve", 12.0)]
+    assert not bridge._lc_request_lock.locked()
+    bridge._handle_message(conn, {"type": "status", "can_resolve_lc": False})
+    assert not bridge.status_snapshot()["can_resolve_lc"]
+
+
+LC_IMAGE = "https://lewdcorner.com/attachments/cover-webp.891912/"
+
+
+def _image_connection(answer=None, **hello):
+    """A connection whose extension answers fetch_image with ``answer(message)`` chunks."""
+    import base64
+
+    sent = []
+
+    def send(raw):
+        message = json.loads(raw)
+        sent.append(message)
+        if answer is None:
+            return
+        for chunk in answer(message):
+            if isinstance(chunk.get("data"), bytes):
+                chunk = {**chunk, "data": base64.b64encode(chunk["data"]).decode()}
+            bridge._handle_message(conn, {"type": "fetch_image_chunk", "id": message["id"], **chunk})
+
+    conn = BridgeConnection(send)
+    bridge._register_connection(conn)
+    bridge._handle_message(conn, {"type": "hello", "protocol": 2, **hello})
+    return conn, sent
+
+
+def _ok(data=b"img", **extra):
+    return {"index": 0, "ok": True, "status": 200, "content_type": "image/webp",
+            "final_url": LC_IMAGE, "data": data, "last": True, **extra}
+
+
+def test_lc_image_fetch_needs_its_flag():
+    older, older_sent = _image_connection(can_fetch_lc=True)
+    assert not bridge.can_fetch_lc_images()
+    with pytest.raises(BridgeUnavailable):
+        bridge.fetch_image(LC_IMAGE, background=False)
+    assert older_sent == []
+    assert bridge.status_snapshot()["can_fetch_lc_images"] is False
+    _newer, newer_sent = _image_connection(lambda _m: [_ok()], can_fetch_lc=True, can_fetch_lc_images=True)
+    answer = bridge.fetch_image(LC_IMAGE, background=False)
+    assert (answer.status, answer.content_type, answer.body) == (200, "image/webp", b"img")
+    assert newer_sent[0] == {"type": "fetch_image", "id": newer_sent[0]["id"], "url": LC_IMAGE}
+    assert older_sent == []
+    assert bridge.status_snapshot()["can_fetch_lc_images"] is True
+
+
+def test_lc_image_listener_runs_when_the_flag_turns_true():
+    calls = []
+    bridge.add_lc_images_listener(lambda: calls.append(1))
+    conn, _sent = _image_connection(can_fetch_lc=True)
+    assert calls == []
+    bridge._handle_message(conn, {"type": "status", "can_fetch_lc_images": True})
+    bridge._handle_message(conn, {"type": "status", "can_fetch_lc_images": True})
+    assert calls == [1]
+    _image_connection(can_fetch_lc_images=True)
+    assert calls == [1, 1]
+
+
+def test_lc_image_chunks_are_joined_and_checked(monkeypatch):
+    parts = [b"a" * 10, b"b" * 10, b"c" * 3]
+    _image_connection(lambda _m: [
+        _ok(parts[0], last=False),
+        {"index": 1, "data": parts[1], "last": False},
+        {"index": 2, "data": parts[2], "last": True},
+    ], can_fetch_lc_images=True)
+    assert bridge.fetch_image(LC_IMAGE, background=False).body == b"".join(parts)
+
+    bridge.reset_for_tests()
+    _image_connection(lambda _m: [_ok(last=False), {"index": 2, "data": b"x", "last": True}], can_fetch_lc_images=True)
+    with pytest.raises(BridgeFailed, match="chunk missing"):
+        bridge.fetch_image(LC_IMAGE, background=False)
+
+    bridge.reset_for_tests()
+    monkeypatch.setattr(bridge, "MAX_IMAGE_BYTES", 15)
+    _image_connection(lambda _m: [_ok(b"a" * 10, last=False), {"index": 1, "data": b"b" * 10, "last": True}], can_fetch_lc_images=True)
+    with pytest.raises(BridgeFailed, match="too_large"):
+        bridge.fetch_image(LC_IMAGE, background=False)
+
+    bridge.reset_for_tests()
+    _image_connection(lambda _m: [{"index": 0, "ok": False, "error": "refused", "last": True}], can_fetch_lc_images=True)
+    with pytest.raises(BridgeFailed, match="refused"):
+        bridge.fetch_image(LC_IMAGE, background=False)
+
+    bridge.reset_for_tests()
+    _image_connection(lambda _m: [_ok(b"", status=500, content_type="text/html")], can_fetch_lc_images=True)
+    answer = bridge.fetch_image(LC_IMAGE, background=False)
+    assert (answer.status, answer.content_type, answer.body) == (500, "text/html", b"")
+
+    bridge.reset_for_tests()
+    _image_connection(None, can_fetch_lc_images=True)
+    with pytest.raises(BridgeFailed, match="in time"):
+        bridge.fetch_image(LC_IMAGE, background=False, timeout=0.01)
+    assert bridge._pending_images == {}
+
+
+def test_background_lc_images_keep_their_gap_and_hourly_limit(monkeypatch):
+    now = [1000.0]
+    sends = []
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(bridge.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    bridge._lc_request_lock.timed_wait = lambda _cond, seconds: now.__setitem__(0, now[0] + seconds)
+    _image_connection(lambda _m: sends.append(now[0]) or [_ok()], can_fetch_lc_images=True)
+    for _ in range(3):
+        _ = bridge.fetch_image(LC_IMAGE, background=True)
+    assert sends == [1000.0, 1005.0, 1010.0]
+    # A foreground fetch keeps the normal 2 s gap.
+    _ = bridge.fetch_image(LC_IMAGE, background=False)
+    assert sends[-1] == 1012.0
+    now[0] = 2000.0
+    for _ in range(bridge.LC_BACKGROUND_PER_HOUR - 3):
+        _ = bridge.fetch_image(LC_IMAGE, background=True)
+    with pytest.raises(bridge.LcImageLimitReached):
+        bridge.fetch_image(LC_IMAGE, background=True)
+    count = len(sends)
+    now[0] = 1000.0 + 3600.5
+    _ = bridge.fetch_image(LC_IMAGE, background=True)
+    assert len(sends) == count + 1
+
+
+def test_foreground_lc_requests_go_before_waiting_background_images(monkeypatch):
+    monkeypatch.setattr(bridge, "LC_BACKGROUND_GAP_SECONDS", 0)
+    monkeypatch.setattr(bridge, "LC_GAP_SECONDS", 0)
+    order = []
+    _image_connection(lambda message: order.append(message["url"]) or [_ok()], can_fetch_lc_images=True)
+    gate = bridge._lc_request_lock
+    gate.acquire_foreground()  # another LC request in flight
+    background = threading.Thread(target=lambda: bridge.fetch_image("https://lewdcorner.com/attachments/bg.1/", background=True))
+    background.start()
+    time.sleep(0.05)
+    foreground = threading.Thread(target=lambda: bridge.fetch_image("https://lewdcorner.com/attachments/fg.2/", background=False))
+    foreground.start()
+    while gate._waiting_foreground == 0:
+        time.sleep(0.01)
+    gate.release()
+    foreground.join(5)
+    background.join(5)
+    assert order == ["https://lewdcorner.com/attachments/fg.2/", "https://lewdcorner.com/attachments/bg.1/"]
+    assert not gate.locked()

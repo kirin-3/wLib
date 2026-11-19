@@ -285,6 +285,27 @@ def lc_thread_entries(thread_ids: Sequence[str]) -> dict[str, dict[str, object]]
     return _catalog_thread_entries("lc", thread_ids)
 
 
+def lc_thread_tiers(thread_ids: Sequence[str]) -> dict[str, str]:
+    """The catalog tier of each LC thread that has one (a small read for library loads)."""
+    ids = sorted({int(value) for value in thread_ids if value.isascii() and value.isdigit()})
+    if not ids or database.get_setting("catalog_enabled") == "0":
+        return {}
+    path = Path(database.DB_PATH).parent / CATALOG_FILE
+    tiers: dict[str, str] = {}
+    try:
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+            for offset in range(0, len(ids), 500):
+                chunk = ids[offset:offset + 500]
+                rows = cast(list[tuple[object, object]], conn.execute(
+                    "SELECT thread_id, tier FROM lc_threads WHERE removed_at IS NULL "
+                    + f"AND thread_id IN ({','.join('?' for _ in chunk)})", chunk,
+                ).fetchall())
+                tiers.update({str(thread_id): str(tier) for thread_id, tier in rows if tier})
+    except (sqlite3.Error, OSError, ValueError):
+        return {}
+    return tiers
+
+
 def f95_thread_entries(thread_ids: Sequence[str]) -> dict[str, dict[str, object]]:
     return _catalog_thread_entries("f95", thread_ids)
 
@@ -373,23 +394,43 @@ def f95_thread_cover(thread_id: str) -> str:
     return cover if cover.startswith("https://") else ""
 
 
-def f95_thread_screenshots(thread_id: str) -> list[str] | None:
-    """Return the catalog list, or None when no readable catalog row exists."""
-    if not thread_id.isdigit():
-        return None
+def _thread_screenshots(table: str, thread_ids: Sequence[str]) -> dict[str, list[str]]:
+    """Catalog screenshot lists by thread ID; IDs without a readable row are left out."""
+    ids = sorted({int(thread_id) for thread_id in thread_ids if thread_id.isdigit()})
+    if not ids:
+        return {}
     path = Path(database.DB_PATH).parent / CATALOG_FILE
+    found: dict[str, list[str]] = {}
     try:
         if database.get_setting("catalog_enabled") == "0":
-            return None
+            return {}
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
-            row = cast(tuple[object] | None, conn.execute(
-                "SELECT screens FROM f95_threads WHERE thread_id = ?", (int(thread_id),)
-            ).fetchone())
+            for offset in range(0, len(ids), 500):
+                chunk = ids[offset : offset + 500]
+                rows = cast(list[tuple[object, object]], conn.execute(
+                    f"SELECT thread_id, screens FROM {table} WHERE thread_id IN ({','.join('?' for _ in chunk)})",
+                    chunk,
+                ).fetchall())
+                for thread_id, screens in rows:
+                    found[str(thread_id)] = [url for url in _strings(screens) if url.startswith("https://")]
     except (sqlite3.Error, OSError, ValueError):
-        return None
-    if row is None:
-        return None
-    return [url for url in _strings(row[0]) if url.startswith("https://")]
+        return {}
+    return found
+
+
+def f95_thread_screenshots(thread_id: str) -> list[str] | None:
+    """Return the catalog list, or None when no readable catalog row exists."""
+    return _thread_screenshots("f95_threads", [thread_id]).get(thread_id)
+
+
+def lc_thread_screenshots(thread_id: str) -> list[str] | None:
+    """The LC catalog's screenshot list, or None when no readable catalog row exists."""
+    return _thread_screenshots("lc_threads", [thread_id]).get(thread_id)
+
+
+def lc_threads_screenshots(thread_ids: Sequence[str]) -> dict[str, list[str]]:
+    """The LC catalog's screenshot lists for many threads (read-only)."""
+    return _thread_screenshots("lc_threads", thread_ids)
 
 
 def f95_thread_ratings(thread_ids: Sequence[int]) -> tuple[str, dict[int, float]]:

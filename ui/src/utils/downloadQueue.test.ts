@@ -285,3 +285,16 @@ test("install wording follows the current wishlist flag", () => {
   assert.equal(installLabel(job({ game_wishlisted: false })), "Install update");
   assert.equal(installLabel(job()), "Install update");
 });
+
+test("LewdCorner checks and failures appear under Needs you", () => {
+  const checking = job({source: {site: "lc"}, state: "attention", reason: "browser_check"});
+  const check = "Finish the LewdCorner check in your browser";
+  assert.equal(sectionOf(checking), "needs");
+  assert.equal(stateText(checking), check);
+  assert.match(failureInfo(checking).sentence, /Finish the LewdCorner check/);
+  const expired = job({source: {site: "lc"}, state: "attention", error_code: "check_timeout", error_text: check});
+  assert.equal(failureInfo(expired).sentence, check);
+  assert.ok(failureInfo(expired).actions.includes("retry"));
+  const signIn = "Sign in to LewdCorner in your browser";
+  assert.equal(failureInfo(job({error_code: "sign_in", error_text: signIn})).sentence, signIn);
+});

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { lcActive, normalizeLcThreadUrl, updateCheckUrl } from "../../utils/lewdcorner.ts";
-import type { ApiErrorResult, ArchiveInstallStatus, BepInExInstalled, BulkUpdateResultItem, CompanionTool, CompanionToolInput, GameRecord, GameToolEngine, GameToolsResponse, LaunchMode, LaunchTarget, LibraryBackupSection, LibrarySyncStatus, PlaySession, RenpyConsoleState, RenpyExtractOptions, StoreLink, UpdateStatusResponse } from "../api";
+import { defaultDownloadSite, downloadSites, lcActive, normalizeLcThreadUrl, updateCheckUrl } from "../../utils/lewdcorner.ts";
+import type { ApiErrorResult, ArchiveInstallStatus, BepInExInstalled, DownloadSite, BulkUpdateResultItem, CompanionTool, CompanionToolInput, GameRecord, GameToolEngine, GameToolsResponse, LaunchMode, LaunchTarget, LibraryBackupSection, LibrarySyncStatus, PlaySession, RenpyConsoleState, RenpyExtractOptions, StoreLink, UpdateStatusResponse } from "../api";
 import { LAUNCH_MODE_OPTIONS } from "../../utils/launchMode";
 import { hasAvailableUpdate, isUpdateSkipped, normalizeVersion } from "../../utils/libraryGames";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../../utils/platformPolicy";
@@ -35,6 +35,19 @@ interface MockToolRun {
   total: number;
   current: string;
   cancel: boolean;
+}
+
+
+// The backend hands out local addresses for LC screenshots (the wLib window
+// never loads lewdcorner.com); the mock uses the same form with a fake key.
+function mockScreenshotUrls(url: string): { thumb: string; full: string } {
+  if (/^https:\/\/(?:[^/]+\.)?lewdcorner\.com\//.test(url)) {
+    let hash = 0;
+    for (const char of url) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) >>> 0;
+    const local = `http://127.0.0.1:8183/lc-images/${hash.toString(16).padStart(8, "0").repeat(4)}`;
+    return { thumb: local, full: local };
+  }
+  return { thumb: url.replace("attachments.f95zone.to", "preview.f95zone.to"), full: url.replace("preview.f95zone.to", "attachments.f95zone.to") };
 }
 
 export class MockBackend {
@@ -324,7 +337,7 @@ export class MockBackend {
       case "get_game_screenshots": {
         const game = readMockGames().find(item => item.id === args[0]);
         const screenshots = game?.screenshots ?? [];
-        return { success: true, screenshots: screenshots.map(url => ({ thumb: url.replace("attachments.f95zone.to", "preview.f95zone.to"), full: url.replace("preview.f95zone.to", "attachments.f95zone.to") })), source: "catalog", in_catalog: !!game?.f95_url };
+        return { success: true, screenshots: screenshots.map(mockScreenshotUrls), source: "catalog", in_catalog: !!(game?.f95_url || game?.lc_url) };
       }
       case "get_games": {
         // get_all_games() embeds every game's additional targets in the same
@@ -1182,15 +1195,32 @@ export class MockBackend {
           engine_pending: pattern.includes("{engine}") && !String(options.engine || "").trim(),
         };
       }
-      case "get_update_download_links":
-        return {success:true, version:"v1.2", builds:[{label:"Windows/Linux",section:"",platform:"windows/linux",kind:"full",mirrors:[{link_id:"mock-pixeldrain",host:"pixeldrain",label:"Pixeldrain",part:"",split:false},{link_id:"mock-other",host:"gofile",label:"Gofile",part:"",split:false}]}]};
+      case "get_update_download_links": {
+        const game = readMockGames().find(item => item.id === args[0]);
+        if (!game) return {success:false, error:"Game not found"};
+        const sites = downloadSites(game, readMockSettings());
+        const site = args[1] || defaultDownloadSite(game, sites);
+        const option = sites.find(item => item.site === site);
+        if (!option) return {success:false, sites, error:"This game has no available thread for downloads"};
+        const prefix = site === "lc" ? "mock-lc" : "mock";
+        return {success:true, site, sites, version:option.version || "v1.2", builds:[{
+          label:"Windows/Linux", section:"", platform:"windows/linux", kind:"full",
+          mirrors:[
+            {link_id:`${prefix}-pixeldrain`,host:"pixeldrain",label:"Pixeldrain",part:"",split:false},
+            {link_id:`${prefix}-${site === "lc" ? "buzzheavier" : "gofile"}`,
+             host:site === "lc" ? "buzzheavier" : "gofile",label:site === "lc" ? "Buzzheavier" : "Gofile",part:"",split:false},
+          ],
+        }]};
+      }
       case "close_update_download_links":
         return {success:true};
       case "start_update_download": {
         const gameId = Number(args[0]);
         if (this._mockRunningGames.has(gameId)) return {success:false,error:"Close the game before downloading an update"};
-        const host = args[1] === "mock-mega" ? "mega" : "pixeldrain";
-        return this._mockDownloads.add("host", gameId, "v1.2", {label:"Windows/Linux",section:"",platform:"windows/linux",host,part:""}, typeof args[2] === "string" ? args[2] : null);
+        const link = String(args[1]);
+        const site: DownloadSite = link.startsWith("mock-lc-") ? "lc" : "f95";
+        const host = link.endsWith("-buzzheavier") ? "buzzheavier" : link.endsWith("-mega") ? "mega" : "pixeldrain";
+        return this._mockDownloads.add("host", gameId, "v1.2", {site,label:"Windows/Linux",section:"",platform:"windows/linux",host,part:""}, typeof args[2] === "string" ? args[2] : null);
       }
       case "get_download_queue":
         return this._mockDownloads.status(args[0] === true);
