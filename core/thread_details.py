@@ -44,8 +44,9 @@ def normalize_detail(field: str, value: object) -> str | list[str]:
         return text.strip()[:_MAX_TEXT_CHARS]
     items = _decoded(value)
     if field == "aliases" and isinstance(value, str) and not isinstance(items, list):
-        # Typed in the Info tab as "Alias one, Alias two".
-        items = value.split(",")
+        # Plain text holds one alias per line; a title such as "Hello, World"
+        # may contain commas, so never split on them.
+        items = value.splitlines()
     if not isinstance(items, list):
         return []
     cleaned: list[str] = []

@@ -52,6 +52,16 @@ export const linkLabel = (url: string): string => {
   return host.replace(/^www\./i, "");
 };
 
+// The Info tab edits aliases as one title per line; a title may hold commas.
+export const parseAliasLines = (text: string): string[] => [
+  ...new Set(
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean),
+  ),
+];
+
 // The Info tab edits links as one URL per line.
 export const parseLinkLines = (text: string): string[] => [
   ...new Set(

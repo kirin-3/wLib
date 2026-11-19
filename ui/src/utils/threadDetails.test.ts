@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { automaticTags, languageNames, linkLabel, parseLinkLines } from "./threadDetails.ts";
+import { automaticTags, languageNames, linkLabel, parseAliasLines, parseLinkLines } from "./threadDetails.ts";
 
 test("language names come from the free text", () => {
   const cases: [string, string[]][] = [
@@ -39,6 +39,10 @@ test("link lines keep http(s) URLs once, in order", () => {
     "https://a.test/1",
     "http://b.test",
   ]);
+});
+
+test("alias lines keep commas inside one title", () => {
+  assert.deepEqual(parseAliasLines(" Hello, World \n\nOther\r\nHello, World"), ["Hello, World", "Other"]);
 });
 
 test("automatic tags come from the developer and the language", () => {

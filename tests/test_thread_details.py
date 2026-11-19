@@ -127,12 +127,12 @@ def test_update_game_cleans_the_fields_and_a_new_thread_clears_them():
     applied = database.update_game(
         game_id,
         {
-            "aliases": "One, Two ,One",
+            "aliases": "Hello, World\n Two \nHello, World",
             "external_links": ["https://itch.io/x", "not a link", "https://itch.io/x"],
             "overview": "  Text  ",
         },
     )
-    assert applied["aliases"] == ["One", "Two"]
+    assert applied["aliases"] == ["Hello, World", "Two"]
     assert applied["external_links"] == ["https://itch.io/x"]
     assert _row(game_id)["overview"] == "Text"
     _ = database.update_game(game_id, {"f95_url": "https://f95zone.to/threads/2/"})

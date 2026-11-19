@@ -447,8 +447,8 @@ export class MockBackend {
           if (game.id !== Number(args[0])) return game;
           const merged: Record<string, unknown> = { ...game, ...fields };
           if (typeof fields.aliases === "string") {
-            // Mirrors the backend: the Info tab sends aliases as one comma list.
-            merged.aliases = [...new Set(fields.aliases.split(",").map((alias) => alias.trim()).filter(Boolean))];
+            // Mirrors the backend: plain alias text holds one title per line.
+            merged.aliases = [...new Set(fields.aliases.split(/\r?\n/).map((alias) => alias.trim()).filter(Boolean))];
           }
           if (fields.version != null && normalizeVersion(String(fields.version)) !== normalizeVersion(game.version)) {
             merged.skipped_version = "";

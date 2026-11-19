@@ -53,7 +53,7 @@ import { useModalKeyboard } from "../../utils/modalKeyboard";
 import ScreenshotLightbox from "../ScreenshotLightbox.vue";
 import { displayScreenshots, screenshotUrls, type ScreenshotUrls } from "../../utils/screenshots";
 import { defaultTargetLabel, hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion } from "../../utils/libraryGames";
-import { LANGUAGE_TAG_PREFIX, languageNames, linkLabel, parseLinkLines } from "../../utils/threadDetails";
+import { LANGUAGE_TAG_PREFIX, languageNames, linkLabel, parseAliasLines, parseLinkLines } from "../../utils/threadDetails";
 import type {
   GameAttachment,
   NoteLink,
@@ -197,7 +197,7 @@ const primaryPage = computed(() => gamePageUrl({
 }));
 const version = ref("");
 const developer = ref("");
-// F95 first-post details; aliases edit as one comma list, links one URL per line.
+// F95 first-post details; aliases and links edit one per line (titles can hold commas).
 const overview = ref("");
 const originalTitle = ref("");
 const aliasesText = ref("");
@@ -797,7 +797,7 @@ const gameFormValues = (g: GameRecord): Record<string, unknown> => ({
   developer: g.developer || "",
   overview: g.overview || "",
   original_title: g.original_title || "",
-  aliases: (g.aliases || []).join(", "),
+  aliases: (g.aliases || []).join("\n"),
   language: g.language || "",
   external_links: (g.external_links || []).join("\n"),
   finished_version: g.finished_version || "",
@@ -928,7 +928,7 @@ watch(
         developer.value = g.developer || "";
         overview.value = g.overview || "";
         originalTitle.value = g.original_title || "";
-        aliasesText.value = (g.aliases || []).join(", ");
+        aliasesText.value = (g.aliases || []).join("\n");
         language.value = g.language || "";
         linksText.value = (g.external_links || []).join("\n");
         finishedVersion.value = g.finished_version || "";
@@ -1817,7 +1817,7 @@ const save = async () => {
       developer: developer.value.trim(),
       overview: overview.value.trim(),
       original_title: originalTitle.value.trim(),
-      aliases: aliasesText.value,
+      aliases: parseAliasLines(aliasesText.value),
       language: language.value.trim(),
       external_links: parseLinkLines(linksText.value),
       finished_version: finishedVersion.value,
@@ -3206,7 +3206,7 @@ const removeAttachment = async (name: string) => {
 
             <div class="col-span-2">
               <label for="detail-aliases" class="modal-label">Aliases</label>
-              <input v-model="aliasesText" id="detail-aliases" type="text" placeholder="Other titles, separated by commas" class="modal-input w-full" />
+              <textarea v-model="aliasesText" id="detail-aliases" rows="2" placeholder="Other titles, one per line" class="modal-input w-full" />
             </div>
 
             <div class="col-span-2">
