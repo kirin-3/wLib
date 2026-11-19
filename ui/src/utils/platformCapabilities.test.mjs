@@ -148,3 +148,26 @@ test("concurrent readers share one in-flight request", async () => {
     delete globalThis.localStorage;
   }
 });
+
+test("a mock answer is not cached when the bridge arrives during the call", async () => {
+  setupGlobals();
+  // The app starts with an empty pywebview api; the browser mock answers.
+  globalThis.window.pywebview = { api: {} };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const mod = await server.ssrLoadModule("/src/utils/platformCapabilities.ts");
+    const early = mod.loadPlatformCapabilities();
+    // pywebview injects the real API while the mock backend still loads.
+    globalThis.window.pywebview.api.get_platform_capabilities = async () => LINUX_CAPABILITIES;
+    assert.equal((await early).runtime_installers, false);
+
+    const later = await mod.loadPlatformCapabilities();
+    assert.equal(later.runtime_installers, true);
+    assert.equal(later.platform, "linux");
+    mod.resetPlatformCapabilitiesForTests();
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});

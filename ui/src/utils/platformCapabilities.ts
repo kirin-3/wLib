@@ -10,15 +10,23 @@ let pendingCapabilities: Promise<PlatformCapabilities> | null = null;
 
 export const loadPlatformCapabilities = async (): Promise<PlatformCapabilities> => {
   if (cachedCapabilities) return cachedCapabilities;
+  // Called before pywebview injects its API (window.pywebview.api starts out
+  // empty), invoke() returns the browser mock; never cache or share that, or
+  // Wine/Proton stay hidden for the whole session. Decide before the call: the
+  // mock answer waits on a dynamic import, and the bridge can arrive meanwhile.
+  const fromBridge = !!window.pywebview?.api?.get_platform_capabilities;
+  if (!fromBridge) {
+    return api.getPlatformCapabilities().catch((error: unknown) => {
+      console.error("Failed to load platform capabilities", error);
+      return conservativePlatformCapabilities();
+    });
+  }
   if (pendingCapabilities) return pendingCapabilities;
 
   pendingCapabilities = api
     .getPlatformCapabilities()
     .then((capabilities) => {
-      // Called before pywebview injects its API (window.pywebview.api starts out
-      // empty), invoke() returns the browser mock; don't cache that or
-      // Wine/Proton stay hidden for the whole session.
-      if (window.pywebview?.api?.get_platform_capabilities) cachedCapabilities = capabilities;
+      cachedCapabilities = capabilities;
       return capabilities;
     })
     .catch((error: unknown) => {

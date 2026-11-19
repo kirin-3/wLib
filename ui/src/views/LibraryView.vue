@@ -928,7 +928,9 @@ const eligibleUpdates = computed(() => selectedGames.value.filter((game) => hasA
 const eligibleChecks = computed(() => selectedGames.value.filter(updateCheckUrl));
 const eligibleF95Refreshes = computed(() => selectedGames.value.filter((game) => !!game.f95_url));
 onMounted(() => {
-  void loadPlatformCapabilities().then((capabilities) => { bulkShowRuntime.value = capabilities.platform === "linux"; });
+  onWebviewReady(() => {
+    void loadPlatformCapabilities().then((capabilities) => { bulkShowRuntime.value = capabilities.platform === "linux"; });
+  });
 });
 type BulkUpdate = (id: number, fields: Record<string, unknown>) => Promise<{ success?: boolean | undefined; error?: string | undefined }>;
 const bulkUpdate: BulkUpdate = (id, fields) => api.updateGame(id, fields);
