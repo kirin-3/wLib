@@ -44,8 +44,25 @@
     if (!/^\/latest-updates\/?$/i.test(location.pathname)) return;
 
     let scheduled = false;
+    let retryTimer = 0;
+    let retryDelay = 5000;
     const selector = 'article.lcCard[data-card-id]';
     const badgeSelector = '.wlib-library-badge';
+    const addBadge = (tile, id) => {
+        const badge = document.createElement('span');
+        badge.className = 'wlib-library-badge';
+        badge.dataset.wlibId = id;
+        badge.textContent = 'In wLib';
+        // LC's image strip (.lcCardMedia, z-index 4) covers anything placed
+        // on the card itself. It is already positioned, and its menu must
+        // not be clipped, so it gets the badge without the host class.
+        const media = tile.querySelector('.lcCardMedia');
+        if (media) media.append(badge);
+        else {
+            tile.classList.add('wlib-badge-host');
+            tile.append(badge);
+        }
+    };
     function scan() {
         scheduled = false;
         const tiles = new Map();
@@ -55,33 +72,47 @@
             if (!tiles.has(id)) tiles.set(id, []);
             tiles.get(id).push(tile);
             tile.dataset.wlibChecked = id;
-            tile.querySelector(badgeSelector)?.remove();
+            // A reused card keeps the badge of its old game; drop only that one.
+            // The badge of the same game stays until the check answers.
+            const badge = tile.querySelector(badgeSelector);
+            if (badge && badge.dataset.wlibId !== id) badge.remove();
         }
         if (!tiles.size) return;
+        // A failed check unmarks its tiles so a later scan asks again.
+        const failed = () => {
+            for (const [id, matchingTiles] of tiles) {
+                for (const tile of matchingTiles) {
+                    if (tile.dataset.wlibChecked === id) delete tile.dataset.wlibChecked;
+                }
+            }
+            if (!retryTimer) {
+                retryTimer = setTimeout(() => {
+                    retryTimer = 0;
+                    scan();
+                }, retryDelay);
+                retryDelay = Math.min(retryDelay * 2, 60000);
+            }
+        };
         try {
             chrome.runtime.sendMessage({action:'checkLewdCornerThreads',threadIds:[...tiles.keys()]}, response => {
-                if (chrome.runtime.lastError || !response?.success) return;
+                if (chrome.runtime.lastError || !response?.success) {
+                    failed();
+                    return;
+                }
+                retryDelay = 5000;
                 for (const [id, matchingTiles] of tiles) {
-                    if (!Object.hasOwn(response.matches, threadUrl(id))) continue;
+                    const inLibrary = Object.hasOwn(response.matches, threadUrl(id));
                     for (const tile of matchingTiles) {
-                        if (!tile.isConnected || tile.dataset.cardId !== id || tile.querySelector(badgeSelector)) continue;
-                        const badge = document.createElement('span');
-                        badge.className = 'wlib-library-badge';
-                        badge.textContent = 'In wLib';
-                        // LC's image strip (.lcCardMedia, z-index 4) covers anything placed
-                        // on the card itself. It is already positioned, and its menu must
-                        // not be clipped, so it gets the badge without the host class.
-                        const media = tile.querySelector('.lcCardMedia');
-                        if (media) media.append(badge);
-                        else {
-                            tile.classList.add('wlib-badge-host');
-                            tile.append(badge);
-                        }
+                        if (!tile.isConnected || tile.dataset.cardId !== id) continue;
+                        const badge = tile.querySelector(badgeSelector);
+                        if (!inLibrary) badge?.remove();
+                        else if (!badge) addBadge(tile, id);
                     }
                 }
             });
         } catch {
             // The extension may have been reloaded while the page was open.
+            failed();
         }
     }
 
