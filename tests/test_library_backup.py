@@ -79,6 +79,46 @@ def test_sandbox_backup_exports_preferences_without_storage(tmp_path, monkeypatc
     assert "sandbox_enabled" not in json.dumps(sync)
 
 
+def test_locale_emulator_path_is_a_path_setting():
+    update_setting("locale_emulator_path", r"D:\Tools\LE\LEProc.exe")
+    backup = build_library_backup({"sections": [SECTION_SETTINGS_PATHS]})
+    assert backup["settings"]["paths"]["locale_emulator_path"] == r"D:\Tools\LE\LEProc.exe"
+    sync = build_sync_backup("2026-11-19T00:00:00Z", "test-device")
+    assert "locale_emulator_path" not in json.dumps(sync)
+
+
+def _locale_emulator_backup(tmp_path):
+    return write_backup(
+        tmp_path / "locale.json",
+        {
+            **base_backup([]),
+            "settings": {"paths": {"locale_emulator_path": r"D:\Tools\LE\LEProc.exe"}},
+        },
+    )
+
+
+def test_locale_emulator_path_import_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.library_backup.is_windows", lambda: True)
+    update_setting("locale_emulator_path", "")
+    path = _locale_emulator_backup(tmp_path)
+    assert Api().import_library_backup(str(path))["success"]
+    assert get_setting("locale_emulator_path") == r"D:\Tools\LE\LEProc.exe"
+
+
+def test_locale_emulator_path_import_on_linux_is_skipped(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.library_backup.is_windows", lambda: False)
+    update_setting("locale_emulator_path", "local-value")
+    path = _locale_emulator_backup(tmp_path)
+    api = Api()
+    inspection = api.inspect_library_backup(str(path))
+    assert any(
+        warning["type"] == "foreign_path" and warning["field"] == "locale_emulator_path"
+        for warning in inspection["warnings"]
+    )
+    assert api.import_library_backup(str(path))["success"]
+    assert get_setting("locale_emulator_path") == "local-value"
+
+
 @pytest.mark.parametrize("stored", [False, True])
 def test_old_backup_preserves_local_sandbox_preference(stored):
     add_game("Existing", "/game", sandbox_enabled=stored)

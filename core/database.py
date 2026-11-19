@@ -1118,6 +1118,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandboxie_custom_path', '')"
     )
     _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('locale_emulator_path', '')"
+    )
+    _ = cursor.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_update_check', 'weekly')"
     )
     _ = cursor.execute(

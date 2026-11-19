@@ -9,6 +9,7 @@ test("capability fallback exposes no platform-specific mutation actions", () => 
 
   assert.equal(capabilities.platform, "unsupported");
   assert.equal(capabilities.wine_proton, false);
+  assert.equal(capabilities.japanese_locale, false);
   assert.equal(capabilities.runtime_installers, false);
   assert.equal(capabilities.wayland, false);
   assert.equal(capabilities.rpgmaker_linux, false);

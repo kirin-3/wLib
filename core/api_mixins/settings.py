@@ -97,6 +97,7 @@ class SettingsMixin(ApiBase):
             **self._torrent_settings_payload(),
             **self._download_queue_settings_payload(),
             "sandboxie_custom_path": str(get_setting_fn("sandboxie_custom_path") or ""),
+            "locale_emulator_path": str(get_setting_fn("locale_emulator_path") or ""),
             "update_notifications": get_setting_fn("update_notifications") != "off",
             "rpgmaker_linux_runner_path": rpgmaker_linux_runner_path,
             "rpgmaker_linux_runner_status": self.launcher.get_rpgmaker_linux_runner_status(
@@ -438,6 +439,7 @@ class SettingsMixin(ApiBase):
             "downloads_folder",
             RPGMAKER_LINUX_RUNNER_SETTING,
             "sandboxie_custom_path",
+            "locale_emulator_path",
         ):
             if key in settings_map:
                 value = settings_map[key]
@@ -456,6 +458,13 @@ class SettingsMixin(ApiBase):
                     "success": False,
                     "error": "Choose the Sandboxie Start.exe executable.",
                 }
+
+        if "locale_emulator_path" in settings_map:
+            from core import locale_emulator
+
+            custom = str(settings_map.get("locale_emulator_path") or "").strip()
+            if custom and not locale_emulator.is_leproc_path(custom):
+                return {"success": False, "error": locale_emulator.WRONG_FILE_ERROR}
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
         # Collect every write and commit them together, so a locked database
@@ -507,6 +516,11 @@ class SettingsMixin(ApiBase):
                 update_setting_fn(
                     "sandboxie_custom_path",
                     str(settings_map["sandboxie_custom_path"] or "").strip(),
+                )
+            if "locale_emulator_path" in settings_map:
+                update_setting_fn(
+                    "locale_emulator_path",
+                    str(settings_map["locale_emulator_path"] or "").strip(),
                 )
             if "update_notifications" in settings_map:
                 update_setting_fn(

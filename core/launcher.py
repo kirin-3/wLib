@@ -28,7 +28,7 @@ from .database import (
     split_companion_arguments,
     web_player_devtools_enabled,
 )
-from . import display_info, game_sandbox
+from . import display_info, game_sandbox, locale_emulator
 from . import gamescope as gamescope_mod
 from .gamescope import GamescopeOptions
 from .host_platform import (
@@ -2358,7 +2358,45 @@ class Launcher:
         if is_windows():
             process_env = build_host_tool_env(env)
             if ext == ".exe":
-                return execute_process(build_command([exe_path], args), process_env)
+                if not run_japanese_locale:
+                    return execute_process(build_command([exe_path], args), process_env)
+                # Checked before execute_process, so a refusal creates no
+                # running entry, job or playtime.
+                le_status = locale_emulator.get_status()
+                if le_status["status"] != "ready":
+                    return {
+                        "success": False,
+                        "code": "locale_emulator_missing",
+                        "error": (
+                            "Locale Emulator is not set up: "
+                            + le_status["reason"]
+                            + " Set it up in Settings > Windows tools, or turn off "
+                            + "Run with Locale Emulator for this game."
+                        ),
+                    }
+                print(f"Starting through Locale Emulator: {le_status['path']}")
+                if "%command%" in args:
+                    # Game arguments after %command% go through LEProc.exe;
+                    # the ones before it are the user's own wrappers.
+                    split = args.index("%command%")
+                    wrapped = locale_emulator.wrap_command(
+                        le_status["path"], [exe_path, *args[split + 1 :]]
+                    )
+                    command = build_command(wrapped, [*args[:split], "%command%"])
+                else:
+                    command = locale_emulator.wrap_command(
+                        le_status["path"], [exe_path, *args]
+                    )
+                return execute_process(command, process_env)
+            if run_japanese_locale:
+                kind = (
+                    "HTML" if ext in (".html", ".htm")
+                    else "web player" if web_kind == "builtin"
+                    else ext
+                )
+                note = f"Locale Emulator skipped: {kind} targets are not supported"
+                performance_notes.append(note)
+                print(note)
             if ext in (".bat", ".cmd"):
                 command_processor = os.environ.get("COMSPEC") or "cmd.exe"
                 base_command = [

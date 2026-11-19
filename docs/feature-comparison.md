@@ -84,7 +84,7 @@ Snapshot from 2026-11-16: wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f
 | Proton / umu-launcher | ✅ umu, Proton-GE download | ✅ umu, GE-Proton/umu-proton download | ⚠️ manual wrapper | ❌ |
 | Native Linux runs of Windows builds | ✅ RPGM runner, NW.js fixes | ⚠️ EasyRPG | ❌ | ✅ mkxp-z, Ren'Py SDK, NW.js conversion |
 | Other runtimes | Java, built-in HTML player, Flash/Ruffle | Java, HTML player, Flash/Ruffle, DOSBox, ScummVM | Per-extension emulator mapping | ❌ |
-| Japanese locale | ✅ | ✅ Locale Emulator | ❌ | ❌ |
+| Japanese locale | ✅ Wine/Proton locale on Linux, Locale Emulator on Windows | ✅ Locale Emulator | ❌ | ❌ |
 | Winecfg / Winetricks / runtime installs | ✅ | ❌ | ❌ | ❌ |
 | GameMode / MangoHud | ✅ (+ gamescope) | ❌ | ❌ | ❌ |
 | Sandbox | ✅ bubblewrap, Sandboxie-Plus | ⚠️ Sandboxie (Windows) | ❌ | ✅ bubblewrap, Sandboxie |

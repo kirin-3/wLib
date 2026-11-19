@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { defaultDownloadSite, downloadSites, lcActive, normalizeLcThreadUrl, updateCheckUrl } from "../../utils/lewdcorner.ts";
-import type { ApiErrorResult, ArchiveInstallStatus, BepInExInstalled, DownloadSite, BulkUpdateResultItem, CompanionTool, CompanionToolInput, GameRecord, GameToolEngine, GameToolsResponse, LaunchMode, LaunchTarget, LibraryBackupSection, LibrarySyncStatus, PlaySession, RenpyConsoleState, RenpyExtractOptions, StoreLink, UpdateStatusResponse } from "../api";
+import type { ApiErrorResult, ArchiveInstallStatus, BepInExInstalled, DownloadSite, BulkUpdateResultItem, CompanionTool, CompanionToolInput, GameRecord, GameToolEngine, GameToolsResponse, LaunchMode, LaunchTarget, LibraryBackupSection, LocaleEmulatorStatus, LibrarySyncStatus, PlaySession, RenpyConsoleState, RenpyExtractOptions, StoreLink, UpdateStatusResponse } from "../api";
 import { LAUNCH_MODE_OPTIONS } from "../../utils/launchMode";
 import { hasAvailableUpdate, isUpdateSkipped, normalizeVersion } from "../../utils/libraryGames";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../../utils/platformPolicy";
@@ -41,6 +41,24 @@ interface MockToolRun {
 
 // The backend hands out local addresses for LC screenshots (the wLib window
 // never loads lewdcorner.com); the mock uses the same form with a fake key.
+const mockBasename = (path: string): string => path.split(/[\\/]/).pop() ?? "";
+
+/** Mock rule: a saved path is found unless it names "missing"; with no path,
+ * auto-detection finds Locale Emulator only when `wlib-mock-locale-emulator`
+ * is "installed". */
+const mockLocaleEmulatorStatus = (saved: string): LocaleEmulatorStatus => {
+  const path = saved.trim();
+  if (path) {
+    return path.toLowerCase().includes("missing")
+      ? { status: "missing", path, reason: `Locale Emulator was not found at ${path}.` }
+      : { status: "ready", path, reason: "" };
+  }
+  if (localStorage.getItem("wlib-mock-locale-emulator") === "installed") {
+    return { status: "ready", path: "C:\\Program Files\\Locale Emulator\\LEProc.exe", reason: "" };
+  }
+  return { status: "missing", path: "", reason: "Locale Emulator is not installed, or LEProc.exe could not be found." };
+};
+
 function mockScreenshotUrls(url: string): { thumb: string; full: string } {
   if (/^https:\/\/(?:[^/]+\.)?lewdcorner\.com\//.test(url)) {
     let hash = 0;
@@ -474,6 +492,13 @@ export class MockBackend {
         if (this._mockRunningGames.has(gameId)) return { success: false, code: "already_running", error: "Game is already running" };
         const game = readMockGames().find(game => game.id === gameId);
         const mode = args[8] || "auto";
+        // Windows mock: an .exe with the Japanese locale option needs Locale Emulator.
+        if (localStorage.getItem("wlib-mock-platform") === "windows" && args[3] && /\.exe$/i.test(String(args[1]))) {
+          const locale = mockLocaleEmulatorStatus(readMockSettings().locale_emulator_path);
+          if (locale.status !== "ready") {
+            return { success: false, code: "locale_emulator_missing", error: `Locale Emulator is not set up: ${locale.reason} Set it up in Settings > Windows tools, or turn off Run with Locale Emulator for this game.` };
+          }
+        }
         if (!game?.sandbox_enabled && (mode === "wine_proton" || (mode === "auto" && /\.(exe|bat)$/i.test(String(args[1]))))) this._mockCompanionWine.add(gameId);
         else this._mockCompanionWine.delete(gameId);
         // Only system-browser launches have no process to track.
@@ -802,6 +827,14 @@ export class MockBackend {
           if (error) return { success: false, error };
           const removed = readMockSettings().custom_play_statuses.filter((name) => !(payload.custom_play_statuses as string[]).includes(name));
           localStorage.setItem("wlib-mock-games", JSON.stringify(readMockGames().map((game) => removed.some((name) => name.toLowerCase() === game.play_status?.toLowerCase()) ? { ...game, play_status: "Not Started" } : game)));
+        }
+        if (Object.prototype.hasOwnProperty.call(payload, "locale_emulator_path")) {
+          const path = typeof payload.locale_emulator_path === "string" ? payload.locale_emulator_path.trim() : null;
+          if (path === null) return { success: false, error: "Setting 'locale_emulator_path' must be a string" };
+          if (path && mockBasename(path).toLowerCase() !== "leproc.exe") {
+            return { success: false, error: "Choose the Locale Emulator LEProc.exe executable." };
+          }
+          payload.locale_emulator_path = path;
         }
         if (Object.prototype.hasOwnProperty.call(payload, "torrent_watch_folder")) {
           const watch = typeof payload.torrent_watch_folder === "string" ? payload.torrent_watch_folder.trim() : null;
@@ -1565,6 +1598,9 @@ export class MockBackend {
       case "get_sandbox_status":
       case "recheck_sandbox_status":
         return { status: "missing", tool: "bwrap", path: "", version: "", reason: "Sandbox tools require the desktop app." };
+      case "get_locale_emulator_status":
+      case "recheck_locale_emulator_status":
+        return mockLocaleEmulatorStatus(readMockSettings().locale_emulator_path);
       case "get_sandbox_install_info":
         return { platform: "linux", tool: "bwrap", command: "sudo pacman -S bubblewrap", can_install: false, pkexec_available: false, download_url: "https://github.com/containers/bubblewrap", package_manager: "pacman" };
       case "get_sandbox_install_status":
@@ -1594,8 +1630,13 @@ export class MockBackend {
       case "get_platform_capabilities":
         if (localStorage.getItem("wlib-mock-platform") === "linux") return {
           ...CONSERVATIVE_PLATFORM_CAPABILITIES, platform: "linux", sandbox: "bwrap", wine_proton: true,
+          japanese_locale: true,
           runtime_installers: true, wayland: true, rpgmaker_linux: true, cheat_engine_injection: true, companion_tools: true,
           launch_modes: LAUNCH_MODE_OPTIONS.map((option) => option.value),
+        };
+        if (localStorage.getItem("wlib-mock-platform") === "windows") return {
+          ...CONSERVATIVE_PLATFORM_CAPABILITIES, platform: "windows", sandbox: "sandboxie",
+          native_windows_launch: true, japanese_locale: true,
         };
         return { ...CONSERVATIVE_PLATFORM_CAPABILITIES };
       case "get_system_deps_command":

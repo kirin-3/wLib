@@ -418,6 +418,37 @@ report actual changes; host installation and folder opening remain unavailable
 in a normal browser.
 
 
+## Windows tools (Locale Emulator)
+
+On Windows, Settings shows a **Windows tools** section (`#windows-tools`,
+`LocaleEmulatorSettings.vue`) in place of the Wine / Proton section. Linux
+and other hosts keep the Wine / Proton (or Platform Environment) section and
+never show Windows tools. The section holds the note that Windows games launch
+directly, and the Locale Emulator row: the status line ("Detected — <path>" or
+"Not detected. <reason>") with **Check again** (`recheckLocaleEmulatorStatus`),
+**Open official page** (`https://github.com/xupefei/Locale-Emulator/releases`
+through `openInBrowser`), **Choose LEProc.exe** (`browseFile`) and **Clear**.
+A chosen path saves with `saveSettings({ locale_emulator_path })` and then
+rechecks (`saveLocaleEmulatorPath` in `utils/localeEmulator.ts`); a wrong file
+shows the backend error "Choose the Locale Emulator LEProc.exe executable." in
+an error toast. The settings search finds the section with "windows", "locale",
+"japanese", "emulator" or "leproc".
+
+Game Detail's Launch tab shows the per-game Japanese locale toggle when the
+`japanese_locale` capability is true (Linux and Windows) and saves it on both
+save paths. `japaneseLocaleSwitchState(platform, status, enabled)` gives the
+label ("Run with Japanese locale" on Linux, "Run with Locale Emulator" on
+Windows), the disabled state and the note. On Windows the modal loads
+`getLocaleEmulatorStatus()` when it opens. While Locale Emulator is not
+detected the toggle is disabled when off, and stays enabled when on, so a game
+set on Linux can turn it off; the note "Locale Emulator is not detected." has a
+**Set up** link to `/settings#windows-tools`. A launch that fails with
+`locale_emulator_missing` shows an error toast with **Open Windows tools**
+(`localeEmulatorLaunchError`). The browser mock reports Locale Emulator as
+missing until a `LEProc.exe` path is saved (a path with "missing" in it stays
+missing), or when `localStorage["wlib-mock-locale-emulator"]` is `"installed"`;
+`wlib-mock-platform = "windows"` gives Windows capabilities.
+
 ## Game catalog
 
 Settings includes `CatalogSettings.vue` after Sandbox, at `/settings#catalog`.

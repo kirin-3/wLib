@@ -299,7 +299,8 @@ This module serializes and imports semantic library backups without copying the 
 
 ### `core/launcher.py` (Process Management)
 This module handles native host launching and Linux compatibility runtimes.
-- **Environment Overrides (Linux)**: Per-game Japanese locale and Wayland settings modify the `env` dictionary passed to `subprocess`. Windows ignores these flags and removes Wine/Proton environment variables from native launch environments.
+- **Environment Overrides (Linux)**: Per-game Japanese locale and Wayland settings modify the `env` dictionary passed to `subprocess`. Windows ignores the Wayland flag and removes Wine/Proton environment variables from native launch environments.
+- **Japanese locale on Windows (Locale Emulator)**: With `run_japanese_locale` on, a Windows `.exe` target starts as `[LEProc.exe, game.exe, *args]` (`locale_emulator.wrap_command`) with the game folder as the working directory. `LEProc.exe` joins the arguments after the game path with plain spaces, so each argument that is empty or has a space, tab or `"` is quoted once more with `subprocess.list2cmdline`; the game gets the original argument boundaries. With `%command%`, the arguments before it stay the user's wrappers and the arguments after it go through `LEProc.exe`. The Sandboxie wrap puts `Start.exe /box:<box>` in front of this command. `locale_emulator.get_status()` is checked first: when it is not `ready`, the launch returns `{success: false, code: "locale_emulator_missing", error}` (the error points to Settings > Windows tools) before any process, running entry, job or playtime exists. `.bat`, `.cmd`, `.jar`, HTML and built-in web player targets do not use Locale Emulator and do not check for it; the line `Locale Emulator skipped: <kind> targets are not supported` goes to the app log and the debug launch log. `LEProc.exe` starts inside the game's Job Object and the game it starts stays in that job, so playtime, the running state and Stop follow the game (VM check: `LEProc.exe` waits for the game; an elevated game relaunches `LEProc.exe` through UAC and still ends up in the job). Alternate launch targets get the same behavior through `core/game_launch.py`.
 - **Launch Modes**: Windows exposes `auto`: `.exe` runs directly, `.bat`/`.cmd` uses `cmd.exe`, `.jar` uses `java -jar` with Java on `PATH`, and `.html`/`.htm` opens in the default browser. Linux additionally supports `native`, `wine_proton`, `rpgmaker_linux`, and `custom`. Custom Command uses `command_line_args` as the full command, substitutes `%command%` tokens with the absolute target, and runs in the game folder with a clean host environment. Leading `NAME=value` assignments are applied without a shell. Empty commands are rejected. Windows command-line arguments use Windows quoting rules.
 - **Built-in Web Player**: `resolve_web_player()` in `core/web_launch.py` (re-exported by `core/game_launch.py`) decides whether an `.html`/`.htm`/`.swf` target opens in the built-in player or the system browser (`.swf` is always built-in; HTML follows the per-game `html_player` value, then the `html_builtin_player` setting, which reads as on when absent; Wine/Proton, Custom Command and the RPGMaker runner on Linux are not web launches). The built-in player is the wLib binary in a `--play-web --root <game dir> --entry <relative path> --profile <storage dir> --title <title> [--flash] [--offline] [--links open|ignore] [--devtools] [--sandboxed]` mode (`core/web_player.py`, dispatched from `main.py` before `core.api` loads) and runs through `execute_process`, so the sandbox, No internet, GameMode/MangoHud, playtime, running state and Stop apply. It serves the game at `wlib-game://game/` (one stable origin per game, with a per-game QtWebEngine profile in `<data dir>/web-player/<id>/`, outside the sandbox home) and bundled Ruffle at `wlib-game://ruffle/` (`ui/dist/ruffle/`). When a requested path does not exist exactly, `resolve_under_root()` looks it up again with each folder and file name matched by `lower()` (exact names first, then variants in sorted order, going back to try the next folder variant when one has no match; at most 64 path parts and 256 tries; folder lists are cached per folder mtime; parts with a Windows drive such as `C:` are refused), so games made on Windows work on case-sensitive file systems; the root and symlink-escape checks still apply. Sandboxed launches bind the profile folder read-write and wLib's own files read-only, and set `QTWEBENGINE_DISABLE_SANDBOX=1`; `--offline` also blocks `http(s)`/`ws(s)` requests inside the player, and sandboxed or offline players drop external links (otherwise they open in the system browser). In Flatpak the player runs inside the app (not through `flatpak-spawn --host`); sandboxed launches use `flatpak-spawn --sandbox` with only the game and profile folders exposed. The first built-in launch of an HTML game that follows the default returns `notice: "html_player_first_use"` once (device-local `html_player_notice_shown`). The launcher adds `--devtools` when `web_player_devtools_enabled()` is true (`web_player_devtools` setting, absent reads as on); the flag reaches sandboxed and Flatpak launches inside the player argv. With it, F12 toggles a DevTools pane: the player window is a horizontal `QSplitter` holding the game view and, after the first F12, a DevTools view (`page.setDevToolsPage`) that uses the game's own profile, loads only `devtools://` pages and sends other links through the same link rules as the game. Fullscreen applies to the splitter, so the pane stays as it is. The Ruffle bootstrap is a script on the game page only, so it never runs in DevTools. Without the flag, F12 goes to the game and the context menu has no "Inspect". Removed games' player storage moves to `web-player/removed/` and is pruned after 30 days with the sandboxes. System-browser launches stay untracked (no sandbox, No internet or Stop).
 - On the first download or file pick, the built-in web player creates `exports/` inside the game’s profile. Launches with `--sandboxed` save Blob and `data:` downloads there automatically, number duplicate names, and show the saved path with **Copy path**. Other launches show a Save as dialog starting in `exports/` and offer **Open folder** after the download finishes. The game’s file picker starts in `exports/` and remembers the last selected folder for the session when the game runs outside the sandbox. The exports folder is included in web-player save backups and moves with the profile when the game is removed. Library exports and sync exclude it.
@@ -373,6 +374,38 @@ This module handles native host launching and Linux compatibility runtimes.
 4. **AppImage Configuration**: The AppRun script performs parallel certificate setup for the AppImage runtime context
 
 Windows releases bundle certifi and use the same certificate-selection flow. The `/etc/ssl/...` fallbacks and AppImage setup apply to Linux; HTTPS verification remains enabled on both platforms.
+
+## Locale Emulator (Windows)
+
+`core/locale_emulator.py` finds Locale Emulator's `LEProc.exe` and builds the
+command that starts a game through it. wLib does not download or install it.
+`get_status(custom_path=None, *, platform=None, recheck=False)` returns
+`{status, path, reason}` with `ready`, `missing` or `unusable`. On a host that
+is not Windows it is always `unusable`. The detection order is:
+
+1. The `locale_emulator_path` setting. A saved path is used alone: when the file
+   does not exist the status is `missing` and the reason names the path. A file
+   name that is not `LEProc.exe` (case-insensitive) is `unusable`.
+2. The folder that `LEInstaller.exe` records:
+   `Software\Classes\CLSID\{C52B9871-E5E9-41FD-B84D-C5ACADBEC7AE}\InprocServer32`
+   value `CodeBase` (a `file:///` URL of `LEContextMenuHandler.dll`), in HKCU
+   (per-user install) then HKLM (all users), 64-bit view. `LEProc.exe` must
+   exist in that folder.
+3. `%ProgramFiles%\Locale Emulator\LEProc.exe`, then
+   `%ProgramFiles(x86)%\Locale Emulator\LEProc.exe`.
+
+Only a `ready` result is cached; `recheck=True` clears the cache. The bridge
+methods are `get_locale_emulator_status()` and
+`recheck_locale_emulator_status()` in `core/api_mixins/launch.py`. Settings
+picks the file with the generic `browse_file()`.
+
+`locale_emulator_path` is a string setting with the default `''`. `save_settings`
+refuses a value that is not a string, and a non-blank value whose file name is
+not `LEProc.exe`, with "Choose the Locale Emulator LEProc.exe executable.". It
+is in `PATH_SETTINGS_KEYS`, so library export writes it in the path group, sync
+does not carry it, and import skips it with a `foreign_path` warning on a host
+where it is not a valid path (a Windows path on Linux). The platform capability
+`japanese_locale` is true on Linux and Windows.
 
 ## Game sandboxing
 

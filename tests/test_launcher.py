@@ -4371,3 +4371,307 @@ def test_gamescope_detection_error_does_not_stop_launch(tmp_path, monkeypatch, _
     argv, log = _launch_logged(monkeypatch, game, GAMESCOPE_AUTO, (1920, 1080))
     assert argv[2:10] == ["-W", "1920", "-H", "1080", "-w", "1920", "-h", "1080"]
     assert "no native size found" in log
+
+
+LEPROC = r"C:\Tools\Locale Emulator\LEProc.exe"
+
+
+def _locale_emulator(monkeypatch, status="ready"):
+    calls = []
+
+    def get_status():
+        calls.append(status)
+        if status == "ready":
+            return {"status": "ready", "path": LEPROC, "reason": ""}
+        return {
+            "status": status,
+            "path": "",
+            "reason": "Locale Emulator is not installed, or LEProc.exe could not be found.",
+        }
+
+    monkeypatch.setattr("core.launcher.locale_emulator.get_status", get_status)
+    return calls
+
+
+@patch("os.path.exists", return_value=True)
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_japanese_locale_starts_through_locale_emulator(
+    mock_get_setting, mock_popen, mock_exists, monkeypatch
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    _locale_emulator(monkeypatch)
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch(
+        r"C:\Games\Visual Novel\game.exe",
+        command_line_args='--profile "日本 語" -w',
+        run_japanese_locale=True,
+    )
+
+    assert result["success"] is True
+    # LEProc.exe joins its arguments with spaces, so the one with a space is
+    # quoted once more to reach the game as one argument.
+    assert mock_popen.call_args.args[0] == [
+        LEPROC,
+        r"C:\Games\Visual Novel\game.exe",
+        "--profile",
+        '"日本 語"',
+        "-w",
+    ]
+    assert mock_popen.call_args.kwargs["cwd"] == r"C:\Games\Visual Novel"
+
+
+@patch("os.path.exists", return_value=True)
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_locale_emulator_command_substitution(
+    mock_get_setting, mock_popen, mock_exists, monkeypatch
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    _locale_emulator(monkeypatch)
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch(
+        r"C:\Games\game.exe",
+        command_line_args='wrapper "w x" %command% --debug "a b"',
+        run_japanese_locale=True,
+    )
+
+    assert result["success"] is True
+    assert mock_popen.call_args.args[0] == [
+        "wrapper",
+        "w x",
+        LEPROC,
+        r"C:\Games\game.exe",
+        "--debug",
+        '"a b"',
+    ]
+
+
+@patch("os.path.exists", return_value=True)
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_locale_off_does_not_check_locale_emulator(
+    mock_get_setting, mock_popen, mock_exists, monkeypatch
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    calls = _locale_emulator(monkeypatch, "missing")
+    mock_popen.return_value = MagicMock()
+
+    assert Launcher().launch(r"C:\Games\game.exe")["success"] is True
+    assert mock_popen.call_args.args[0] == [r"C:\Games\game.exe"]
+    assert calls == []
+
+
+@pytest.mark.parametrize("status", ["missing", "unusable"])
+@patch("os.path.exists", return_value=True)
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_locale_emulator_missing_refuses_launch(
+    mock_get_setting, mock_popen, mock_exists, monkeypatch, status
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    _locale_emulator(monkeypatch, status)
+    job = MagicMock()
+    monkeypatch.setattr("core.launcher._start_in_windows_job", job)
+    launcher = Launcher()
+
+    result = launcher.launch(r"C:\Games\game.exe", run_japanese_locale=True, game_id=5)
+
+    assert result["success"] is False
+    assert result["code"] == "locale_emulator_missing"
+    assert "Settings > Windows tools" in str(result["error"])
+    assert "LEProc.exe could not be found" in str(result["error"])
+    mock_popen.assert_not_called()
+    job.assert_not_called()
+    assert launcher.get_running_games() == []
+
+
+@pytest.mark.parametrize(
+    "target, note",
+    [
+        (r"C:\Games\start.bat", "Locale Emulator skipped: .bat targets are not supported"),
+        (r"C:\Games\start.cmd", "Locale Emulator skipped: .cmd targets are not supported"),
+        (r"C:\Games\game.jar", "Locale Emulator skipped: .jar targets are not supported"),
+    ],
+)
+@patch("os.path.exists", return_value=True)
+@patch("subprocess.Popen")
+def test_windows_locale_emulator_skips_non_exe_targets(
+    mock_popen, mock_exists, monkeypatch, tmp_path, capsys, target, note
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    calls = _locale_emulator(monkeypatch, "missing")
+    mock_popen.return_value = MagicMock()
+    log = tmp_path / "wlib_debug.log"
+    monkeypatch.setattr("core.launcher._open_debug_log", lambda _path: open(log, "w", encoding="utf-8"))
+    monkeypatch.setattr(
+        "core.launcher.get_setting", lambda key: "true" if key == "enable_logging" else "false"
+    )
+
+    result = Launcher().launch(target, run_japanese_locale=True)
+
+    assert result["success"] is True
+    assert LEPROC not in mock_popen.call_args.args[0]
+    assert calls == []
+    assert note in capsys.readouterr().out
+    assert note in log.read_text(encoding="utf-8")
+
+
+@patch("os.path.exists", return_value=True)
+@patch("core.launcher.open_windows_system_target", return_value=(True, ""))
+@patch("subprocess.Popen")
+def test_windows_locale_emulator_skips_html(
+    mock_popen, mock_open, mock_exists, monkeypatch, capsys
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    calls = _locale_emulator(monkeypatch, "missing")
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: "false",  # html_builtin_player off: the system browser
+    )
+
+    result = Launcher().launch(r"C:\Games\index.html", run_japanese_locale=True)
+
+    assert result["success"] is True
+    mock_open.assert_called_once_with(r"C:\Games\index.html")
+    mock_popen.assert_not_called()
+    assert calls == []
+    assert "Locale Emulator skipped: HTML targets are not supported" in capsys.readouterr().out
+
+
+@patch("os.path.exists", return_value=True)
+@patch("subprocess.Popen")
+def test_windows_locale_emulator_skips_web_player(
+    mock_popen, mock_exists, monkeypatch, capsys
+):
+    from core.database import init_db
+
+    init_db()
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    calls = _locale_emulator(monkeypatch, "missing")
+    monkeypatch.setattr("core.launcher.get_setting", lambda key: "false")
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch(r"C:\Games\movie.swf", run_japanese_locale=True)
+
+    assert result["success"] is True
+    assert LEPROC not in mock_popen.call_args.args[0]
+    assert calls == []
+    assert "Locale Emulator skipped: web player targets are not supported" in capsys.readouterr().out
+
+
+def test_sandboxie_wraps_the_locale_emulator_command(monkeypatch):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    _locale_emulator(monkeypatch)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": r"C:\Sandboxie\Start.exe"},
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.configure_sandboxie_box", lambda *args, **kwargs: "wLib_12"
+    )
+    monkeypatch.setattr("core.launcher.game_sandbox.list_box_pids", lambda *args: [])
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("core.launcher.get_setting", return_value="false"),
+        patch("os.makedirs"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        popen.return_value.poll.return_value = 0
+        assert Launcher().launch(
+            r"C:\Games\Game.exe",
+            command_line_args='"a b" plain',
+            game_id=12,
+            sandbox_enabled=True,
+            run_japanese_locale=True,
+        )["success"]
+        assert popen.call_args.args[0] == [
+            r"C:\Sandboxie\Start.exe",
+            "/box:wLib_12",
+            LEPROC,
+            r"C:\Games\Game.exe",
+            '"a b"',
+            "plain",
+        ]
+        assert popen.call_args.kwargs["cwd"] == r"C:\Games"
+
+
+@patch("os.path.exists", return_value=True)
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_playtime_follows_the_game_after_leproc_exits(
+    mock_get_setting, mock_exists, monkeypatch
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    _locale_emulator(monkeypatch)
+    leproc = MagicMock(pid=60, returncode=0)
+    leproc.poll.return_value = 0  # LEProc.exe has exited
+    job = _FakeJob([1, 1])
+    commands = []
+
+    def start_in_job(start):
+        with patch("subprocess.Popen") as popen:
+            popen.return_value = leproc
+            _ = start(0)
+            commands.append(popen.call_args.args[0])
+        return leproc, job
+
+    monkeypatch.setattr("core.launcher._start_in_windows_job", start_in_job)
+    exits = []
+    launcher = Launcher()
+    result = launcher.launch(
+        r"C:\Games\JP\Game.exe",
+        game_id=8,
+        run_japanese_locale=True,
+        on_exit_callback=lambda delta, final=False: exits.append(final),
+    )
+    assert result["success"] is True
+    assert commands == [[LEPROC, r"C:\Games\JP\Game.exe"]]
+    time.sleep(0.5)
+    # LEProc.exe is gone; the game it started is still in the job.
+    assert launcher.get_running_games() == [8]
+    deadline = time.monotonic() + 10
+    while launcher.get_running_games() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert launcher.get_running_games() == []
+    assert exits == [True]
+
+
+def test_windows_alternate_target_uses_locale_emulator(monkeypatch):
+    import os as _os
+
+    from core.database import init_db
+    from core.game_launch import launch_tracked, request_from_game
+
+    init_db()
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    _locale_emulator(monkeypatch)
+    game = {
+        "id": 3,
+        "title": "JP game",
+        "exe_path": r"C:\Games\JP\Game.exe",
+        "run_japanese_locale": 1,
+        "launch_mode": "auto",
+    }
+    target = {"id": 1, "game_id": 3, "label": "Config", "exe_path": r"C:\Games\JP\Config.exe"}
+    monkeypatch.setattr("core.database.get_all_games", lambda: [game])
+    monkeypatch.setattr("core.database.list_game_launch_targets", lambda _id: [target])
+    monkeypatch.setattr(
+        "core.game_run_lock.acquire_launch_lock", lambda _id: _os.open(_os.devnull, _os.O_RDONLY)
+    )
+    monkeypatch.setattr("core.database.start_play_session", lambda *_args: 1)
+    request = {**request_from_game(game), "exe_path": target["exe_path"]}
+    launcher = Launcher()
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("core.launcher.get_setting", return_value="false"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        popen.return_value = MagicMock()
+        assert launch_tracked(launcher, 3, request)["success"]
+        assert popen.call_args.args[0] == [LEPROC, r"C:\Games\JP\Config.exe"]
+        assert popen.call_args.kwargs["cwd"] == r"C:\Games\JP"
+    launcher.shutdown()

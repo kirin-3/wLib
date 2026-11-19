@@ -94,10 +94,18 @@ def test_platform_capabilities_hide_linux_mutations_on_windows(monkeypatch, tmp_
     assert capabilities["platform"] == "windows"
     assert capabilities["native_windows_launch"] is True
     assert capabilities["wine_proton"] is False
+    assert capabilities["japanese_locale"] is True
     assert capabilities["runtime_installers"] is False
     assert capabilities["rpgmaker_linux"] is False
     assert capabilities["launch_modes"] == ["auto"]
     assert "custom" in get_platform_capabilities("linux")["launch_modes"]
+
+
+def test_japanese_locale_capability(monkeypatch, tmp_path):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    assert get_platform_capabilities("linux")["japanese_locale"] is True
+    assert get_platform_capabilities("win32")["japanese_locale"] is True
+    assert get_platform_capabilities("darwin")["japanese_locale"] is False
 
 
 def test_open_windows_system_target_platform_parameter():

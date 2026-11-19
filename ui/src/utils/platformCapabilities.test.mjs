@@ -7,6 +7,7 @@ const LINUX_CAPABILITIES = {
   platform: "linux",
   native_windows_launch: false,
   wine_proton: true,
+  japanese_locale: true,
   runtime_installers: true,
   wayland: true,
   rpgmaker_linux: true,
@@ -102,6 +103,7 @@ test("a failed read falls back to conservative capabilities and retries", async 
     const fallback = await mod.loadPlatformCapabilities();
     assert.equal(fallback.runtime_installers, false);
     assert.equal(fallback.wine_proton, false);
+    assert.equal(fallback.japanese_locale, false);
     assert.deepEqual(fallback.launch_modes, ["auto"]);
     assert.equal(calls, 1);
 
@@ -111,6 +113,7 @@ test("a failed read falls back to conservative capabilities and retries", async 
     const recovered = await mod.loadPlatformCapabilities();
     assert.equal(recovered.runtime_installers, true);
     assert.equal(recovered.wine_proton, true);
+    assert.equal(recovered.japanese_locale, true);
     assert.equal(calls, 2);
 
     mod.resetPlatformCapabilitiesForTests();

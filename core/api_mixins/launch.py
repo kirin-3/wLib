@@ -59,6 +59,16 @@ class LaunchMixin(ApiBase):
 
         return dict(get_sandbox_status(recheck=True))
 
+    def get_locale_emulator_status(self) -> dict[str, object]:
+        from core.locale_emulator import get_status
+
+        return dict(get_status())
+
+    def recheck_locale_emulator_status(self) -> dict[str, object]:
+        from core.locale_emulator import get_status
+
+        return dict(get_status(recheck=True))
+
     def get_sandbox_install_info(self) -> dict[str, object]:
         from core.game_sandbox import get_sandbox_install_info
 

@@ -1323,6 +1323,13 @@ export interface SandboxStatus {
   reason: string;
 }
 
+/** Where wLib found Locale Emulator's LEProc.exe on this Windows PC. */
+export interface LocaleEmulatorStatus {
+  status: "ready" | "missing" | "unusable";
+  path: string;
+  reason: string;
+}
+
 export interface SandboxInstallInfo {
   platform: HostPlatform;
   tool: string;
@@ -1353,6 +1360,8 @@ export interface PlatformCapabilities {
   sandbox: "bwrap" | "sandboxie" | null;
   native_windows_launch: boolean;
   wine_proton: boolean;
+  /** The per-game Japanese locale option works here: Wine/Proton locale on Linux, Locale Emulator on Windows. */
+  japanese_locale: boolean;
   runtime_installers: boolean;
   wayland: boolean;
   gaming_mode: boolean;
@@ -1399,6 +1408,7 @@ export interface SettingsPayload extends Partial<GamescopeSettings> {
   web_player_devtools?: boolean;
   sandbox_new_games?: boolean;
   sandboxie_custom_path?: string;
+  locale_emulator_path?: string;
   update_notifications?: boolean;
   torrent_seed_mode?: TorrentSeedMode;
   torrent_seed_ratio?: number | string;
@@ -1525,6 +1535,8 @@ export interface SettingsResponse extends GamescopeSettings {
   web_player_devtools: boolean;
   sandbox_new_games: boolean;
   sandboxie_custom_path: string;
+  /** Saved LEProc.exe path; empty uses auto-detection. Device-local path setting. */
+  locale_emulator_path: string;
   /** After a torrent finishes. In backups and sync. */
   torrent_seed_mode: TorrentSeedMode;
   /** Stop seeding at this upload ratio; 0 means no ratio limit. */
@@ -2221,6 +2233,14 @@ class ApiService {
 
   async recheckSandboxStatus(): Promise<SandboxStatus> {
     return this.invoke<SandboxStatus>("recheck_sandbox_status");
+  }
+
+  async getLocaleEmulatorStatus(): Promise<LocaleEmulatorStatus> {
+    return this.invoke<LocaleEmulatorStatus>("get_locale_emulator_status");
+  }
+
+  async recheckLocaleEmulatorStatus(): Promise<LocaleEmulatorStatus> {
+    return this.invoke<LocaleEmulatorStatus>("recheck_locale_emulator_status");
   }
 
   async getSandboxInstallInfo(): Promise<SandboxInstallInfo> {

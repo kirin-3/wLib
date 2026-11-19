@@ -160,6 +160,7 @@ PATH_SETTINGS_KEYS = (
     "downloads_folder",
     "download_detection_enabled",
     "sandboxie_custom_path",
+    "locale_emulator_path",
 )
 BOOLEAN_SETTINGS_KEYS = frozenset(
     {

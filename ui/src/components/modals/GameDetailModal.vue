@@ -10,9 +10,10 @@ import { ref, useTemplateRef, watch, computed, nextTick, onMounted, onBeforeUnmo
 import { useEventListener } from "../../composables/useEventListener";
 import { useRouter } from "vue-router";
 import { sandboxSwitchState, networkSwitchState } from "../../utils/sandbox";
+import { japaneseLocaleSwitchState, WINDOWS_TOOLS_ROUTE } from "../../utils/localeEmulator";
 import { HTML_PLAYER_OPTIONS, isHtmlTarget, normalizeHtmlPlayer, resolveWebPlayer } from "../../utils/webPlayer";
 import type { HtmlPlayerChoice } from "../../utils/webPlayer";
-import type { SandboxStatus } from "../../services/api";
+import type { LocaleEmulatorStatus, SandboxStatus } from "../../services/api";
 import GameCompanionTools from "../GameCompanionTools.vue";
 import TagColorPicker from "../TagColorPicker.vue";
 import { colorForTag, loadTagColors } from "../../utils/tagColors";
@@ -164,6 +165,10 @@ const openPrefixTool = async (tool: "winecfg" | "winetricks") => {
 };
 const blockNetwork = ref(false);
 const sandboxStatus = ref<SandboxStatus | null>(null);
+const japaneseLocale = computed(() =>
+  japaneseLocaleSwitchState(platformCapabilities.value.platform, localeEmulatorStatus.value, runJapaneseLocale.value),
+);
+const localeEmulatorStatus = ref<LocaleEmulatorStatus | null>(null);
 
 // Editable fields
 const title = ref("");
@@ -1030,6 +1035,10 @@ watch(
       void Promise.all(loaders);
       const capabilities = await loadPlatformCapabilities();
       platformCapabilities.value = capabilities;
+      localeEmulatorStatus.value = null;
+      if (capabilities.platform === "windows") {
+        void api.getLocaleEmulatorStatus().then(status => { localeEmulatorStatus.value = status; }).catch(console.error);
+      }
       // The HTML player default applies on every platform; GameMode/MangoHud only on Linux.
       void api.getSettings().then(value => {
         htmlBuiltinDefault.value = value.html_builtin_player !== false;
@@ -1829,7 +1838,7 @@ const save = async () => {
       html_player: htmlPlayer.value,
       sandbox_enabled: sandboxEnabled.value,
       block_network: blockNetwork.value,
-      run_japanese_locale: platformCapabilities.value.wine_proton
+      run_japanese_locale: platformCapabilities.value.japanese_locale
         ? runJapaneseLocale.value
         : !!props.game.run_japanese_locale,
       run_wayland: platformCapabilities.value.wayland
@@ -1939,7 +1948,7 @@ const buildLaunchPayload = (targetPath: string): GameRecord | null => {
       is_favorite: !!isFavorite.value,
       tags: tags.value.join(", "),
       engine: normalizeEngine(engine.value),
-      run_japanese_locale: platformCapabilities.value.wine_proton
+      run_japanese_locale: platformCapabilities.value.japanese_locale
         ? !!runJapaneseLocale.value
         : !!props.game.run_japanese_locale,
       run_wayland: platformCapabilities.value.wayland
@@ -2960,19 +2969,21 @@ const removeAttachment = async (name: string) => {
                 </div>
 
                 <div
-                  v-if="platformCapabilities.wine_proton"
+                  v-if="platformCapabilities.japanese_locale"
                   class="rounded-md px-2 py-1"
                   style="background: var(--bg-surface)"
+                  data-testid="japanese-locale-row"
                 >
                   <div class="flex items-center gap-2">
                     <span class="text-sm font-medium" style="color: var(--text-primary)">
-                      Run with Japanese locale
+                      {{ japaneseLocale.label }}
                     </span>
-                    <label class="relative inline-flex items-center cursor-pointer ml-auto">
+                    <label class="relative inline-flex items-center ml-auto" :class="japaneseLocale.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'">
                       <input
                         type="checkbox"
                         v-model="runJapaneseLocale"
-                        aria-label="Run with Japanese locale"
+                        :aria-label="japaneseLocale.label"
+                        :disabled="japaneseLocale.disabled"
                         class="sr-only peer"
                       />
                       <div class="ui-toggle"></div>
@@ -2983,6 +2994,15 @@ const removeAttachment = async (name: string) => {
                     style="color: var(--text-muted)"
                   >
                     Enable this if the game has unreadable text (Mojibake) or crashes due to missing Japanese fonts.
+                  </p>
+                  <p
+                    v-if="japaneseLocale.note"
+                    class="text-xs mt-1 pr-12"
+                    style="color: var(--text-muted)"
+                    data-testid="japanese-locale-note"
+                  >
+                    {{ japaneseLocale.note }}
+                    <button v-if="japaneseLocale.needsSettings" class="underline" style="color:var(--brand)" @click="closeAndNavigate(WINDOWS_TOOLS_ROUTE)">Set up</button>
                   </p>
                 </div>
 

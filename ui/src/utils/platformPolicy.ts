@@ -6,6 +6,7 @@ export const CONSERVATIVE_PLATFORM_CAPABILITIES: PlatformCapabilities = {
   sandbox: null,
   native_windows_launch: false,
   wine_proton: false,
+  japanese_locale: false,
   runtime_installers: false,
   wayland: false,
   gaming_mode: false,

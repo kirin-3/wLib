@@ -122,6 +122,7 @@ import type { UninstallOptions } from "../services/api";
 import { useLibrarySelection } from "../composables/useLibrarySelection";
 import { modalStack } from "../utils/modalKeyboard";
 import { sandboxLaunchError } from "../utils/sandbox";
+import { localeEmulatorLaunchError } from "../utils/localeEmulator";
 import { openInstallArchive } from "../utils/installArchive";
 import {
   LIBRARY_SOURCES,
@@ -1579,6 +1580,11 @@ const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
       }
       if (result.code === 'umu_missing' || result.code === 'umu_runtime_missing') {
         notify(result.error || 'Proton needs umu setup.', 'error', 'Could not launch game', { label: 'Open Proton settings', run: () => { void router.push('/settings#umu'); } });
+        return;
+      }
+      const localeError = localeEmulatorLaunchError(result.code || result.error_code, result.error);
+      if (localeError) {
+        notify(localeError.message, "error", "Could not launch game", { label: localeError.action, run: () => { void router.push(localeError.route); } });
         return;
       }
       const sandboxError = sandboxLaunchError(result.code || result.error_code, result.error);

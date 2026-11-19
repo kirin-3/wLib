@@ -499,6 +499,7 @@ def test_sandbox_migration_preserves_existing_games_and_wal():
 def test_new_games_follow_sandbox_default_with_explicit_override(default):
     assert get_setting("sandbox_new_games") == "false"
     assert get_setting("sandboxie_custom_path") == ""
+    assert get_setting("locale_emulator_path") == ""
     update_setting("sandbox_new_games", default)
     add_game("Default", "/default")
     add_game("Explicit on", "/on", sandbox_enabled=True)

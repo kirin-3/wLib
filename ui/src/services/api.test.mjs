@@ -197,6 +197,22 @@ test("browser mock payloads keep the desktop contract for every bridge method", 
 
     // Adding from the browser preview stores the same launch and metadata fields
     // the desktop database writes.
+    // Locale Emulator: missing until a LEProc.exe path is saved; a wrong file is refused.
+    assert.equal((await api.getLocaleEmulatorStatus()).status, "missing");
+    assert.deepEqual(await api.saveSettings({ locale_emulator_path: "D:\\LE\\LEGUI.exe" }), {
+      success: false,
+      error: "Choose the Locale Emulator LEProc.exe executable.",
+    });
+    assert.equal((await api.saveSettings({ locale_emulator_path: " D:\\LE\\LEProc.exe " })).success, true);
+    assert.equal((await api.getSettings()).locale_emulator_path, "D:\\LE\\LEProc.exe");
+    assert.deepEqual(await api.recheckLocaleEmulatorStatus(), {
+      status: "ready",
+      path: "D:\\LE\\LEProc.exe",
+      reason: "",
+    });
+    assert.equal((await api.saveSettings({ locale_emulator_path: "" })).success, true);
+    assert.equal((await api.getLocaleEmulatorStatus()).status, "missing");
+
     assert.equal((await api.getSettings()).lc_enabled, false);
     assert.equal((await api.getSettings()).lc_plus, false);
     assert.equal((await api.getSettings()).lc_plus_mode, "auto");
@@ -796,4 +812,26 @@ test("selected update checks forward game ids to the bridge", async () => {
     await api.checkAllUpdates([2, 5]);
     assert.deepEqual(calls, [[[2, 5]]]);
   } finally { await server.close(); delete globalThis.window; }
+});
+
+test("Locale Emulator status methods call their bridge names", async () => {
+  const calls = [];
+  const status = { status: "ready", path: "C:\\LE\\LEProc.exe", reason: "" };
+  globalThis.window = {
+    pywebview: { api: {
+      get_locale_emulator_status: (...args) => { calls.push(["get", args]); return status; },
+      recheck_locale_emulator_status: (...args) => { calls.push(["recheck", args]); return status; },
+    } },
+    dispatchEvent() {},
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    assert.deepEqual(await api.getLocaleEmulatorStatus(), status);
+    assert.deepEqual(await api.recheckLocaleEmulatorStatus(), status);
+    assert.deepEqual(calls, [["get", []], ["recheck", []]]);
+  } finally {
+    await server.close();
+    delete globalThis.window;
+  }
 });

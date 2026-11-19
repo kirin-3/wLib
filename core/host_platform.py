@@ -18,6 +18,7 @@ class PlatformCapabilities(TypedDict):
     sandbox: str | None
     native_windows_launch: bool
     wine_proton: bool
+    japanese_locale: bool
     runtime_installers: bool
     wayland: bool
     gaming_mode: bool
@@ -161,6 +162,7 @@ def get_platform_capabilities(platform: str | None = None) -> PlatformCapabiliti
         "sandbox": "bwrap" if linux else "sandboxie" if windows else None,
         "native_windows_launch": windows,
         "wine_proton": linux,
+        "japanese_locale": linux or windows,
         "runtime_installers": linux,
         "wayland": linux,
         "gaming_mode": linux and steam_env.gaming_mode(),

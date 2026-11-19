@@ -71,6 +71,7 @@ import { validateCustomPlayStatuses } from "../utils/playStatus";
 import PathStatus from "../components/PathStatus.vue";
 import CompanionToolsSettings from "../components/CompanionToolsSettings.vue";
 import SandboxSettings from "../components/SandboxSettings.vue";
+import LocaleEmulatorSettings from "../components/LocaleEmulatorSettings.vue";
 import UmuSettings from "../components/UmuSettings.vue";
 import CatalogSettings from "../components/CatalogSettings.vue";
 import SteamSettings from "../components/SteamSettings.vue";
@@ -1139,7 +1140,9 @@ const sectionRegistry = computed(() => [
   { id: "file-hosts", title: "File host accounts", keywords: "pixeldrain mega rpdl account api key premium download" },
   { id: "torrents", title: "Torrents", keywords: "torrent seed seeding ratio speed limit rpdl" },
   { id: "appearance", title: "Appearance", keywords: "theme dark light color" },
-  { id: "wine-proton", title: supportsLinuxRuntimes.value ? "Wine / Proton" : platformCapabilities.value.platform === "windows" ? "Windows Environment" : "Platform Environment", keywords: "wine prefix runner" },
+  ...(platformCapabilities.value.platform === "windows"
+    ? [{ id: "windows-tools", title: "Windows tools", keywords: "windows locale emulator japanese leproc" }]
+    : [{ id: "wine-proton", title: supportsLinuxRuntimes.value ? "Wine / Proton" : "Platform Environment", keywords: "wine prefix runner" }]),
   ...(supportsLinuxRuntimes.value ? [{ id: "umu", title: "Proton (umu)", keywords: "runtime" }] : []),
   ...(platformCapabilities.value.platform === "linux" ? [{ id: "steam", title: "Steam", keywords: "account sync" }] : []),
   ...(platformCapabilities.value.companion_tools ? [{ id: "custom-tools", title: "Custom tools", keywords: "companion" }] : []),
@@ -1971,22 +1974,17 @@ const browseUrm = async () => {
       </section>
 
       <!-- Wine / Proton -->
-      <section v-show="sectionVisible('wine-proton')" id="wine-proton" class="settings-card rounded-xl p-6 space-y-5">
+      <!-- Windows tools (Windows only; replaces the Wine / Proton section) -->
+      <LocaleEmulatorSettings v-if="platformCapabilities.platform === 'windows'" v-show="sectionVisible('windows-tools')" />
+
+      <section v-if="platformCapabilities.platform !== 'windows'" v-show="sectionVisible('wine-proton')" id="wine-proton" class="settings-card rounded-xl p-6 space-y-5">
         <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
           <IconAutomation class="ui-section-icon" />
-          {{ supportsLinuxRuntimes ? "Wine / Proton" : platformCapabilities.platform === 'windows' ? "Windows Environment" : "Platform Environment" }}
+          {{ supportsLinuxRuntimes ? "Wine / Proton" : "Platform Environment" }}
         </h3>
 
-        <div data-settings-row="wine-proton-static-0" data-settings-bound v-show="settingsRowVisible('wine-proton-static-0')"
-          v-if="platformCapabilities.platform === 'windows'"
-          class="ui-card-row text-sm"
-          style="color: var(--text-secondary)"
-        >
-          Windows games launch directly. Proton, Wine, Winetricks, Wine
-          prefixes, and Linux runtime installers are not used on Windows.
-        </div>
         <div data-settings-row="wine-proton-static-1" data-settings-bound v-show="settingsRowVisible('wine-proton-static-1')"
-          v-else-if="!supportsLinuxRuntimes"
+          v-if="!supportsLinuxRuntimes"
           class="ui-card-row text-sm"
           style="color: var(--text-secondary)"
         >

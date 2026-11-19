@@ -230,6 +230,7 @@
   "get_launch_targets": [
     "game_id"
   ],
+  "get_locale_emulator_status": [],
   "get_move_status": [],
   "get_performance_tools": [
     "refresh"
@@ -418,6 +419,7 @@
     "options"
   ],
   "purge_cover_cache": [],
+  "recheck_locale_emulator_status": [],
   "recheck_sandbox_status": [],
   "release_download_archive": [
     "path"

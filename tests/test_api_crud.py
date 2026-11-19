@@ -392,6 +392,22 @@ def test_sandbox_bulk_api_and_custom_path_validation():
     assert api.get_settings()["sandbox_new_games"] is True
 
 
+def test_locale_emulator_path_setting_validation():
+    api = Api()
+    assert api.get_settings()["locale_emulator_path"] == ""
+    assert api.save_settings({"locale_emulator_path": r" D:\LE\LEProc.exe "})["success"]
+    assert api.get_settings()["locale_emulator_path"] == r"D:\LE\LEProc.exe"
+    wrong = api.save_settings({"locale_emulator_path": r"D:\LE\LEGUI.exe"})
+    assert wrong == {
+        "success": False,
+        "error": "Choose the Locale Emulator LEProc.exe executable.",
+    }
+    assert not api.save_settings({"locale_emulator_path": 5})["success"]
+    assert api.get_settings()["locale_emulator_path"] == r"D:\LE\LEProc.exe"
+    assert api.save_settings({"locale_emulator_path": ""})["success"]
+    assert api.get_settings()["locale_emulator_path"] == ""
+
+
 def test_sandbox_install_failure_is_reported_and_rechecked(monkeypatch):
     from core import game_sandbox
 
