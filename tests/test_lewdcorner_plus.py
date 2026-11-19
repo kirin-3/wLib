@@ -240,12 +240,27 @@ def test_extension_gone_before_any_request_keeps_the_time(lc, monkeypatch):
     assert not database.get_setting("lc_plus_detected_at")
 
 
-def test_failed_requests_still_count_as_a_check(lc, monkeypatch):
+def test_failed_requests_do_not_count_as_a_check(lc, monkeypatch):
     def failed(url, timeout=30, *, site="f95", background=False):
         lc["fetched"].append(url)
-        raise extension_bridge.BridgeFailed("timed out")
+        raise extension_bridge.BridgeFailed("extension did not answer in time")
 
     monkeypatch.setattr(extension_bridge, "fetch", failed)
+    assert lewdcorner_plus.detect("connect") == {"result": None, "skipped": "failed"}
+    assert len(lc["fetched"]) == 3
+    # No page came back, so the next connect tries again instead of waiting 24 hours.
+    assert not database.get_setting("lc_plus_detected_at")
+    assert lewdcorner_plus.skip_reason("connect") == ""
+
+
+def test_one_page_read_after_a_failure_counts_as_a_check(lc, monkeypatch):
+    def first_fails(url, timeout=30, *, site="f95", background=False):
+        lc["fetched"].append(url)
+        if len(lc["fetched"]) == 1:
+            raise extension_bridge.BridgeFailed("extension did not answer in time")
+        return BridgeResponse(200, url, GUEST)
+
+    monkeypatch.setattr(extension_bridge, "fetch", first_fails)
     assert lewdcorner_plus.detect("connect") == {"result": "", "skipped": ""}
     assert len(lc["fetched"]) == 3
     assert database.get_setting("lc_plus_detected_at")

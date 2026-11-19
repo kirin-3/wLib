@@ -158,6 +158,7 @@ class SettingsMixin(ApiBase):
                 "no_catalog": "The game catalog must be on to check LC Plus",
                 "no_candidates": "The game catalog has no LC Plus threads to check",
                 "no_extension": "Open a browser with the wLib extension and its LewdCorner switch on",
+                "failed": "LewdCorner did not answer. Try again later",
             }
             return {"success": False, "code": skipped, "error": errors.get(skipped, "Could not check LC Plus"), **status}
         return {

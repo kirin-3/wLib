@@ -97,9 +97,11 @@ def detect(trigger: Trigger) -> Detection:
         if not candidates:
             return {"result": None, "skipped": "no_candidates"}
         signal: str | None = None
-        # Only a request that reached the extension counts as a check. Without
-        # one, the time stays as it was, so the next connect tries again.
-        sent = False
+        # Only a page that came back counts as a check. A timeout or a failed
+        # fetch reads nothing, so the time stays as it was and the next
+        # connect tries again.
+        read = False
+        failed = False
         for thread_id in candidates:
             try:
                 response = extension_bridge.fetch(
@@ -109,18 +111,18 @@ def detect(trigger: Trigger) -> Detection:
                 logger.info("LC Plus check stopped: no extension can fetch from LewdCorner")
                 break
             except extension_bridge.BridgeFailed as exc:
-                sent = True
+                failed = True
                 logger.info("LC Plus check: thread %s failed (%s)", thread_id, exc)
                 continue
-            sent = True
+            read = True
             signal = lewdcorner.tier_signal(response.body, response.status)
             # Never log the page body: it is the user's signed-in page.
             logger.info("LC Plus check (%s): thread %s, HTTP %s, %s",
                         trigger, thread_id, response.status, signal or "unknown")
             if signal:
                 break
-        if not sent:
-            return {"result": None, "skipped": "no_extension"}
+        if not read:
+            return {"result": None, "skipped": "failed" if failed else "no_extension"}
         _store(signal)
         return {"result": signal or "", "skipped": ""}
     finally:
