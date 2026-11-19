@@ -25,7 +25,7 @@ class SiteLimits:
 SITE_LIMITS: dict[str, SiteLimits] = {
     "f95": SiteLimits(min_delay=3.0, budget=90, window=3600.0),
     # Thread pages, outside the feed's limit. About 80 threads change per day.
-    "f95_threads": SiteLimits(min_delay=5.0, budget=60, window=3600.0),
+    "f95_threads": SiteLimits(min_delay=5.0, budget=90, window=3600.0),
     # LewdCorner's login-gated feed, and its guest thread pages on their own budget.
     "lc": SiteLimits(min_delay=3.0, budget=90, window=3600.0),
     "lc_threads": SiteLimits(min_delay=5.0, budget=60, window=3600.0),

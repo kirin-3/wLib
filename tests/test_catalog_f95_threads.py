@@ -238,11 +238,11 @@ def test_the_step_stops_at_its_own_budget(tmp_path):
     transport = FakeTransport()
     transport.route("/threads/", _page())
     ctx, _ = make_context(tmp_path, transport)
-    ctx.upsert("f95_threads", "thread_id", [_thread(n, n) for n in range(1, 71)])
+    ctx.upsert("f95_threads", "thread_id", [_thread(n, n) for n in range(1, 101)])
     result = run_source(F95ThreadsSource(), ctx)
     assert result.status == "budget"
-    assert result.requests == 60
-    assert len(_details(ctx)) == 60
+    assert result.requests == 90
+    assert len(_details(ctx)) == 90
     # The feed's own budget is untouched.
     assert ctx.pacer.remaining("f95") == 90
 
