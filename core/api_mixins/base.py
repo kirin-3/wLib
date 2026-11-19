@@ -1638,7 +1638,8 @@ class ApiBase:
             _ = cursor.execute(
                 """SELECT id, f95_url, lc_url, lc_mode, thread_main_post_last_edit_at,
                           thread_main_post_checked_at, thread_completed, screenshots,
-                          thread_onhold, thread_abandoned, thread_states_at, play_status
+                          thread_onhold, thread_abandoned, thread_states_at, play_status,
+                          lc_thread_completed
                    FROM games WHERE f95_url = ?""",
                 (normalized_url,),
             )
@@ -1663,12 +1664,14 @@ class ApiBase:
                 if has_completion:
                     completed = bool(metadata["thread_completed"])
                     was_completed = bool(cast(object, game["thread_completed"]))
-                    if was_completed and not completed and game["lc_url"]:
-                        # Either active site can mark this game complete.
-                        completed = lewdcorner.lc_active(
-                            {key: cast(object, game[key]) for key in ("lc_url", "f95_url", "lc_mode")},
-                            lewdcorner.setting_enabled(database.get_setting("lc_enabled")),
-                        )
+                    if was_completed and not completed and game["lc_url"] and lewdcorner.lc_active(
+                        {key: cast(object, game[key]) for key in ("lc_url", "f95_url", "lc_mode")},
+                        lewdcorner.setting_enabled(database.get_setting("lc_enabled")),
+                    ):
+                        # Either active site can mark this game complete. Keep the
+                        # flag while the last LC read had the Completed prefix, or
+                        # while no LC read has said (NULL).
+                        completed = cast(object, game["lc_thread_completed"]) != 0
                     if completed != was_completed:
                         fields["thread_completed"] = int(completed)
                         if completed:

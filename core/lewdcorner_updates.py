@@ -173,9 +173,12 @@ def check_thread(
         error = feed_error
         if error is None and single:
             error = lc.LcUpdateError("lc_extract_failed")
+    # Only live prefix data (feed or page) can say the thread is not Completed;
+    # the catalog can lag behind the feed.
+    lc_completed = True if completed else (False if flags is not None else None)
     saved = database.store_thread_update(
         game_id, "lc", url, observation, completed=completed, keep_newer=True,
-        states=states,
+        states=states, lc_completed=lc_completed,
     )
     if saved is None:
         return CheckResult(error=error or lc.LcUpdateError("lc_extract_failed"))

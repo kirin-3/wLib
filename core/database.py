@@ -1217,6 +1217,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("thread_main_post_last_edit_at", "TIMESTAMP"),
         ("thread_main_post_checked_at", "TIMESTAMP"),
         ("thread_completed", "BOOLEAN DEFAULT 0"),
+        # The last live LC read's Completed prefix (NULL: no read yet). Device-local;
+        # it lets an F95 read clear `thread_completed` once LC no longer sets it.
+        ("lc_thread_completed", "INTEGER"),
         # No default: NULL means the thread's state is not known yet.
         ("thread_onhold", "INTEGER"),
         ("thread_abandoned", "INTEGER"),
@@ -1947,8 +1950,13 @@ def store_thread_update(
     keep_newer: bool = False,
     states: ThreadStates | None = None,
     lc_states: ThreadStates | None = None,
+    lc_completed: bool | None = None,
 ) -> tuple[dict[str, object], bool, bool] | None:
     """Write the observation and winner together, if the thread still matches.
+
+    `lc_completed` is an LC read's Completed prefix; None means the read had
+    no live prefix data. False clears the Completed flag of an LC-only game;
+    for a game on both sites the next F95 page read decides.
 
     `lc_states` is the LC read of a game the F95 step stores; it applies by
     the rule in `site_thread_states` when `states` (F95 data) is None.
@@ -1992,6 +2000,11 @@ def store_thread_update(
         ).strip()
         if completed:
             fields["thread_completed"] = 1
+        if site == "lc" and lc_completed is not None:
+            fields["lc_thread_completed"] = int(lc_completed)
+            has_f95 = bool(str(game.get("f95_url") or "").strip())
+            if not lc_completed and not has_f95 and game.get("thread_completed"):
+                fields["thread_completed"] = 0
         if site == "lc" and str(game.get("f95_url") or "").strip():
             # F95 decides for a game on both sites; the F95 check that follows
             # uses these LC states only when it has no prefix data itself.
@@ -2391,6 +2404,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
                 safe_fields["lc_dismissed"] = old_id
                 safe_fields["lc_latest_version"] = ""
                 safe_fields["lc_latest_at"] = ""
+                safe_fields["lc_thread_completed"] = None
                 refresh_winner = True
                 # Without an F95 thread the states came from the old LC thread.
                 f95_after = safe_fields.get("f95_url", row[2] if row else "")

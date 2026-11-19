@@ -5149,6 +5149,65 @@ def test_bulk_lc_completion_survives_f95_page_without_completed_prefix(monkeypat
     assert get_all_games()[0]["thread_completed"]
 
 
+def _bulk_check(api, monkeypatch, feed, f95_url="", f95_completed=False):
+    _mock_lc_checks(monkeypatch, feed=feed)
+    monkeypatch.setattr(api.scraper, "check_versions", lambda urls, callback: callback(
+        f95_url, {"success": True, "version": "1.1", "thread_completed": f95_completed}
+    ) and {})
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+    assert api.check_all_updates()["success"]
+    return get_all_games()[0]
+
+
+def test_both_sites_completion_clears_once_neither_site_has_the_prefix(monkeypatch):
+    api = Api()
+    f95_url = "https://f95zone.to/threads/9/"
+    add_game("Both", "", f95_url, lc_url="https://lewdcorner.com/threads/1/", lc_mode="on")
+    game = _bulk_check(api, monkeypatch, [_lc_test_item(1, "1.1", 1794268800, "Completed")], f95_url)
+    assert (game["thread_completed"], game["lc_thread_completed"]) == (1, 1)
+    game = _bulk_check(api, monkeypatch, [_lc_test_item(1, "1.2", 1794355200, "Ren'Py")], f95_url)
+    assert (game["thread_completed"], game["lc_thread_completed"]) == (0, 0)
+
+
+def test_both_sites_f95_completion_waits_for_an_lc_read_before_clearing(monkeypatch):
+    api = Api()
+    f95_url = "https://f95zone.to/threads/9/"
+    add_game("Both", "", f95_url, lc_url="https://lewdcorner.com/threads/1/", lc_mode="on")
+    assert api._update_thread_edit_metadata_for_url(f95_url, {"thread_completed": True})
+    # No LC read yet: LC may still have the prefix.
+    _ = api._update_thread_edit_metadata_for_url(f95_url, {"thread_completed": False})
+    assert get_all_games()[0]["thread_completed"] == 1
+    # The LC read without the prefix does not clear a game with an F95 thread...
+    _mock_lc_checks(monkeypatch, feed=[_lc_test_item(1, "1.1", 1794268800, "Ren'Py")])
+    monkeypatch.setattr(api.scraper, "check_versions", lambda urls, callback: {})
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+    assert api.check_all_updates()["success"]
+    assert (get_all_games()[0]["thread_completed"], get_all_games()[0]["lc_thread_completed"]) == (1, 0)
+    # ...the next F95 read without it does.
+    _ = api._update_thread_edit_metadata_for_url(f95_url, {"thread_completed": False})
+    assert get_all_games()[0]["thread_completed"] == 0
+
+
+def test_lc_only_completion_clears_on_a_live_read_without_the_prefix(monkeypatch):
+    api = Api()
+    add_game("LC only", "", lc_url="https://lewdcorner.com/threads/1/")
+    game = _bulk_check(api, monkeypatch, [_lc_test_item(1, "1.1", 1794268800, "Completed")])
+    assert game["thread_completed"] == 1
+    # A feed item without prefix data says nothing about completion.
+    game = _bulk_check(api, monkeypatch, [_lc_test_item(1, "1.2", 1794355200)])
+    assert (game["thread_completed"], game["lc_thread_completed"]) == (1, 1)
+    game = _bulk_check(api, monkeypatch, [_lc_test_item(1, "1.3", 1794441600, "Ren'Py")])
+    assert (game["thread_completed"], game["lc_thread_completed"]) == (0, 0)
+
+
+def test_changing_the_lc_thread_forgets_its_completion(monkeypatch):
+    api = Api()
+    game_id = add_game("LC only", "", lc_url="https://lewdcorner.com/threads/1/")
+    _ = _bulk_check(api, monkeypatch, [_lc_test_item(1, "1.1", 1794268800, "Completed")])
+    assert update_game(game_id, {"lc_url": "https://lewdcorner.com/threads/2/"})
+    assert get_all_games()[0]["lc_thread_completed"] is None
+
+
 @pytest.mark.parametrize("has_f95", [False, True])
 def test_single_check_uses_lc_thread_page_from_either_url(monkeypatch, has_f95):
     api = Api()
