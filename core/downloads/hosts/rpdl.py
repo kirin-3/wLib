@@ -7,6 +7,7 @@ second apart. Nothing here prints the token, the password or a torrent URL.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import threading
@@ -231,14 +232,15 @@ def parse_size(value: object) -> int:
     if isinstance(value, bool):
         return 0
     if isinstance(value, (int, float)):
-        return max(0, int(value))
+        return max(0, int(value)) if math.isfinite(value) else 0
     if isinstance(value, str):
         text = value.strip().replace(",", "")
         match = re.fullmatch(r"([0-9]*\.?[0-9]+)\s*([a-zA-Z]*)", text)
         if match:
             unit = match.group(2).lower() or "b"
-            if unit in _UNITS:
-                return int(float(match.group(1)) * _UNITS[unit])
+            number = float(match.group(1)) * _UNITS[unit] if unit in _UNITS else math.nan
+            if math.isfinite(number):
+                return int(number)
     return 0
 
 
@@ -247,7 +249,7 @@ def parse_date(value: object) -> int:
     if isinstance(value, bool):
         return 0
     if isinstance(value, (int, float)):
-        return max(0, int(value))
+        return max(0, int(value)) if math.isfinite(value) else 0
     if isinstance(value, str):
         text = value.strip()
         if text.isdigit():
@@ -266,7 +268,7 @@ def _int(value: object) -> int:
     if isinstance(value, bool):
         return 0
     if isinstance(value, (int, float)):
-        return max(0, int(value))
+        return max(0, int(value)) if math.isfinite(value) else 0
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return 0
@@ -335,7 +337,7 @@ def search(title: str, *, refresh: bool = False) -> list[dict[str, object]]:
     if not refresh and isinstance(entry, dict):
         stamp = entry.get("at")
         results = entry.get("results")
-        if isinstance(stamp, (int, float)) and now - stamp < CACHE_TTL and isinstance(results, list):
+        if _num(stamp) and now - _num(stamp) < CACHE_TTL and isinstance(results, list):
             return cast(list[dict[str, object]], results)
     # The parameter set RPDL's own site and other clients send; `uploaded_DESC` is newest first.
     params = urlencode({
@@ -360,7 +362,9 @@ def search(title: str, *, refresh: bool = False) -> list[dict[str, object]]:
 
 
 def _num(value: object) -> float:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return float(value)
+    return 0.0
 
 
 # --- details and .torrent --------------------------------------------------

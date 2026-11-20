@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from core.api_mixins.base import ApiBase
+from core.downloads.bencode import parse_torrent
 from core.downloads import torrents
 from core.downloads.hosts import rpdl
 from core.downloads.torrents import MSG_START_FAILED, TorrentSupervisor
@@ -32,7 +33,9 @@ class _InlineThread:
 @pytest.mark.parametrize("number", ["NaN", "Infinity"])
 def test_malformed_details_do_not_break_the_checked_fetch(monkeypatch: pytest.MonkeyPatch, number: str):
     # json.loads accepts NaN and Infinity; int() of them raises ValueError or OverflowError.
-    body = f'{{"data": {{"torrent_id": 7, "title": "Game", "file_size": {number}, "info_hash": "{"a" * 40}"}}}}'
+    # The details now parse (the bad number reads as 0), so the info hash must match.
+    info_hash = parse_torrent(_TORRENT).info_hash
+    body = f'{{"data": {{"torrent_id": 7, "title": "Game", "file_size": {number}, "info_hash": "{info_hash}"}}}}'
     monkeypatch.setattr(rpdl, "fetch_torrent", lambda _id: _TORRENT)
     monkeypatch.setattr(rpdl, "_request", lambda *_a, **_k: (body.encode(), "application/json"))
     assert ApiBase._fetch_checked_rpdl_torrent(7) == _TORRENT  # pyright: ignore[reportPrivateUsage]
