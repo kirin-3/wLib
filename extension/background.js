@@ -393,10 +393,19 @@ function isBridgeUrlAllowed(url) {
     return F95_THREAD_FETCH_RE.test(url) || F95_BATCH_FETCH_RE.test(url) || isF95ListUrlAllowed(url);
 }
 
+function isLcBridgeUrlAllowed(url) {
+    return typeof url === "string" && url === url.trim() && LC_FETCH_RE.test(url);
+}
+
+function isSiteBridgeUrlAllowed(url, site) {
+    if (site === "lc") {
+        return isLcBridgeUrlAllowed(url);
+    }
+    return site === "f95" && isBridgeUrlAllowed(url);
+}
+
 async function bridgeFetchUrl(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS, site = "f95") {
-    const allowed = site === "lc"
-        ? url === url.trim() && LC_FETCH_RE.test(url)
-        : site === "f95" && isBridgeUrlAllowed(url);
+    const allowed = isSiteBridgeUrlAllowed(url, site);
     if (!allowed) {
         return { ok: false, error: "refused" };
     }
@@ -614,16 +623,25 @@ async function bridgeHandleFetchImage(message) {
     }
 }
 
-// Firefox sends no F95 cookies with background-page fetches, so F95 answers
-// as a guest and Cloudflare challenges them without the browser's clearance.
-// The same request from inside an open F95 tab is first-party and carries the
-// browser's login and clearance. Once a background fetch came back as a guest
-// or challenge page, later fetches use a tab first while one is open.
+// Firefox can send no site cookies with background-page fetches (always for
+// F95; for LC when the login lives in a container tab, as with Zen
+// workspaces, or under strict cookie settings), so the site answers as a
+// guest and Cloudflare challenges them without the browser's clearance.
+// The same request from inside an open tab of that site is first-party and
+// carries the tab's login and clearance. Once a background fetch came back as
+// a guest or challenge page, later fetches for that site use a tab first
+// while one is open.
 const F95_GUEST_PAGE_RE = /\bdata-logged-in=["']false["']/;
 // The managed challenge loads /h/ scripts; signed-out pages only carry the
 // passive /scripts/jsd/ probe.
 const F95_CHALLENGE_PAGE_RE = /<title>\s*Just a moment|\/cdn-cgi\/challenge-platform\/h\//i;
 let bridgePreferTabFetch = false;
+let bridgePreferLcTabFetch = false;
+
+const BRIDGE_TAB_SITES = {
+    f95: { host: "f95zone.to", tabs: "https://f95zone.to/*" },
+    lc: { host: "lewdcorner.com", tabs: "https://lewdcorner.com/*" },
+};
 
 function bridgeNeedsBrowserSession(body) {
     if (typeof body !== "string") {
@@ -632,8 +650,32 @@ function bridgeNeedsBrowserSession(body) {
     return F95_GUEST_PAGE_RE.test(body.slice(0, 4096)) || F95_CHALLENGE_PAGE_RE.test(body.slice(0, 65536));
 }
 
+// LC thread pages are XenForo pages like F95's. The LC update feed answers a
+// guest with an HTML page, a bare JSON string or a JSON "error" field.
+function lcNeedsBrowserSession(url, body) {
+    if (typeof body !== "string") {
+        return false;
+    }
+    if (!url.includes("/latest-updates/api?")) {
+        return bridgeNeedsBrowserSession(body);
+    }
+    const text = body.replace(/^[\ufeff\s]+/, "");
+    if (text.startsWith("<")) {
+        return true;
+    }
+    try {
+        const payload = JSON.parse(text);
+        if (typeof payload === "string") {
+            return payload.length > 0;
+        }
+        return !!payload && typeof payload.error === "string" && payload.error.length > 0;
+    } catch (_error) {
+        return false;
+    }
+}
+
 // Runs inside the F95 tab as a content script. It must stay self-contained.
-async function bridgeTabFetch(url, maxBytes, timeoutMs) {
+async function bridgeTabFetch(url, maxBytes, timeoutMs, host = "f95zone.to") {
     // Firefox's content.fetch runs as the page; Chrome content scripts already do.
     const hasPageFetch = typeof content !== "undefined" && content && typeof content.fetch === "function";
     const pageFetch = async (target, init) => {
@@ -669,7 +711,7 @@ async function bridgeTabFetch(url, maxBytes, timeoutMs) {
                 signal: controller.signal,
             });
             const finalUrl = response.url || url;
-            if (new URL(finalUrl).hostname !== "f95zone.to") {
+            if (new URL(finalUrl).hostname !== host) {
                 return { ok: false, error: "offsite_redirect" };
             }
             const body = await response.text();
@@ -688,16 +730,17 @@ async function bridgeTabFetch(url, maxBytes, timeoutMs) {
     }
 }
 
-// Returns null when no F95 tab can run the fetch.
-async function bridgeFetchViaTab(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS) {
-    if (!isBridgeUrlAllowed(url)) {
+// Returns null when no tab of the site can run the fetch.
+async function bridgeFetchViaTab(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS, site = "f95") {
+    const tabSite = BRIDGE_TAB_SITES[site];
+    if (!tabSite || !isSiteBridgeUrlAllowed(url, site)) {
         return { ok: false, error: "refused" };
     }
     try {
         if (typeof chrome === "undefined" || !chrome.tabs || !chrome.scripting) {
             return null;
         }
-        const tabs = await chrome.tabs.query({ url: "https://f95zone.to/*" });
+        const tabs = await chrome.tabs.query({ url: tabSite.tabs });
         const tab = (tabs || []).find((item) => item && typeof item.id === "number" && !item.discarded);
         if (!tab) {
             return null;
@@ -705,7 +748,7 @@ async function bridgeFetchViaTab(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS) {
         const injected = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             func: bridgeTabFetch,
-            args: [url, BRIDGE_MAX_BODY_BYTES, timeoutMs],
+            args: [url, BRIDGE_MAX_BODY_BYTES, timeoutMs, tabSite.host],
         });
         const result = injected && injected[0] ? injected[0].result : null;
         return result && typeof result.ok === "boolean" ? result : null;
@@ -718,33 +761,56 @@ async function bridgeFetchViaTab(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS) {
 // Smallest budget worth starting a second attempt with.
 const BRIDGE_MIN_ATTEMPT_MS = 2000;
 
+function bridgePrefersTab(site) {
+    return site === "lc" ? bridgePreferLcTabFetch : bridgePreferTabFetch;
+}
+
+function bridgeSetPrefersTab(site, value) {
+    if (site === "lc") {
+        bridgePreferLcTabFetch = value;
+    } else {
+        bridgePreferTabFetch = value;
+    }
+}
+
 // All attempts share one BRIDGE_FETCH_TIMEOUT_MS budget, so the answer
-// arrives before the app stops waiting and starts its next F95 request.
-async function bridgeFetchPreferringLogin(url) {
+// arrives before the app stops waiting and starts its next request.
+// Each answer says how it was made, for the app log: "via" is "background"
+// or "tab", and "tab_retry" says why a signed-out background answer was kept
+// ("no_tab", "failed" or "no_time").
+async function bridgeFetchPreferringLogin(url, site = "f95") {
     const deadline = Date.now() + BRIDGE_FETCH_TIMEOUT_MS;
     const remaining = () => deadline - Date.now();
-    if (bridgePreferTabFetch) {
-        const viaTab = await bridgeFetchViaTab(url, remaining());
+    const needsSession = (body) => (
+        site === "lc" ? lcNeedsBrowserSession(url, body) : bridgeNeedsBrowserSession(body)
+    );
+    const preferTab = bridgePrefersTab(site);
+    if (preferTab) {
+        const viaTab = await bridgeFetchViaTab(url, remaining(), site);
         if (viaTab) {
-            return viaTab;
+            return { ...viaTab, via: "tab" };
         }
         if (remaining() < BRIDGE_MIN_ATTEMPT_MS) {
-            return { ok: false, error: "timeout" };
+            return { ok: false, error: "timeout", via: "tab" };
         }
     }
-    const fetched = await bridgeFetchUrl(url, remaining());
-    if (bridgePreferTabFetch || !fetched.ok || !bridgeNeedsBrowserSession(fetched.body)) {
+    const fetched = { ...await bridgeFetchUrl(url, remaining(), site), via: "background" };
+    if (preferTab || !fetched.ok || !needsSession(fetched.body)) {
         return fetched;
     }
     if (remaining() < BRIDGE_MIN_ATTEMPT_MS) {
-        return fetched;
+        return { ...fetched, tab_retry: "no_time" };
     }
-    const viaTab = await bridgeFetchViaTab(url, remaining());
-    if (!viaTab || !viaTab.ok) {
-        return fetched;
+    const viaTab = await bridgeFetchViaTab(url, remaining(), site);
+    if (!viaTab) {
+        return { ...fetched, tab_retry: "no_tab" };
     }
-    bridgePreferTabFetch = true;
-    return viaTab;
+    if (!viaTab.ok) {
+        console.warn(`wLib extension: ${site} tab fetch failed: ${viaTab.error}`);
+        return { ...fetched, tab_retry: "failed" };
+    }
+    bridgeSetPrefersTab(site, true);
+    return { ...viaTab, via: "tab" };
 }
 
 // Bridge WebSocket client: persistent connection to the running app, hello
@@ -890,7 +956,7 @@ async function bridgeHandleFetchMessage(message) {
     try {
         let fetched;
         if (message.site === "lc" && await bridgeGetCanFetch(LC_ORIGIN)) {
-            fetched = await bridgeFetchUrl(url, BRIDGE_FETCH_TIMEOUT_MS, "lc");
+            fetched = await bridgeFetchPreferringLogin(url, "lc");
         } else if (message.site === undefined || message.site === "f95") {
             fetched = await bridgeFetchPreferringLogin(url);
         } else {
@@ -907,6 +973,12 @@ async function bridgeHandleFetchMessage(message) {
             };
         } else {
             result = { type: "fetch_result", id, ok: false, error: fetched.error };
+        }
+        if (fetched.via) {
+            result.via = fetched.via;
+        }
+        if (fetched.tab_retry) {
+            result.tab_retry = fetched.tab_retry;
         }
     } catch (error) {
         console.warn("wLib extension: bridge fetch failed.", error);

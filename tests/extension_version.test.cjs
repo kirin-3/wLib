@@ -544,11 +544,18 @@ test('bridge refuses non-allowlisted URLs without fetching', async () => {
   assert.equal(refused.ok, false);
   assert.equal(refused.error, 'refused');
   assert.equal(fetched, false);
-  // The F95 fetch bridge only looks up F95 tabs for its logged-in fallback;
+  // The fetch bridge only looks up F95 and LC tabs for its logged-in fallback;
   // optional-site registration may inject into already-open pages after an
   // explicit permission grant.
   const bridgeSource = backgroundSource.slice(backgroundSource.indexOf('// ---- Extension fetch fallback'), backgroundSource.indexOf('// Optional sites'));
-  assert.deepEqual(bridgeSource.match(/chrome\.tabs\.\w+\([^)]*\)/g), ['chrome.tabs.query({ url: "https://f95zone.to/*" })']);
+  assert.deepEqual(bridgeSource.match(/chrome\.tabs\.\w+\([^)]*\)/g), ['chrome.tabs.query({ url: tabSite.tabs })']);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(vm.runInContext('BRIDGE_TAB_SITES', context))),
+    {
+      f95: { host: 'f95zone.to', tabs: 'https://f95zone.to/*' },
+      lc: { host: 'lewdcorner.com', tabs: 'https://lewdcorner.com/*' },
+    },
+  );
   // Resolve requests may open windows; fetch itself stays tab-free.
   assert.ok(!backgroundSource.includes('chrome.offscreen'));
   assert.ok(!backgroundSource.includes('chrome.cookies'));
@@ -915,6 +922,104 @@ test('tab fetch refuses non-allowlisted URLs without injecting', async () => {
   const result = await vm.runInContext('bridgeFetchViaTab("https://example.com/")', context);
   assert.deepEqual({ ...result }, { ok: false, error: 'refused' });
   assert.equal(calls.tab, 0);
+});
+
+test('guest LC background fetch is repeated from an open LC tab, which is then preferred', async () => {
+  const { context, calls } = makeTabFetchHarness({ backgroundBody: GUEST_PAGE, tabBody: MEMBER_PAGE });
+  const queried = [];
+  const query = context.chrome.tabs.query;
+  context.chrome.tabs.query = async (filter) => { queried.push(filter.url); return query(filter); };
+  const url = 'https://lewdcorner.com/threads/4321/';
+  const first = await vm.runInContext(`bridgeFetchPreferringLogin(${JSON.stringify(url)}, "lc")`, context);
+  assert.equal(first.body, MEMBER_PAGE);
+  assert.equal(first.via, 'tab');
+  assert.deepEqual(queried, ['https://lewdcorner.com/*']);
+  assert.deepEqual([calls.background, calls.tab], [1, 1]);
+  assert.equal(calls.injected[0].args[0], url);
+  assert.equal(calls.injected[0].args[3], 'lewdcorner.com');
+  assert.equal(vm.runInContext('bridgePreferLcTabFetch', context), true);
+  // The LC preference does not change F95 fetches.
+  assert.equal(vm.runInContext('bridgePreferTabFetch', context), false);
+
+  const second = await vm.runInContext(`bridgeFetchPreferringLogin(${JSON.stringify(url)}, "lc")`, context);
+  assert.equal(second.via, 'tab');
+  assert.deepEqual([calls.background, calls.tab], [1, 2]);
+});
+
+test('guest LC background fetch is kept and marked when no LC tab is open', async () => {
+  const { context, calls } = makeTabFetchHarness({ backgroundBody: GUEST_PAGE, tabBody: MEMBER_PAGE, tabs: [] });
+  const result = await vm.runInContext('bridgeFetchPreferringLogin("https://lewdcorner.com/threads/1/", "lc")', context);
+  assert.equal(result.body, GUEST_PAGE);
+  assert.equal(result.via, 'background');
+  assert.equal(result.tab_retry, 'no_tab');
+  assert.equal(calls.tab, 0);
+  assert.equal(vm.runInContext('bridgePreferLcTabFetch', context), false);
+});
+
+test('a failed LC tab fetch keeps the background answer and says so', async () => {
+  const { context } = makeTabFetchHarness({ backgroundBody: GUEST_PAGE, tabBody: MEMBER_PAGE });
+  context.chrome.scripting.executeScript = async () => [{ result: { ok: false, error: 'network' } }];
+  const warnings = [];
+  context.console = { ...console, warn: (...args) => warnings.push(args.join(' ')) };
+  const result = await vm.runInContext('bridgeFetchPreferringLogin("https://lewdcorner.com/threads/1/", "lc")', context);
+  assert.equal(result.body, GUEST_PAGE);
+  assert.equal(result.tab_retry, 'failed');
+  assert.ok(warnings.some((line) => line.includes('lc tab fetch failed: network')));
+});
+
+test('LC feed guest answers trigger the tab retry; member JSON does not', () => {
+  const context = runBackground({ URL, TextEncoder, TextDecoder });
+  const feed = 'https://lewdcorner.com/latest-updates/api?page=1&per_page=90&cat=Games&sort=date';
+  const needs = (body) => vm.runInContext(`lcNeedsBrowserSession(${JSON.stringify(feed)}, ${JSON.stringify(body)})`, context);
+  assert.equal(needs('<html>login</html>'), true);
+  assert.equal(needs('﻿  <html>'), true);
+  assert.equal(needs('"You must be logged in"'), true);
+  assert.equal(needs('{"error":"not logged in"}'), true);
+  assert.equal(needs('{"status":"ok","result":{}}'), false);
+  assert.equal(needs('{"error":""}'), false);
+  assert.equal(needs('not json'), false);
+  const thread = (body) => vm.runInContext(`lcNeedsBrowserSession("https://lewdcorner.com/threads/1/", ${JSON.stringify(body)})`, context);
+  assert.equal(thread(GUEST_PAGE), true);
+  assert.equal(thread(MEMBER_PAGE), false);
+});
+
+test('LC tab fetch refuses F95 and other URLs without injecting', async () => {
+  const { context, calls } = makeTabFetchHarness({ backgroundBody: MEMBER_PAGE, tabBody: MEMBER_PAGE });
+  for (const url of ['https://f95zone.to/threads/1/', 'https://lewdcorner.com/members/1/', 'https://lewdcorner.com/threads/1/ ']) {
+    const result = await vm.runInContext(`bridgeFetchViaTab(${JSON.stringify(url)}, 1000, "lc")`, context);
+    assert.deepEqual({ ...result }, { ok: false, error: 'refused' });
+  }
+  const f95AsLc = await vm.runInContext('bridgeFetchViaTab("https://lewdcorner.com/threads/1/", 1000, "f95")', context);
+  assert.deepEqual({ ...f95AsLc }, { ok: false, error: 'refused' });
+  assert.equal(calls.tab, 0);
+});
+
+test('LC bridge fetch reports how the answer was made', async () => {
+  const { context, sent, instances } = makeBridgeHarness({ canFetch: true });
+  context.chrome.permissions.contains = async () => true;
+  context.chrome.tabs = { query: async () => [] };
+  context.chrome.scripting = { executeScript: async () => assert.fail('no tab to inject into') };
+  context.fetch = async (url) => ({ status: 200, url, text: async () => GUEST_PAGE });
+  vm.runInContext('ensureBridge()', context);
+  instances[0].readyState = 1;
+  await vm.runInContext(
+    'bridgeHandleFetchMessage({ id: "lc-1", url: "https://lewdcorner.com/threads/1/", site: "lc" })',
+    context,
+  );
+  const result = JSON.parse(sent.at(-1));
+  assert.equal(result.type, 'fetch_result');
+  assert.equal(result.ok, true);
+  assert.equal(result.via, 'background');
+  assert.equal(result.tab_retry, 'no_tab');
+});
+
+test('injected tab fetch checks the redirect against the given host', async () => {
+  const context = runBackground({ URL, TextEncoder, TextDecoder });
+  context.content = { fetch: async (url) => ({ status: 200, url, text: async () => MEMBER_PAGE }) };
+  const lc = await vm.runInContext('bridgeTabFetch("https://lewdcorner.com/threads/1/", 1024, 1000, "lewdcorner.com")', context);
+  assert.equal(lc.ok, true);
+  const wrongHost = await vm.runInContext('bridgeTabFetch("https://lewdcorner.com/threads/1/", 1024, 1000)', context);
+  assert.deepEqual({ ...wrongHost }, { ok: false, error: 'offsite_redirect' });
 });
 
 test('injected tab fetch prefers the page fetch and guards redirects and size', async () => {

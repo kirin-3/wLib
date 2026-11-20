@@ -13,6 +13,7 @@ import base64
 import binascii
 import json
 import logging
+import re
 import socket
 import sys
 import threading
@@ -25,9 +26,17 @@ from typing import BinaryIO, cast, final
 from collections.abc import Callable
 
 from core import extension_pairing, extension_ws
+from core.app_log import RepeatLimiter
 from core.lewdcorner import Site
 
 logger = logging.getLogger("wlib.bridge")
+# Repeated failures (every LC request while signed out, a missing extension)
+# are logged once per key every few minutes, with a count of the repeats.
+_repeats = RepeatLimiter()
+# How an extension made a fetch answer, for the log (extension_api.md).
+_FETCH_VIA = frozenset({"background", "tab"})
+_TAB_RETRY = frozenset({"no_tab", "failed", "no_time"})
+_XF_LOGGED_IN_RE = re.compile(r"""\bdata-logged-in=["'](true|false)["']""", re.IGNORECASE)
 
 
 class BridgeUnavailable(Exception):
@@ -76,6 +85,10 @@ class BridgeResponse:
     status: int
     final_url: str
     body: str
+    # "background" or "tab"; "" from extension 1.2.13 and older.
+    via: str = ""
+    # Why a signed-out background answer was kept: "no_tab", "failed", "no_time".
+    tab_retry: str = ""
 
 
 @final
@@ -289,13 +302,17 @@ _disconnects = 0
 _last_disconnect_at: float | None = None
 _last_connection_seconds: float | None = None
 _last_fetch: dict[str, object] | None = None
+# Signed-in state of the last LC page fetch, so a change is logged once.
+_last_lc_signed_in: bool | None = None
 
 
 def reset_for_tests() -> None:
     """Clear registry and pending (tests only)."""
     global _disconnects, _last_disconnect_at, _last_connection_seconds, _last_fetch, _last_lc_request
-    global _lc_request_lock
+    global _lc_request_lock, _last_lc_signed_in, _repeats
     _lc_request_lock = _LcGate()
+    _repeats = RepeatLimiter()
+    _last_lc_signed_in = None
     with _lock:
         _connections.clear()
         _pending.clear()
@@ -331,9 +348,13 @@ def _register_connection(conn: BridgeConnection) -> None:
     with _lock:
         if conn not in _connections:
             _connections.insert(0, conn)
+        count = len(_connections)
+    logger.info(
+        "Browser extension bridge opened (pairing %s, %d open)", conn.pairing_id or "none", count
+    )
 
 
-def _remove_connection(conn: BridgeConnection) -> None:
+def _remove_connection(conn: BridgeConnection, reason: str = "") -> None:
     global _disconnects, _last_disconnect_at, _last_connection_seconds
     duration = 0.0
     with _lock:
@@ -363,7 +384,12 @@ def _remove_connection(conn: BridgeConnection) -> None:
             pending_resolve.error = "disconnected"
             pending_resolve.event.set()
     if was_open:
-        logger.info("Browser extension disconnected after %.0f s", duration)
+        logger.info(
+            "Browser extension disconnected after %.0f s (pairing %s%s)",
+            duration,
+            conn.pairing_id or "none",
+            f", {reason}" if reason else "",
+        )
 
 
 def _newest_eligible(site: Site = "f95") -> BridgeConnection | None:
@@ -389,8 +415,27 @@ def can_fetch_lc_images() -> bool:
     return _newest_lc_image_fetcher() is not None
 
 
+def _how(via: str, tab_retry: str) -> str:
+    """Log text for how the extension made an answer."""
+    if not via:
+        return "extension 1.2.13 or older did not say how"
+    text = "background request" if via == "background" else "request from an open tab"
+    if tab_retry == "no_tab":
+        text += "; no open tab of the site to retry in"
+    elif tab_retry == "failed":
+        text += "; the retry in an open tab failed"
+    elif tab_retry == "no_time":
+        text += "; no time left to retry in an open tab"
+    return text
+
+
 def record_fetch_outcome(
-    status: int | None, signed_in: bool | None, error: str = ""
+    status: int | None,
+    signed_in: bool | None,
+    error: str = "",
+    *,
+    via: str = "",
+    tab_retry: str = "",
 ) -> None:
     """Remember the latest extension fetch for diagnostics.
 
@@ -411,10 +456,63 @@ def record_fetch_outcome(
         logger.warning("Browser extension fetch failed: %s", error)
     elif signed_in is False and previous is not False:
         logger.warning(
-            "Browser extension fetched F95Zone without a login (no F95Zone cookies sent)"
+            "Browser extension fetched F95Zone without a login (HTTP %s, %s). The browser sent no "
+            + "F95Zone cookies: sign in to F95Zone there, or keep an F95Zone tab open",
+            status,
+            _how(via, tab_retry),
         )
     elif signed_in is True and previous is not True:
-        logger.info("Browser extension fetched F95Zone while logged in")
+        logger.info("Browser extension fetched F95Zone while logged in (%s)", _how(via, tab_retry))
+
+
+def _lc_signed_in(url: str, body: str) -> bool | None:
+    """The login state an LC page shows; ``None`` when it does not say."""
+    if "/latest-updates/api?" in url:
+        text = body.lstrip("\ufeff \t\r\n")
+        return False if text.startswith("<") else None
+    match = _XF_LOGGED_IN_RE.search(body[:4096])
+    return None if match is None else match.group(1).lower() == "true"
+
+
+def _note_lc_response(url: str, response: BridgeResponse) -> None:
+    """Log a change in LC login state, with how the extension fetched."""
+    global _last_lc_signed_in
+    signed_in = _lc_signed_in(url, response.body)
+    if signed_in is None:
+        return
+    with _lock:
+        previous = _last_lc_signed_in
+        _last_lc_signed_in = signed_in
+    if signed_in is previous:
+        return
+    if signed_in:
+        logger.info(
+            "Browser extension fetched LewdCorner while logged in (%s)",
+            _how(response.via, response.tab_retry),
+        )
+        return
+    logger.warning(
+        "Browser extension fetched LewdCorner without a login (HTTP %s, %s). The browser sent no "
+        + "LewdCorner cookies: sign in to LewdCorner there. If the login is in a container tab "
+        + "(Zen workspaces, Multi-Account Containers) or strict cookie settings are on, keep a "
+        + "LewdCorner tab open",
+        response.status,
+        _how(response.via, response.tab_retry),
+    )
+
+
+def _connections_summary() -> str:
+    """Connected extensions and what each may fetch, for a log line."""
+    with _lock:
+        conns = [conn for conn in _connections if not conn.closed]
+    if not conns:
+        return "no extension connected"
+    return "; ".join(
+        f"pairing {conn.pairing_id or 'none'} version {conn.extension_version or 'unknown'} "
+        + f"F95Zone {'yes' if conn.can_fetch else 'no'}, "
+        + f"LewdCorner {'yes' if conn.can_fetch_lc else 'no (LewdCorner switch off)'}"
+        for conn in conns
+    )
 
 
 def status_snapshot() -> dict[str, object]:
@@ -476,7 +574,8 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
             can_fetch_lists=message.get("can_fetch_lists"),
         )
         logger.info(
-            "Browser extension connected (version %s, protocol %s, can fetch F95Zone: %s, LewdCorner: %s, can_resolve_lc: %s, can_fetch_lc_images: %s, can_fetch_lists: %s)",
+            "Browser extension connected (pairing %s, version %s, protocol %s, can fetch F95Zone: %s, LewdCorner: %s, can_resolve_lc: %s, can_fetch_lc_images: %s, can_fetch_lists: %s)",
+            conn.pairing_id or "none",
             conn.extension_version or "unknown",
             message.get("protocol"),
             conn.can_fetch,
@@ -502,6 +601,8 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
             logger.info("Browser extension can_resolve_lc: %s", conn.can_resolve_lc)
         if conn.can_fetch != could_fetch:
             logger.info("Browser extension can fetch: %s", conn.can_fetch)
+        if conn.can_fetch_lc != could_fetch_lc:
+            logger.info("Browser extension can fetch LewdCorner: %s", conn.can_fetch_lc)
         if conn.can_fetch_lc_images != could_fetch_lc_images:
             logger.info("Browser extension can_fetch_lc_images: %s", conn.can_fetch_lc_images)
             if conn.can_fetch_lc_images:
@@ -558,8 +659,14 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
                 if isinstance(message.get("body"), str)
                 else ""
             )
+            via = message.get("via")
+            tab_retry = message.get("tab_retry")
             item.response = BridgeResponse(
-                status=status, final_url=final_url, body=body
+                status=status,
+                final_url=final_url,
+                body=body,
+                via=via if isinstance(via, str) and via in _FETCH_VIA else "",
+                tab_retry=tab_retry if isinstance(tab_retry, str) and tab_retry in _TAB_RETRY else "",
             )
             item.error = ""
         else:
@@ -643,6 +750,13 @@ def fetch(url: str, timeout: float = 30, *, site: Site = "f95", background: bool
     foreground LC request, including ones that arrive while it waits."""
     if site == "lc":
         if not is_available(site="lc"):
+            _repeats.log(
+                logger,
+                logging.WARNING,
+                "lc-unavailable",
+                "No browser extension can fetch LewdCorner (%s)",
+                _connections_summary(),
+            )
             raise BridgeUnavailable("no eligible extension connected")
         if background:
             _lc_request_lock.acquire_background(_lc_gap_ready_at)
@@ -714,10 +828,22 @@ def _fetch(url: str, timeout: float, site: Site, conn: BridgeConnection | None =
     if not item.event.wait(timeout):
         with _lock:
             _ = _pending.pop(request_id, None)
+        if site == "lc":
+            _note_lc_failure("extension did not answer in time")
         raise BridgeFailed("extension did not answer in time")
     if item.response is not None:
+        if site == "lc":
+            _note_lc_response(url, item.response)
         return item.response
+    if site == "lc":
+        _note_lc_failure(item.error or "extension fetch failed")
     raise BridgeFailed(item.error or "extension fetch failed")
+
+
+def _note_lc_failure(error: str) -> None:
+    _repeats.log(
+        logger, logging.WARNING, f"lc-fail:{error}", "Browser extension LewdCorner fetch failed: %s", error
+    )
 
 
 def _background_ready_at() -> float:
@@ -902,23 +1028,28 @@ def serve_bridge_connection(
         conn.shutdown = lambda: _cut_socket(sock)
     _register_connection(conn)
     state = extension_ws.MessageState()
+    reason = ""
     try:
         # Checked after registering: a pairing removed before this point fails
         # here, and one removed after it finds this socket in the registry.
         if pairing_id and not extension_pairing.store().is_paired_id(pairing_id):
+            reason = "pairing was removed"
             return
         while True:
             try:
                 kind, payload = extension_ws.recv_message(rfile, state)
             except extension_ws.MessageTooLarge:
+                reason = "message too large"
                 try:
                     conn.send_locked(lambda: _send_raw(wfile, extension_ws.encode_server_close(1009)))
                 except (OSError, ValueError):
                     pass
                 break
-            except (extension_ws.WebSocketError, OSError, ValueError):
+            except (extension_ws.WebSocketError, OSError, ValueError) as exc:
+                reason = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
                 break
             if kind == "close":
+                reason = "closed by the extension"
                 try:
                     conn.send_locked(
                         lambda: _send_raw(
@@ -947,7 +1078,7 @@ def serve_bridge_connection(
                 continue
             _handle_message(conn, message)
     finally:
-        _remove_connection(conn)
+        _remove_connection(conn, reason)
         try:
             closer = getattr(sock, "close", None)
             if callable(closer):

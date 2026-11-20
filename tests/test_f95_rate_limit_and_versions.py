@@ -54,7 +54,7 @@ def test_extension_fetch_429_starts_cooldown_before_the_slot_is_released(
     monkeypatch: pytest.MonkeyPatch, recording_lock: _RecordingLock
 ) -> None:
     monkeypatch.setattr(extension_bridge, "fetch", _fake_bridge_fetch(429))
-    monkeypatch.setattr(extension_bridge, "record_fetch_outcome", lambda *_args: None)
+    monkeypatch.setattr(extension_bridge, "record_fetch_outcome", lambda *_args, **_kwargs: None)
     status, _ = scraper_module._f95_get_via_extension("https://f95zone.to/threads/1/")  # pyright: ignore[reportPrivateUsage]
     assert status == 429
     assert recording_lock.cooldown_at_release[-1] > 0

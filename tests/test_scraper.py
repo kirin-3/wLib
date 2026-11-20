@@ -857,7 +857,7 @@ def test_extension_fetch_records_signed_in_state(monkeypatch, body, expected):
     monkeypatch.setattr(
         scraper_module.extension_bridge,
         "record_fetch_outcome",
-        lambda *args: recorded.append(args),
+        lambda *args, **_kwargs: recorded.append(args),
     )
     status, _ = scraper_module._f95_get_via_extension(
         "https://f95zone.to/threads/1/"
@@ -884,7 +884,7 @@ def test_extension_fetch_records_cloudflare_challenge(monkeypatch):
     monkeypatch.setattr(
         scraper_module.extension_bridge,
         "record_fetch_outcome",
-        lambda *args: recorded.append(args),
+        lambda *args, **_kwargs: recorded.append(args),
     )
     _ = scraper_module._f95_get_via_extension("https://f95zone.to/threads/1/")
     assert recorded == [(403, None, "Cloudflare challenge")]
@@ -902,7 +902,7 @@ def test_extension_fetch_records_bridge_failure(monkeypatch):
     monkeypatch.setattr(
         scraper_module.extension_bridge,
         "record_fetch_outcome",
-        lambda *args: recorded.append(args),
+        lambda *args, **_kwargs: recorded.append(args),
     )
     with pytest.raises(scraper_module.extension_bridge.BridgeFailed):
         scraper_module._f95_get_via_extension("https://f95zone.to/threads/1/")

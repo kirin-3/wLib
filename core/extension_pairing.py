@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
@@ -18,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, TypedDict, cast
 
+from core.app_log import RepeatLimiter
 from core.host_platform import get_data_dir
 
 PAIRING_FILE = "extension-pairing.json"
@@ -30,6 +32,9 @@ _TOKEN_RE = re.compile(r"[0-9a-f]{64}")
 
 PairingState = Literal["paired", "pending", "denied", "invalid"]
 
+_log = logging.getLogger("wlib.extension")
+_repeats = RepeatLimiter()
+
 
 class PairingEntry(TypedDict):
     id: str
@@ -40,6 +45,10 @@ class PairingEntry(TypedDict):
 
 class _StoredEntry(PairingEntry):
     hash: str
+
+
+def valid_token(token: object) -> bool:
+    return isinstance(token, str) and _TOKEN_RE.fullmatch(token) is not None
 
 
 def token_hash(token: str) -> str:
@@ -106,7 +115,14 @@ class PairingStore:
         paired: dict[str, _StoredEntry] = {}
         try:
             raw = cast(object, json.loads(self._path.read_text(encoding="utf-8")))
-        except (OSError, ValueError):
+        except FileNotFoundError:
+            raw = None
+        except (OSError, ValueError) as exc:
+            _log.warning(
+                "Could not read %s; every browser extension must be allowed again: %s",
+                self._path,
+                exc,
+            )
             raw = None
         items = cast(dict[str, object], raw).get("paired") if isinstance(raw, dict) else None
         for item in cast(list[object], items) if isinstance(items, list) else []:
@@ -124,6 +140,10 @@ class PairingStore:
                 "at": str(fields.get("at") or "")[:40],
             }
         self._paired = paired
+        _log.info(
+            "Allowed browser extensions: %s",
+            ", ".join(f"{entry['browser']} {entry['id']}" for entry in paired.values()) or "none",
+        )
         return paired
 
     def _save(self, paired: dict[str, _StoredEntry]) -> None:
@@ -147,9 +167,9 @@ class PairingStore:
 
     def check(self, token: object, origin: str = "") -> tuple[PairingState, bool]:
         """State of a caller's token, and whether this call made a new request."""
-        if not isinstance(token, str) or not _TOKEN_RE.fullmatch(token):
+        if not valid_token(token):
             return "invalid", False
-        digest = token_hash(token)
+        digest = token_hash(cast(str, token))
         with self._lock:
             if digest in self._load():
                 return "paired", False
@@ -159,6 +179,15 @@ class PairingStore:
             if digest in self._pending:
                 return "pending", False
             if len(self._pending) >= MAX_PENDING:
+                _repeats.log(
+                    _log,
+                    logging.WARNING,
+                    "pending-full",
+                    "Refused a new browser extension pairing request: %d requests already wait "
+                    + "for an answer in wLib (they expire after %d minutes)",
+                    len(self._pending),
+                    PENDING_TTL_SECONDS // 60,
+                )
                 return "denied", False
             self._pending[digest] = {
                 "hash": digest,
@@ -188,21 +217,37 @@ class PairingStore:
             )
             if digest is None:
                 return False
+            entry = self._pending[digest]
             if not allow:
                 self._forget_pending(digest)
                 self._denied.add(digest)
+                _log.info(
+                    "Refused %s browser extension %s until wLib restarts", entry["browser"], entry["id"]
+                )
                 return True
             paired = dict(self._load())
-            paired[digest] = self._pending[digest]
+            paired[digest] = entry
             evicted: list[str] = []
             while len(paired) > MAX_PAIRED:
                 evicted.append(paired.pop(next(iter(paired)))["id"])
             try:
                 self._save(paired)
-            except OSError:
+            except OSError as exc:
+                _log.warning(
+                    "Could not save the allowed %s browser extension %s to %s: %s",
+                    entry["browser"],
+                    entry["id"],
+                    self._path,
+                    exc,
+                )
                 return False
             self._forget_pending(digest)
             self._paired = paired
+        _log.info("Allowed %s browser extension %s", entry["browser"], entry["id"])
+        for pairing_id in evicted:
+            _log.info(
+                "Removed browser extension %s: more than %d extensions are allowed", pairing_id, MAX_PAIRED
+            )
         _notify_removed(evicted)
         return True
 
@@ -217,9 +262,13 @@ class PairingStore:
                 return False
             try:
                 self._save(paired)
-            except OSError:
+            except OSError as exc:
+                _log.warning(
+                    "Could not remove browser extension %s from %s: %s", pairing_id, self._path, exc
+                )
                 return False
             self._paired = paired
+        _log.info("Removed browser extension %s", pairing_id)
         _notify_removed([pairing_id])
         return True
 

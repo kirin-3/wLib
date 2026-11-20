@@ -20,6 +20,7 @@ from core import lewdcorner
 from collections.abc import Callable
 
 from core.api import APP_VERSION
+from core.app_log import RepeatLimiter
 from core.f95zone import extract_thread_id, normalize_thread_url
 
 if TYPE_CHECKING:
@@ -29,6 +30,10 @@ if TYPE_CHECKING:
 
 
 DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
+_log = logging.getLogger("wlib.extension")
+# An extension retries a refused request every few seconds; log each kind once
+# per key every few minutes, with a count of the repeats.
+_repeats = RepeatLimiter()
 VITE_DEV_SERVER = "http://localhost:5173"
 EXTENSION_REQUEST_HEADER = "X-wLib-Extension"
 # Answers for an extension the user has not allowed (core/extension_pairing.py).
@@ -116,6 +121,17 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         }:
             return True
 
+        shown = ", ".join(str(host)[:100] for host in hosts) or "none"
+        _repeats.log(
+            _log,
+            logging.WARNING,
+            f"host:{shown}",
+            "Refused extension server request %s %s: Host %s is not localhost:8183 or 127.0.0.1:8183 "
+            + "(a proxy or another program sent it)",
+            self._log_method(),
+            self._log_path(),
+            shown,
+        )
         self._discard_request_body()
         self.send_response(403)
         self.send_header("Content-Type", "application/json")
@@ -159,6 +175,13 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             return False
         return bool(sent) and secrets.compare_digest(sent, expected)
 
+    def _log_method(self) -> str:
+        return str(getattr(self, "command", "") or "?")
+
+    def _log_path(self) -> str:
+        """The request path without its query, which can hold the pairing token."""
+        return urlsplit(self.path).path[:200] or "/"
+
     def _pairing_state(self, token: object) -> str:
         """"paired", or why this caller may not use the extension endpoints.
 
@@ -171,6 +194,8 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         from core.extension_pairing import store
 
         state, new_request = store().check(token, origin)
+        if state != "paired":
+            self._log_pairing_refusal(token, origin, state, new_request)
         if new_request and window_ref:
             try:
                 _ = cast(ExtensionWindow, window_ref).evaluate_js(
@@ -178,7 +203,51 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 )
             except Exception as exc:
                 print(f"[wLib] Failed to announce extension pairing request: {exc}")
+        elif new_request:
+            _log.warning("No wLib window to show the pairing request in yet")
         return state
+
+    def _log_pairing_refusal(self, token: object, origin: str, state: str, new_request: bool) -> None:
+        from core.extension_pairing import browser_name, pairing_code, token_hash, valid_token
+
+        browser = browser_name(origin)
+        if not valid_token(token):
+            _repeats.log(
+                _log,
+                logging.WARNING,
+                f"pairing-invalid:{origin}",
+                "Refused %s extension request %s %s: no valid pairing token "
+                + "(extension older than pairing, or its storage was cleared)",
+                browser,
+                self._log_method(),
+                self._log_path(),
+            )
+            return
+        code = pairing_code(token_hash(cast(str, token)))
+        if new_request:
+            _log.info(
+                "Pairing request from %s extension, code %s (origin %s); "
+                + "waiting for the user to allow it in wLib",
+                browser,
+                code,
+                origin[:100] or "none",
+            )
+            return
+        reasons = {
+            "pending": "waiting for the user to allow it in wLib",
+            "denied": "refused in wLib, or too many unanswered requests; restart wLib to ask again",
+        }
+        _repeats.log(
+            _log,
+            logging.WARNING,
+            f"pairing:{code}:{state}",
+            "Refused %s extension code %s for %s %s: %s",
+            browser,
+            code,
+            self._log_method(),
+            self._log_path(),
+            reasons.get(state, state),
+        )
 
     def _require_pairing(self, allowed_origin: str, token: object = None) -> bool:
         """True for a paired caller; otherwise answers 403 and returns False."""
@@ -395,6 +464,16 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         )
 
     def _reject_origin(self) -> None:
+        origin = (self.headers.get("Origin") or "").strip()[:100] or "none"
+        _repeats.log(
+            _log,
+            logging.WARNING,
+            f"origin:{origin}",
+            "Refused extension server request %s %s from Origin %s: not a browser extension",
+            self._log_method(),
+            self._log_path(),
+            origin,
+        )
         self._discard_request_body()
         self.send_response(403)
         self.send_header("Content-Type", "application/json")
@@ -433,6 +512,15 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         }
 
     def _send_bridge_error(self, status: int, error: bytes) -> None:
+        text = error.decode("ascii", "replace")
+        _repeats.log(
+            _log,
+            logging.WARNING,
+            f"bridge:{status}:{text}",
+            "Refused browser extension bridge connection: HTTP %s %s",
+            status,
+            text,
+        )
         self._discard_request_body()
         self.send_response(status)
         if status == 426:

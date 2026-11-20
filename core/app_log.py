@@ -84,6 +84,52 @@ class UiErrorLimiter:
 
 
 @final
+class RepeatLimiter:
+    """Lets one log line per key through every ``window`` seconds.
+
+    For problems that repeat on every retry, such as an extension that the
+    server refuses every few seconds: the first one is logged, the repeats
+    are counted and reported with the next line that gets through."""
+
+    def __init__(
+        self,
+        window: float = 300.0,
+        now: Callable[[], float] = time.monotonic,
+        max_keys: int = 256,
+    ) -> None:
+        self._window = window
+        self._now = now
+        self._max_keys = max_keys
+        self._seen: dict[str, tuple[float, int]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> int | None:
+        """``None`` to skip this line; else how many repeats were skipped before it."""
+        with self._lock:
+            now = self._now()
+            last = self._seen.get(key)
+            if last is not None and now - last[0] < self._window:
+                self._seen[key] = (last[0], last[1] + 1)
+                return None
+            if last is None and len(self._seen) >= self._max_keys:
+                oldest = min(self._seen, key=lambda item: self._seen[item][0])
+                del self._seen[oldest]
+            self._seen[key] = (now, 0)
+            return last[1] if last is not None else 0
+
+    def log(
+        self, logger: logging.Logger, level: int, key: str, message: str, *args: object
+    ) -> None:
+        skipped = self.allow(key)
+        if skipped is None:
+            return
+        if skipped:
+            message += " (%d more like this since the last report)"
+            args = (*args, skipped)
+        logger.log(level, message, *args)
+
+
+@final
 class OutputTee:
     def __init__(self, stream: TextIO | None, name: str, level: int) -> None:
         self.stream = stream

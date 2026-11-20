@@ -272,6 +272,8 @@ def _f95_get_via_extension(url: str) -> tuple[int, str]:
             "Cloudflare challenge"
             if signed_in is None and _CLOUDFLARE_CHALLENGE_RE.search(response.body[:65536])
             else "",
+            via=response.via,
+            tab_retry=response.tab_retry,
         )
         # Inside the slot, so the next queued request sees the cooldown.
         _note_rate_limit(response.status)
