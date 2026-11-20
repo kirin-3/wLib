@@ -48,6 +48,8 @@ _log = logging.getLogger(__name__)
 
 JOBS_FILE = "game-file-jobs.json"
 MOVE_PREFIX = ".wlib-move-"
+# A folder that an uninstall set aside until the library change is saved.
+UNINSTALL_PREFIX = ".wlib-uninstall-"
 
 UNINSTALL_RUNNING = "Close the game before uninstalling it."
 MOVE_RUNNING = "Close the game before moving it."
@@ -439,6 +441,69 @@ def trash_root(root: str, library_folders: Sequence[str]) -> str:
     return "recorded"
 
 
+@dataclass(frozen=True)
+class StagedRemoval:
+    """A game folder set aside for an uninstall, still possible to put back.
+
+    `staged` is "" when no rename worked; the folder then stays at `root`
+    until finish_removal() deletes it in place.
+    """
+
+    root: str
+    staged: str = ""
+    library_trash: str = ""
+
+
+def stage_removal(root: str, library_folders: Sequence[str]) -> StagedRemoval:
+    """Rename `root` out of the way without deleting anything yet.
+
+    The name does not match the trash sweeps, so a crash before
+    finish_removal() keeps the files (as a hidden `.wlib-uninstall-<ns>`
+    folder) instead of deleting them while the library still has the game.
+    """
+    library_trash = trash_root_for(root, library_folders)
+    parent = os.path.dirname(os.path.abspath(root).rstrip(os.sep))
+    for folder in (library_trash, parent):
+        if not folder:
+            continue
+        staged = os.path.join(folder, f"{UNINSTALL_PREFIX}{time.time_ns()}")
+        try:
+            os.rename(root, staged)
+        except OSError:
+            continue
+        _log.info("Uninstall set %s aside as %s", root, staged)
+        return StagedRemoval(
+            root, staged, library_trash if folder == library_trash else ""
+        )
+    return StagedRemoval(root)
+
+
+def undo_removal(staged: StagedRemoval) -> str:
+    """Put a staged folder back; returns an error, or "" when it is back."""
+    if not staged.staged:
+        return ""
+    if os.path.lexists(staged.root):
+        return f"The game files were kept in {staged.staged}."
+    try:
+        os.rename(staged.staged, staged.root)
+    except OSError as exc:
+        _log.warning("Could not put %s back to %s: %s", staged.staged, staged.root, exc)
+        return f"The game files were kept in {staged.staged}."
+    return ""
+
+
+def finish_removal(staged: StagedRemoval) -> str:
+    """Delete a staged folder in the background; returns how, as trash_root()."""
+    if not staged.staged:
+        _delete_in_place(staged.root)
+        return "in_place"
+    if staged.library_trash and defer_remove_tree(staged.staged, staged.library_trash):
+        return "library"
+    add_job("trash", staged.staged)
+    _start_recorded_delete("trash", staged.staged)
+    return "recorded"
+
+
 def sweep_leftovers(library_folders: Sequence[str]) -> int:
     """Restart deletes of trash and move folders left by a crash or a quit.
 
@@ -512,12 +577,24 @@ def run_uninstall(
                 if error:
                     result["error"] = f"Save backup failed, so nothing was deleted: {error}"
                     continue
-            root = str(entry["root"])
-            result["trash"] = trash_root(root, context.library_folders)
-            if remove_from_library:
-                hooks.remove_entry(game_id)
-            else:
-                clear_game_install(game_id)
+            # Nothing is deleted until the library change is saved: a failed
+            # save puts the folder back.
+            staged = stage_removal(str(entry["root"]), context.library_folders)
+            try:
+                if remove_from_library:
+                    hooks.remove_entry(game_id)
+                else:
+                    clear_game_install(game_id)
+            except Exception as exc:
+                _log.exception("Uninstall of game %s could not update the library", game_id)
+                error = str(exc) or type(exc).__name__
+                kept = undo_removal(staged)
+                result["error"] = (
+                    f"The library could not be updated, so nothing was deleted: {error}"
+                    + (f" {kept}" if kept else "")
+                )
+                continue
+            result["trash"] = finish_removal(staged)
             result["success"] = True
         except Exception as exc:
             _log.exception("Uninstall of game %s failed", game_id)

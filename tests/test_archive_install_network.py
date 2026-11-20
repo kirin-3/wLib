@@ -195,7 +195,7 @@ def test_defer_remove_tree_renames_then_deletes(tmp_path):
 
 def test_sweep_trash_deletes_leftover_trash(tmp_path):
     lib = tmp_path / "lib"
-    leftover = lib / f"{TRASH_PREFIX}123"
+    leftover = lib / f"{TRASH_PREFIX}{time.time_ns()}"
     (leftover / "a").mkdir(parents=True)
     (leftover / "a" / "f").write_text("x")
     keep = lib / "Game"

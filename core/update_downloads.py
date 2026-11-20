@@ -16,6 +16,8 @@ from core.downloads.queue import DownloadQueue, QueueJob
 from core.downloads.transfer import DownloadError
 
 # A build identity: what a saved download stores instead of its link.
+# `mirror` is the mirror's own label and `copy` counts earlier mirrors with the
+# same identity in one thread read, so two Pixeldrain links in one row differ.
 class _LinkKey(NamedTuple):
     site: lewdcorner.Site
     label: str
@@ -23,6 +25,8 @@ class _LinkKey(NamedTuple):
     platform: str
     host: str
     part: str
+    mirror: str
+    copy: int
 
 
 KEY_FIELDS = _LinkKey._fields
@@ -139,11 +143,15 @@ class UpdateDownloads:
         output: list[dict[str, object]] = []
         now = time.monotonic()
         new_links: dict[str, _Link] = {}
+        copies: dict[tuple[str, ...], int] = {}
         for build in builds:
             mirrors: list[dict[str, object]] = []
             for mirror in build['mirrors']:
                 identifier = uuid.uuid4().hex
-                key = _LinkKey(selected, build['label'], build['section'], build['platform'], mirror['host'], mirror['part'])
+                base = (selected, build['label'], build['section'], build['platform'], mirror['host'], mirror['part'], mirror['label'])
+                copy = copies.get(base, 0)
+                copies[base] = copy + 1
+                key = _LinkKey(*base, copy)
                 new_links[identifier] = _Link(game_id, key, mirror['url'], now, str(result.get('version') or ''), fetch)
                 mirrors.append({'link_id':identifier, 'host':mirror['host'], 'label':mirror['label'], 'part':mirror['part'], 'split':mirror['split'],
                                 'in_app':_in_app(mirror['host'], mirror['url'])})
@@ -187,16 +195,29 @@ class UpdateDownloads:
                 raise DownloadError('Download link is unavailable; reload the picker')
             if link.url and time.monotonic() - link.created < LINK_SECONDS:
                 return link
-            key = link.key
+            key, version = link.key, link.version
             link.url = ''
         result = self.get_links(game_id, link.site)
         if not result.get('success'):
             raise DownloadError(str(result.get('error') or 'Could not reload links'))
         with self.lock:
-            match = next((candidate for candidate in self.links.values() if candidate.game_id == game_id and candidate.key == key and candidate.url), None)
-            if match is None:
-                raise DownloadError('Mirror no longer available; choose another mirror')
-            return match
+            matches = self._matches(game_id, _full_match(key), version)
+        if not matches:
+            raise DownloadError(_gone(version))
+        return matches[0]
+
+    def _matches(self, game_id: int, same: Callable[[_LinkKey], bool], version: str,
+                 fresh: bool = False) -> list[_Link]:
+        """Held links with a URL for this build, mirror and release (call with the lock held)."""
+        now = time.monotonic()
+        wanted = version.strip().casefold()
+        return [
+            candidate for candidate in self.links.values()
+            if candidate.game_id == game_id and candidate.url and same(candidate.key)
+            # A refreshed thread that now offers another release is not this download.
+            and (not wanted or candidate.version.strip().casefold() == wanted)
+            and (not fresh or now - candidate.created < LINK_SECONDS)
+        ]
 
     @staticmethod
     def _resolver(url: str, host: str) -> Resolve:
@@ -251,27 +272,43 @@ class UpdateDownloads:
 
         Raises DownloadError when the thread cannot be read or no longer offers the mirror.
         """
-        site = "lc" if job.source.get("site") == "lc" else "f95"
-        key = _LinkKey(
-            site, str(job.source.get('label') or ''), str(job.source.get('section') or ''),
-            str(job.source.get('platform') or ''), str(job.source.get('host') or ''),
-            str(job.source.get('part') or ''),
+        source = job.source
+        site: lewdcorner.Site = "lc" if source.get("site") == "lc" else "f95"
+        build = (
+            site, str(source.get('label') or ''), str(source.get('section') or ''),
+            str(source.get('platform') or ''), str(source.get('host') or ''),
+            str(source.get('part') or ''),
         )
-        now = time.monotonic()
+        copy = source.get('copy')
+        same: Callable[[_LinkKey], bool]
+        if isinstance(copy, int) and not isinstance(copy, bool) and 'mirror' in source:
+            same = _full_match(_LinkKey(*build, str(source.get('mirror') or ''), copy))
+        else:
+            # A job saved before mirrors had an identity: only a single match is safe.
+            same = lambda key: tuple(key)[:len(build)] == build  # noqa: E731
         with self.lock:
-            link = next((candidate for candidate in self.links.values()
-                         if candidate.game_id == job.game_id and candidate.key == key and candidate.url
-                         and now - candidate.created < LINK_SECONDS), None)
-        if link is None:
+            links = self._matches(job.game_id, same, job.version, fresh=True)
+        if not links:
             result = self.get_links(job.game_id, site, picker=False)
             if not result.get('success'):
                 raise DownloadError(str(result.get('error') or 'Could not reload links'))
             with self.lock:
-                link = next((candidate for candidate in self.links.values()
-                             if candidate.game_id == job.game_id and candidate.key == key and candidate.url), None)
-        if link is None:
-            raise DownloadError('Mirror no longer available; choose another mirror')
-        return self._resolver(link.url, key.host)
+                links = self._matches(job.game_id, same, job.version)
+        if not links:
+            raise DownloadError(_gone(job.version))
+        if len({link.key for link in links}) > 1:
+            raise DownloadError('Mirror no longer available: the thread has more than one such mirror; choose another mirror')
+        return self._resolver(links[0].url, links[0].key.host)
 
     def browser_link(self, game_id: int, link_id: str) -> str:
         return self._find(game_id, link_id).url
+
+
+def _full_match(key: _LinkKey) -> Callable[[_LinkKey], bool]:
+    return lambda candidate: candidate == key
+
+
+def _gone(version: str) -> str:
+    if version.strip():
+        return f'Mirror no longer available for {version.strip()}; choose another mirror'
+    return 'Mirror no longer available; choose another mirror'

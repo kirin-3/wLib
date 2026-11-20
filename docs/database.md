@@ -241,7 +241,7 @@ The device-local download queue that `core/downloads/queue.py` owns. One row per
 | `state` | `TEXT NOT NULL` | `preparing`, `queued`, `retry_wait`, `held`, `running`, `paused`, `attention` or `ready`. |
 | `reason` | `TEXT NOT NULL DEFAULT ''` | Extra state detail, such as `game` or `battery` for `held`, or `seed_prompt`. |
 | `error_code`, `error_text` | `TEXT NOT NULL DEFAULT ''` | Failure code from `core/downloads/failures.py` and the original message. |
-| `source` | `TEXT NOT NULL DEFAULT '{}'` | JSON. Host: the build identity (`label`, `section`, `platform`, `host`, `part`). Torrent: `rpdl_id` and `info_hash`. |
+| `source` | `TEXT NOT NULL DEFAULT '{}'` | JSON. Host: the build identity (`site`, `label`, `section`, `platform`, `host`, `part`, plus the mirror's own label `mirror` and `copy`, the count of earlier identical mirrors in the thread). Torrent: `rpdl_id` and `info_hash`. |
 | `bytes_done`, `bytes_total` | `INTEGER` | Last known progress; `bytes_total` is null when unknown. |
 | `retries`, `retry_at` | `INTEGER`, `REAL` | Automatic network retries used, and the epoch time of the next one. |
 | `created_at`, `updated_at`, `finished_at` | `REAL` | Epoch seconds. |

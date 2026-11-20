@@ -8,7 +8,9 @@ Everything here takes explicit paths so it can be tested against a temp dir.
 
 from __future__ import annotations
 
+import errno
 import os
+import secrets
 from collections.abc import Callable, Mapping
 
 ENGINE_RENPY = "renpy"
@@ -21,6 +23,34 @@ CancelFn = Callable[[], bool]
 
 PARTIAL_SUFFIX = ".wlib-partial"
 CHUNK_SIZE = 1024 * 1024
+
+
+_TEMP_FLAGS = (
+    os.O_WRONLY
+    | os.O_CREAT
+    | os.O_EXCL
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_BINARY", 0)
+)
+
+
+def create_temp_file(path: str, suffix: str = PARTIAL_SUFFIX) -> tuple[int, str]:
+    """Create a new, empty file next to `path` and return (fd, its path).
+
+    The name is random and the file is created exclusively, so an existing
+    file or symlink at a fixed `<name><suffix>` path is never opened,
+    truncated or removed. The caller owns the file and removes it.
+    """
+    folder, name = os.path.split(path)
+    for _ in range(100):
+        temporary = os.path.join(
+            folder, f".{name[:100]}.{secrets.token_hex(4)}{suffix}"
+        )
+        try:
+            return os.open(temporary, _TEMP_FLAGS, 0o666), temporary
+        except FileExistsError:
+            continue
+    raise FileExistsError(errno.EEXIST, "No free temporary file name", path)
 
 
 class GameToolError(Exception):

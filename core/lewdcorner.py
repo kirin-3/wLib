@@ -15,6 +15,8 @@ from core.versions import normalize_version
 
 LC_HOSTS = frozenset({"lewdcorner.com", "www.lewdcorner.com"})
 _THREAD_PATH = re.compile(r"^/threads/(?:[^/]+\.)?([0-9]+)(?:/.*)?$", re.IGNORECASE)
+# SQLite stores thread IDs as signed 64-bit integers; a larger ID is no real thread.
+MAX_THREAD_ID = 2**63 - 1
 LC_ENGINE_PREFIXES = (
     "Flash", "HTML", "Java", "QSP", "RAGS", "RPGM", "Ren'Py", "Unity",
     "Unreal Engine", "WebGL", "Wolf RPG", "Godot", "ADRIFT", "Tads", "Other",
@@ -93,7 +95,8 @@ def extract_thread_id(url: object) -> str:
     except ValueError:
         return ""
     match = _THREAD_PATH.fullmatch(parts.path)
-    return match[1].lstrip("0") if match else ""
+    thread_id = match[1].lstrip("0") if match else ""
+    return thread_id if thread_id and int(thread_id) <= MAX_THREAD_ID else ""
 
 
 def normalize_thread_url(url: object) -> str:

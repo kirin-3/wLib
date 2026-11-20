@@ -23,10 +23,10 @@ from typing import BinaryIO, cast, override
 
 from core.game_tools import (
     CHUNK_SIZE,
-    PARTIAL_SUFFIX,
     CancelFn,
     GameToolError,
     ProgressFn,
+    create_temp_file,
     format_bytes,
 )
 
@@ -100,9 +100,9 @@ def set_console(game_folder: str, enabled: bool, developer: bool = False) -> str
             with open(rpy, encoding="utf-8", errors="replace") as file:
                 current = file.read()
         if current != content:
-            temporary = rpy + PARTIAL_SUFFIX
+            fd, temporary = create_temp_file(rpy)
             try:
-                with open(temporary, "w", encoding="utf-8", newline="\n") as file:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as file:
                     _ = file.write(content)
                 os.replace(temporary, rpy)
             finally:
@@ -400,6 +400,33 @@ def _destination(root: str, root_real: str, name: str) -> str | None:
     return destination
 
 
+def _export_root(
+    output_real: str, game_real: str, stem: str, used_targets: set[str]
+) -> str:
+    """The folder under `output_real` that one archive is exported into.
+
+    A name already taken in this run, a symlink, or a folder that resolves
+    outside the output folder or overlaps the game folder is passed over for
+    the next `<stem>_<n>` name, so the export never writes into the game.
+    """
+    target = stem
+    counter = 2
+    while True:
+        if target not in used_targets:
+            root = os.path.join(output_real, target)
+            root_real = os.path.realpath(root)
+            if (
+                not os.path.islink(root)
+                and is_inside(output_real, root_real)
+                and not is_inside(game_real, root_real)
+                and not is_inside(root_real, game_real)
+            ):
+                used_targets.add(target)
+                return root
+        target = f"{stem}_{counter}"
+        counter += 1
+
+
 class _Cancelled(Exception):
     pass
 
@@ -408,9 +435,9 @@ def _write_entry(
     archive: BinaryIO, entry: RpaEntry, destination: str, cancelled: CancelFn
 ) -> None:
     os.makedirs(os.path.dirname(destination), exist_ok=True)
-    temporary = destination + PARTIAL_SUFFIX
+    fd, temporary = create_temp_file(destination)
     try:
-        with open(temporary, "wb") as out:
+        with os.fdopen(fd, "wb") as out:
             for offset, length, prefix in entry.segments:
                 if prefix:
                     _ = out.write(prefix)
@@ -484,6 +511,7 @@ def extract_archives(
     if not archives:
         raise GameToolError("There are no archives to extract")
     game_root = _game_dir(game_folder)
+    game_real = os.path.realpath(game_folder)
 
     unsupported: list[str] = []
     skipped_scripts = skipped_existing = skipped_unsafe = skipped_invalid = 0
@@ -512,13 +540,7 @@ def extract_archives(
         skipped_invalid += index.skipped_invalid
         if mode == "folder":
             stem = os.path.basename(name)[: -len(".rpa")] or "archive"
-            target = stem
-            counter = 2
-            while target in used_targets:
-                target = f"{stem}_{counter}"
-                counter += 1
-            used_targets.add(target)
-            root = os.path.join(output_real, target)
+            root = _export_root(output_real, game_real, stem, used_targets)
         else:
             # Ren'Py resolves archive entries against `game/`, wherever under
             # it the archive sits (`game/patch/x.rpa` holds `images/a.png`

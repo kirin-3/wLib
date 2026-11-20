@@ -198,3 +198,76 @@ def prune_orphan_attachments(existing_ids: set[int] | list[int]) -> None:
                 shutil.rmtree(full_path)
         except OSError:
             continue
+
+
+# Attachments of games a mirrored sync or restore removed wait here, keyed by
+# the game's sync uid, so restoring a sync snapshot can bring them back. The
+# folder is device-local: backups and sync never carry attachments.
+HELD_FOLDER = "held"
+
+
+def _held_uid(sync_uid: object) -> str:
+    text = str(sync_uid or "").strip().lower()
+    if len(text) != 32 or any(char not in "0123456789abcdef" for char in text):
+        return ""
+    return text
+
+
+def held_attachments_dir() -> str:
+    return os.path.join(database.DATA_DIR, "attachments", HELD_FOLDER)
+
+
+def _move_folder_contents(source: str, target: str) -> None:
+    """Move `source` to `target`; merge into `target` when it already exists."""
+    if not os.path.isdir(source) or os.path.islink(source):
+        return
+    if not os.path.lexists(target):
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        os.replace(source, target)
+        return
+    for name in os.listdir(source):
+        free_name = _free_attachment_name(target, name)
+        os.replace(os.path.join(source, name), os.path.join(target, free_name))
+    os.rmdir(source)
+
+
+def hold_game_attachments(game_id: int, sync_uid: object) -> bool:
+    """Keep a removed game's attachments under its sync uid instead of deleting them.
+
+    Returns False when there is no valid uid; the caller then prunes as before.
+    """
+    uid = _held_uid(sync_uid)
+    if not uid:
+        return False
+    _move_folder_contents(attachments_dir(game_id), os.path.join(held_attachments_dir(), uid))
+    return True
+
+
+def reclaim_held_attachments(game_id: int, sync_uid: object) -> None:
+    """Give a re-created game the attachments held for its sync uid."""
+    uid = _held_uid(sync_uid)
+    if not uid:
+        return
+    _move_folder_contents(os.path.join(held_attachments_dir(), uid), attachments_dir(game_id))
+
+
+def held_attachment_uids() -> list[str]:
+    try:
+        entries = os.listdir(held_attachments_dir())
+    except OSError:
+        return []
+    return [entry for entry in entries if _held_uid(entry) == entry]
+
+
+def prune_held_attachments(keep_uids: set[str]) -> None:
+    """Delete held attachments whose game no sync snapshot can restore."""
+    base = held_attachments_dir()
+    for uid in held_attachment_uids():
+        if uid in keep_uids:
+            continue
+        full_path = os.path.join(base, uid)
+        try:
+            if os.path.isdir(full_path) and not os.path.islink(full_path):
+                shutil.rmtree(full_path)
+        except OSError:
+            continue

@@ -196,6 +196,9 @@ def run(game_id: int) -> int:
         report_error(game_id, f'{game.get("title") or "Game"} is already running.')
         return 3
     launcher = Launcher()
+    # This process sees only its own game. The wLib window or another runner
+    # may run a game on the same Wine prefix, so never end the whole prefix.
+    launcher.prefix_owner_uncertain = True
 
     def ask_window(entry: object, launch_id: int | None) -> str | None:
         # The open wLib window knows about installs, mod tools, prefix tools

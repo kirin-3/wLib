@@ -64,6 +64,10 @@ UNSUPPORTED_FORMAT_MESSAGE = (
 )
 STAGING_PREFIX = ".wlib-staging-"
 TRASH_PREFIX = ".wlib-trash-"
+# Every wLib version names trash `TRASH_PREFIX + str(time.time_ns())`, which
+# is 19 digits until the year 2286. The sweep deletes only names of this form,
+# so a user's own `.wlib-trash-backup` folder stays.
+_TRASH_NAME_RE = re.compile(re.escape(TRASH_PREFIX) + r"[0-9]{19}")
 SCRATCH_PREFIX = ".wlib-scratch-"
 # Local scratch must leave this much free so an install never fills the home disk.
 SCRATCH_RESERVE_BYTES = 1024**3
@@ -310,6 +314,12 @@ def check_volume_set(volumes: VolumeSet) -> None:
     """Refuse a multi-part archive with parts missing, naming them."""
     if volumes.complete:
         return
+    if volumes.ambiguous:
+        names = ", ".join(os.path.basename(part) for part in volumes.ambiguous[:4])
+        more = "…" if len(volumes.ambiguous) > 4 else ""
+        raise ArchiveInstallError(
+            f"Some parts of this multi-part archive have names that differ only in letter case ({names}{more}). Keep only one set of parts in the folder first."
+        )
     numbers = ", ".join(str(n) for n in volumes.missing[:5])
     more = "…" if len(volumes.missing) > 5 else ""
     noun = "Part" if len(volumes.missing) == 1 else "Parts"
@@ -825,14 +835,18 @@ def defer_remove_tree(path: str, trash_root: str) -> bool:
 
 
 def sweep_trash(library_folder: str) -> int:
-    """Restart background deletes of `.wlib-trash-*` folders left by a crash."""
+    """Restart background deletes of `.wlib-trash-<ns>` folders left by a crash.
+
+    Only names that wLib makes (the prefix and a 19-digit time) count; other
+    folders that start with the prefix are not wLib's and are kept.
+    """
     started = 0
     try:
         base = os.path.abspath(os.path.expanduser(library_folder))
         if not os.path.isdir(base):
             return 0
         for name in os.listdir(base):
-            if not name.startswith(TRASH_PREFIX):
+            if not _TRASH_NAME_RE.fullmatch(name):
                 continue
             candidate = os.path.join(base, name)
             if os.path.isdir(candidate) and not os.path.islink(candidate):
@@ -2080,18 +2094,46 @@ def infolder_save_relpaths(root: str) -> list[str]:
     return found
 
 
-def copy_infolder_saves(old_root: str, new_root: str) -> list[str]:
+def copy_infolder_saves(
+    old_root: str,
+    new_root: str,
+    *,
+    removed_root: str = "",
+    skipped: list[str] | None = None,
+) -> list[str]:
     """Copy in-folder saves from old_root into new_root, overwriting.
+
+    A save folder that is a link to a folder inside `removed_root` (the tree
+    that old-folder cleanup deletes; default old_root) is copied from its
+    target, so the update does not delete the only copy. A link whose target
+    holds the link itself (for example the install folder) cannot be copied;
+    its relative path goes into `skipped` so the caller keeps the old folder.
+    A link that leaves `removed_root` is left alone: cleanup removes only the
+    link, not its target.
 
     Returns the copied relative paths. Raises ArchiveInstallError on failure
     so the caller can roll back before touching the library.
     """
     copied: list[str] = []
+    bound_real = real_path(removed_root or old_root)
     for rel in infolder_save_relpaths(old_root):
         src = os.path.join(old_root, rel)
         dst = os.path.join(new_root, rel)
         try:
-            if os.path.isdir(src) and not os.path.islink(src):
+            if os.path.isdir(src) and os.path.islink(src):
+                target_real = real_path(src)
+                if not is_within_real(target_real, bound_real):
+                    continue
+                if is_within_real(real_path(os.path.dirname(src)), target_real):
+                    if skipped is not None:
+                        skipped.append(rel)
+                    continue
+                os.makedirs(os.path.dirname(dst) or new_root, exist_ok=True)
+                _ = shutil.copytree(
+                    target_real, dst, dirs_exist_ok=True, copy_function=shutil.copy2
+                )
+                copied.append(rel)
+            elif os.path.isdir(src):
                 os.makedirs(os.path.dirname(dst) or new_root, exist_ok=True)
                 _ = shutil.copytree(
                     src, dst, dirs_exist_ok=True, copy_function=shutil.copy2
@@ -2264,6 +2306,14 @@ def can_remove_old_folder(
                 "removable": False,
                 "reason": "The folder contains another library game.",
             }
+    # Last: off Linux this walks the tree. A mount inside the folder (a bind
+    # mount of a shared folder) would be emptied by the delete.
+    nested = mount_points_within(cand_real)
+    if nested:
+        return {
+            "removable": False,
+            "reason": f"Refusing to remove a folder that contains a mounted folder ({nested[0]}).",
+        }
     return {"removable": True, "reason": ""}
 
 
@@ -2351,8 +2401,70 @@ def _point_missing_at_backup(
     return result, kept + repointed
 
 
+_MOUNTINFO = "/proc/self/mountinfo"
+_MOUNTINFO_ESCAPE_RE = re.compile(r"\\([0-7]{3})")
+
+
+def _linux_mount_points() -> list[str] | None:
+    """Every mount point of this process on Linux, or None when unknown."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        with open(_MOUNTINFO, encoding="utf-8", errors="surrogateescape") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return None
+    points: list[str] = []
+    for line in lines:
+        fields = line.split(" ")
+        if len(fields) > 4:
+            # The kernel writes space, tab, newline and backslash as \ooo.
+            points.append(
+                _MOUNTINFO_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 8)), fields[4])
+            )
+    return points
+
+
+def mount_points_within(path: str) -> list[str]:
+    """Mount points at or below `path`, sorted ([] when there are none).
+
+    shutil.rmtree goes into a mounted folder like any other folder, so a bind
+    mount inside a game folder would lose the shared folder's files. On Linux
+    the mount table is read (a bind mount on the same filesystem looks like a
+    plain folder to os.path.ismount). Elsewhere the tree is walked without
+    going into mounts. Windows rmtree does not go into mounted volumes, so
+    only `path` itself is checked there.
+    """
+    root = real_path(path)
+    points = _linux_mount_points()
+    if points is not None:
+        return sorted({point for point in points if is_within_real(point, root)})
+    found: list[str] = []
+    if os.path.ismount(root):
+        found.append(root)
+    if _is_windows():
+        return found
+    for dirpath, dirnames, _files in os.walk(root, followlinks=False):
+        keep: list[str] = []
+        for name in dirnames:
+            child = os.path.join(dirpath, name)
+            if os.path.ismount(child):
+                found.append(child)
+            else:
+                keep.append(name)
+        dirnames[:] = keep
+    return sorted(found)
+
+
 def remove_tree_collect(path: str) -> list[str]:
-    """Remove a tree, collecting errors instead of aborting halfway."""
+    """Remove a tree, collecting errors instead of aborting halfway.
+
+    A tree with a mount point in it is not touched: deleting it would erase
+    the mounted folder's files, which belong to something else.
+    """
+    mounts = mount_points_within(path)
+    if mounts:
+        return [f"{mount} is a mounted folder; unmount it first" for mount in mounts]
     errors: list[str] = []
 
     def _onerror(_func: object, p: str, _exc: object) -> None:
@@ -2366,7 +2478,13 @@ def remove_tree_collect(path: str) -> list[str]:
 
 
 def other_game_paths(exclude_id: int | None = None) -> list[str]:
-    from core.database import get_all_games, list_launch_targets_for_games
+    """Paths that other library games need: executables, launch targets,
+    save-folder overrides, custom Wine prefixes and the shared Wine prefix.
+
+    A folder that holds one of these must not be removed or moved for a
+    different game.
+    """
+    from core.database import get_all_games, get_setting, list_launch_targets_for_games
 
     paths: list[str] = []
     try:
@@ -2382,9 +2500,16 @@ def other_game_paths(exclude_id: int | None = None) -> list[str]:
         if exclude_id is not None and gid == exclude_id:
             continue
         ids.append(gid)
-        exe = str(game.get("exe_path") or "")
-        if exe:
-            paths.append(exe)
+        for field in ("exe_path", "save_path_override", "custom_prefix"):
+            value = str(game.get(field) or "").strip()
+            if value:
+                paths.append(value)
+    try:
+        shared_prefix = str(get_setting("wine_prefix_path") or "").strip()
+    except OSError:
+        shared_prefix = ""
+    if shared_prefix:
+        paths.append(shared_prefix)
     if ids:
         try:
             by_game = list_launch_targets_for_games(ids)
@@ -3003,7 +3128,15 @@ def install_archive(
         if old_root and os.path.isdir(old_root):
             _check_cancel(cancel)
             _progress("carrying saves")
-            _ = copy_infolder_saves(old_root, staging_install_dir)
+            # Save folders linked to a target that cleanup would delete but
+            # that cannot be copied keep the old folder on disk.
+            skipped_saves: list[str] = []
+            _ = copy_infolder_saves(
+                old_root,
+                staging_install_dir,
+                removed_root=old_install or old_root,
+                skipped=skipped_saves,
+            )
             # The executable can sit below the install folder (Game/bin/x.exe);
             # saves kept beside that subfolder are deleted with the old
             # install, so carry them relative to the install folder too.
@@ -3013,7 +3146,7 @@ def install_archive(
                 and os.path.isdir(old_install)
             )
             if wraps_exe:
-                _ = copy_infolder_saves(old_install, staging)
+                _ = copy_infolder_saves(old_install, staging, skipped=skipped_saves)
             override_rel = override_relpath(old_override, old_root)
             if override_rel is None and wraps_exe:
                 override_rel = override_relpath(old_override, old_install)
@@ -3031,6 +3164,11 @@ def install_archive(
                 guard = {
                     "removable": False,
                     "reason": "The saves folder is the game folder itself, so the old folder was kept in case it holds other saves.",
+                }
+            elif skipped_saves:
+                guard = {
+                    "removable": False,
+                    "reason": f'The save folder "{skipped_saves[0]}" is a link that could not be copied, so the old folder was kept.',
                 }
             check_symlinks_inside_staging(staging)
 

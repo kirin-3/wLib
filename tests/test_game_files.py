@@ -260,7 +260,7 @@ def test_trash_failed_rename_deletes_in_place(lib, tmp_path, monkeypatch):
 
 def test_sweep_after_crash(lib, tmp_path):
     library, _ctx = lib
-    in_library = library / ".wlib-trash-1"
+    in_library = library / f".wlib-trash-{time.time_ns()}"
     (in_library / "data").mkdir(parents=True)
     recorded = tmp_path / "Elsewhere" / ".wlib-trash-2"
     (recorded / "data").mkdir(parents=True)

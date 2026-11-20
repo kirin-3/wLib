@@ -68,6 +68,8 @@ GDRIVE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GDRIVE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GDRIVE_API = "https://www.googleapis.com/drive/v3/"
 GDRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/"
+# Pages of revisions.list (1000 each) read to check an upload.
+GDRIVE_REVISION_PAGES = 5
 # Seconds to wait for a provider. A file upload or download gets longer: a
 # large library can take more than the short timeout, and a timeout after an
 # upload that worked leaves this device unsure what the remote file is.
@@ -772,41 +774,141 @@ class GoogleDriveLocation(_OAuthLocation):
         )
         return data, checksum
 
-    def write(self, data: bytes, expected_revision: str | None) -> str:
-        # ponytail: Drive has no conditional upload, so a write by another machine
-        # between this check and the upload still wins the race. Use one machine at a time.
-        if self.revision() != expected_revision:
-            raise SyncConflict()
-        if self._file_id:
-            result = self._request(
+    def _update_content(self, file_id: str, data: bytes) -> dict[str, object]:
+        return _json_object(
+            self._request(
                 "PATCH",
                 GDRIVE_UPLOAD
                 + "files/"
-                + urllib.parse.quote(self._file_id)
-                + "?uploadType=media&fields=md5Checksum",
+                + urllib.parse.quote(file_id)
+                + "?uploadType=media&fields=md5Checksum,headRevisionId",
                 data=data,
                 file_request=True,
             )
-        else:
-            boundary = secrets.token_hex(16)
-            metadata = json.dumps(
-                {"name": SYNC_FILENAME, "parents": ["appDataFolder"]}
-            ).encode("utf-8")
-            body = b"".join(
-                (
-                    f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode(),
-                    metadata,
-                    f"\r\n--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode(),
-                    data,
-                    f"\r\n--{boundary}--".encode(),
+        )
+
+    def _revisions(self, file_id: str) -> list[tuple[str, str]]:
+        """(id, md5Checksum) of each content revision, oldest first."""
+        found: list[tuple[str, str]] = []
+        token = ""
+        for _ in range(GDRIVE_REVISION_PAGES):
+            parameters = {
+                "pageSize": "1000",
+                "fields": "nextPageToken,revisions(id,md5Checksum)",
+            }
+            if token:
+                parameters["pageToken"] = token
+            page = _json_object(
+                self._request(
+                    "GET",
+                    GDRIVE_API
+                    + "files/"
+                    + urllib.parse.quote(file_id)
+                    + "/revisions?"
+                    + urllib.parse.urlencode(parameters),
+                    file_request=True,
                 )
             )
-            result = self._request(
-                "POST",
-                GDRIVE_UPLOAD + "files?uploadType=multipart&fields=md5Checksum",
-                data=body,
-                content_type=f"multipart/related; boundary={boundary}",
+            revisions = page.get("revisions")
+            for entry in cast(list[object], revisions) if isinstance(revisions, list) else []:
+                item = cast(dict[str, object], entry) if isinstance(entry, dict) else {}
+                found.append(
+                    (str(item.get("id") or ""), str(item.get("md5Checksum") or ""))
+                )
+            token = str(page.get("nextPageToken") or "")
+            if not token:
+                break
+        return found
+
+    def _check_update(
+        self, file_id: str, own_revision: str, checksum: str, expected: str
+    ) -> None:
+        """Find an upload from another device that this upload replaced.
+
+        Drive v3 has no conditional upload (no ETag or If-Match on
+        files.update), so another device can upload between the checksum
+        check and this upload. Drive keeps every upload as a revision, in
+        order: the revision just before this one must hold the content this
+        device expected. If it holds other content, that device's upload was
+        replaced. Put it back and report a conflict, so the retry reads it and
+        asks the user, like a refused Dropbox upload.
+        """
+        if not own_revision:
+            return
+        try:
+            revisions = self._revisions(file_id)
+        except SyncConflict:
+            raise
+        except SyncError:
+            # The upload worked; only the check failed. Keep the result, as
+            # before this check existed, instead of failing every sync.
+            return
+        ids = [revision_id for revision_id, _ in revisions]
+        if own_revision not in ids:
+            # Cannot tell what came before (revision history not readable).
+            return
+        index = ids.index(own_revision)
+        if index == 0:
+            return
+        previous_id, previous_checksum = revisions[index - 1]
+        if not previous_checksum or previous_checksum in (expected, checksum):
+            return
+        if index != len(ids) - 1:
+            # A third upload already followed this one. Putting the replaced
+            # content back would now replace that upload instead.
+            raise SyncConflict()
+        replaced = self._request(
+            "GET",
+            GDRIVE_API
+            + "files/"
+            + urllib.parse.quote(file_id)
+            + "/revisions/"
+            + urllib.parse.quote(previous_id)
+            + "?alt=media",
+            file_request=True,
+        )
+        _ = self._update_content(file_id, replaced)
+        raise SyncConflict()
+
+    def write(self, data: bytes, expected_revision: str | None) -> str:
+        if self.revision() != expected_revision:
+            raise SyncConflict()
+        if self._file_id:
+            file_id = self._file_id
+            updated = self._update_content(file_id, data)
+            checksum = str(updated.get("md5Checksum") or "")
+            if not checksum:
+                raise SyncError(
+                    "Google Drive returned no upload revision.",
+                    "gdrive_request_failed",
+                )
+            if expected_revision is not None:
+                self._check_update(
+                    file_id,
+                    str(updated.get("headRevisionId") or ""),
+                    checksum,
+                    expected_revision,
+                )
+            return checksum
+        boundary = secrets.token_hex(16)
+        metadata = json.dumps(
+            {"name": SYNC_FILENAME, "parents": ["appDataFolder"]}
+        ).encode("utf-8")
+        body = b"".join(
+            (
+                f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode(),
+                metadata,
+                f"\r\n--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode(),
+                data,
+                f"\r\n--{boundary}--".encode(),
             )
+        )
+        result = self._request(
+            "POST",
+            GDRIVE_UPLOAD + "files?uploadType=multipart&fields=md5Checksum",
+            data=body,
+            content_type=f"multipart/related; boundary={boundary}",
+        )
         checksum = str(_json_object(result).get("md5Checksum") or "")
         if not checksum:
             raise SyncError(
@@ -1263,6 +1365,12 @@ class SyncManager:
         backup: dict[str, object] | None = None
         if first or remote_changed:
             backup, revision = self._remote(location)
+        stale_choice = False
+        if choice is not None and not first and revision != self._choice_revision:
+            # The sync file changed after the user was asked. Their answer was
+            # for the earlier file, so it must not overwrite or mirror this
+            # one: evaluate the new file as if no answer was given.
+            choice, stale_choice = None, True
         if first:
             assert backup is not None
             if choice is None and self._adopt_unconfirmed_push(
@@ -1316,7 +1424,7 @@ class SyncManager:
             if remote_content_changed and local_changed:
                 # Both sides changed since the last sync. Newest-wins would
                 # silently drop one side's work, so ask instead.
-                self._ask_choice(revision, "conflict")
+                self._ask_choice(revision, "conflict", stale=stale_choice)
                 return
             if not remote_content_changed and not local_changed:
                 # Same content under a new revision: remember the revision so
@@ -1326,7 +1434,7 @@ class SyncManager:
                 return
             if remote_content_changed:
                 if self._removes_most_games(backup):
-                    self._ask_choice(revision, "removal")
+                    self._ask_choice(revision, "removal", stale=stale_choice)
                     return
                 if push_only:
                     self._newer_remote = (revision, remote_time)
@@ -1381,9 +1489,14 @@ class SyncManager:
             == str(remote_sync.get("device") or "")
         )
 
-    def _ask_choice(self, revision: str, reason: str) -> None:
+    def _ask_choice(self, revision: str, reason: str, *, stale: bool = False) -> None:
         self._state = "needs_choice"
         self._choice_revision, self._choice_reason = revision, reason
+        if stale:
+            database.update_setting(
+                "sync_last_error",
+                "The sync file changed before your choice was applied. Choose again.",
+            )
 
     @staticmethod
     def _removes_most_games(backup: dict[str, object]) -> bool:
@@ -1412,8 +1525,11 @@ class SyncManager:
     ) -> None:
         """Apply the user's answer to a later-sync choice.
 
-        The pending choice is cleared only once the answer was applied, so
-        the retry after a conflicting local edit can still use it.
+        The caller checked that revision is the one the user was asked
+        about. The pending choice is cleared only once the answer was
+        applied, so the retry after a conflicting local edit can still use
+        it; a retry after the sync file changed finds a new revision and
+        asks again.
         """
         if choice == "use-remote":
             self._pull(backup, revision, local_modified)

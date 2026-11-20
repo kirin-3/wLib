@@ -5,7 +5,8 @@ language and the developer's links.
 The catalog fills them and the user may edit them. `thread_details_baseline`
 holds the catalog values applied last (JSON, NULL = never filled). A field
 takes a new catalog value only while it is empty or still equal to that
-baseline, so the user's own edits are never overwritten.
+baseline, so the user's own edits are never overwritten. The installed
+`version` is only filled while empty.
 """
 
 import json
@@ -21,6 +22,9 @@ THREAD_DETAIL_FIELDS: tuple[str, ...] = (
 )
 LC_FILL_FIELDS = ("title", "developer", "version", "cover_image_path", "tags", "rating", "engine", "thread_completed")
 LIST_FIELDS: frozenset[str] = frozenset({"aliases", "external_links"})
+# The installed version: the catalog may fill it while it is empty, but never
+# replaces it, because a newer thread version does not mean newer game files.
+FILL_EMPTY_ONLY_FIELDS: frozenset[str] = frozenset({"version"})
 BASELINE_COLUMN = "thread_details_baseline"
 _MAX_LIST_ITEMS = 50
 _MAX_TEXT_CHARS = 20_000
@@ -100,8 +104,10 @@ def merge_thread_details(
         new = normalize_detail(field, catalog.get(field))
         new_baseline[field] = new
         stored = normalize_detail(field, current.get(field))
-        untouched = baseline is not None and stored == normalize_detail(
-            field, baseline.get(field)
+        untouched = (
+            baseline is not None
+            and field not in FILL_EMPTY_ONLY_FIELDS
+            and stored == normalize_detail(field, baseline.get(field))
         )
         empty = not stored or (field == "thread_completed" and stored == "0" and not (baseline and field in baseline))
         if (empty or untouched) and stored != new:

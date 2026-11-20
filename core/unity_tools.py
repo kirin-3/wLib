@@ -390,6 +390,10 @@ def _owned_manifest(root: Path) -> list[str] | None:
 
 
 _DISCARD = ".wlib-bepinex-replaced"
+# The previous backup, kept until the operation that replaces it succeeds.
+_OLD_BACKUP = ".wlib-bepinex-old-backup"
+# What a restore takes out of the live install, kept until the restore succeeds.
+_RESTORE_ASIDE = ".wlib-bepinex-restoring"
 
 
 def _read_backup_manifest(backup: Path) -> dict[str, object] | None:
@@ -408,6 +412,8 @@ class _BackupChange:
         self.discard: Path | None = None
         self.manifest_path: Path | None = None
         self.manifest_before: str = ""
+        # A new backup replaced an older one: (new backup, where the old one waits).
+        self.replaced: tuple[Path, Path | None] | None = None
 
     def rollback(self) -> None:
         import shutil
@@ -417,6 +423,14 @@ class _BackupChange:
             _ = shutil.move(str(now_at), str(came_from))
         if self.manifest_path is not None:
             _ = self.manifest_path.write_text(self.manifest_before, encoding="utf-8")
+        if self.replaced is not None:
+            # Every file is back in place, so the new backup holds only its
+            # manifest; put the previous backup (or none) back.
+            backup, old = self.replaced
+            shutil.rmtree(backup, ignore_errors=True)
+            if old is not None and old.exists():
+                _ = old.replace(backup)
+            self.replaced = None
         self.commit()
 
     def commit(self) -> None:
@@ -424,6 +438,11 @@ class _BackupChange:
 
         if self.discard is not None and self.discard.exists():
             shutil.rmtree(self.discard, ignore_errors=True)
+        if self.replaced is not None:
+            _, old = self.replaced
+            if old is not None and old.exists():
+                shutil.rmtree(old, ignore_errors=True)
+            self.replaced = None
 
 
 def _merge_move(source: Path, destination: Path, change: _BackupChange) -> list[Path]:
@@ -479,6 +498,15 @@ def _move_to_backup(root: Path, paths: list[str], installed: list[str], owned: l
             unique.append(name)
     if backup.is_symlink():
         raise GameToolError("Backup path is a symbolic link")
+    old_backup = root / _OLD_BACKUP
+    if old_backup.is_symlink():
+        raise GameToolError("Backup path is a symbolic link")
+    if old_backup.exists():
+        # An earlier operation stopped before it could finish.
+        if backup.exists():
+            shutil.rmtree(old_backup)
+        else:
+            _ = old_backup.replace(backup)
     change = _BackupChange()
     existing = _read_backup_manifest(backup) if backup.is_dir() else None
     if existing is not None and existing.get("foreign") is True:
@@ -532,9 +560,13 @@ def _move_to_backup(root: Path, paths: list[str], installed: list[str], owned: l
         return change
     if not unique:
         return None
+    # Keep the previous backup until this operation succeeds.
+    previous_backup: Path | None = None
     if backup.exists():
-        shutil.rmtree(backup)
+        _ = backup.replace(old_backup)
+        previous_backup = old_backup
     backup.mkdir()
+    change.replaced = (backup, previous_backup)
     moved: list[str] = []
     # A setup wLib did not install is the user's original: keep it from now on.
     foreign = any(not _is_wlib_owned(name, owned, installed) for name in unique)
@@ -549,11 +581,7 @@ def _move_to_backup(root: Path, paths: list[str], installed: list[str], owned: l
             json.dumps({"moved": moved, "installed": installed, "foreign": foreign}), encoding="utf-8"
         )
     except Exception:
-        for name in reversed(moved):
-            destination = root / name
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            _ = shutil.move(str(backup / name), str(destination))
-        shutil.rmtree(backup)
+        change.rollback()
         raise
     return change
 
@@ -721,19 +749,44 @@ def restore(folder: str) -> dict[str, object]:
             _ = _safe_target(backup, name)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise GameToolError("Invalid or missing BepInEx backup") from exc
-    for name in installed:
-        path = root / name
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink(missing_ok=True)
+    # Check the whole backup before the live install changes.
     for name in moved:
-        target = root / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_dir() and not any(p.is_file() or p.is_symlink() for p in target.rglob("*")):
-            shutil.rmtree(target)
-        if target.exists():
-            raise GameToolError(f"Cannot restore over existing path: {name}")
-        _ = shutil.move(str(backup / name), str(target))
+        source = backup / name
+        if not source.exists() and not source.is_symlink():
+            raise GameToolError(f"The BepInEx backup is incomplete: {name} is missing")
+    aside = root / _RESTORE_ASIDE
+    if aside.is_symlink():
+        raise GameToolError("Staging path is a symbolic link")
+    if aside.exists():
+        shutil.rmtree(aside)
+    set_aside: list[tuple[Path, Path]] = []  # (now at, came from)
+    restored: list[tuple[Path, Path]] = []
+    try:
+        # Set the installed files aside instead of deleting them, so a failed
+        # restore can put them back.
+        for name in installed:
+            path = root / name
+            if not path.exists() and not path.is_symlink():
+                continue
+            destination = aside / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            _ = shutil.move(str(path), str(destination))
+            set_aside.append((destination, path))
+        for name in moved:
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_dir() and not any(p.is_file() or p.is_symlink() for p in target.rglob("*")):
+                shutil.rmtree(target)
+            if target.exists():
+                raise GameToolError(f"Cannot restore over existing path: {name}")
+            _ = shutil.move(str(backup / name), str(target))
+            restored.append((target, backup / name))
+    except Exception:
+        for now_at, came_from in reversed(set_aside + restored):
+            came_from.parent.mkdir(parents=True, exist_ok=True)
+            _ = shutil.move(str(now_at), str(came_from))
+        shutil.rmtree(aside, ignore_errors=True)
+        raise
+    shutil.rmtree(aside, ignore_errors=True)
     shutil.rmtree(backup)
     return {"restored": True}

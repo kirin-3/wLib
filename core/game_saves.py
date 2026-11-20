@@ -725,10 +725,20 @@ class _Tree:
     bytes: int = 0
 
 
+def _raise_scan_error(exc: OSError) -> None:
+    raise exc
+
+
 def _scan_tree(root: str) -> _Tree:
-    """Relative dirs and regular files under root; symlinks are skipped."""
+    """Relative dirs and regular files under root; symlinks are skipped.
+
+    Raises OSError when a folder cannot be read. os.walk() would skip it
+    silently, and a backup or copy that misses saves must not count as done.
+    """
     tree = _Tree()
-    for current, dirnames, filenames in os.walk(root, followlinks=False):
+    for current, dirnames, filenames in os.walk(
+        root, onerror=_raise_scan_error, followlinks=False
+    ):
         kept: list[str] = []
         for name in dirnames:
             if os.path.islink(os.path.join(current, name)):
@@ -840,7 +850,12 @@ def backup_saves(
             "The saves folder is inside wLib's save backups folder, so it cannot be backed up"
         )
 
-    tree = _scan_tree(saves_dir)
+    try:
+        tree = _scan_tree(saves_dir)
+    except OSError as exc:
+        raise GameSavesError(
+            f"Backup failed: part of the saves folder cannot be read: {exc}"
+        ) from exc
     if not tree.files:
         raise NothingToBackUpError(
             "The saves folder is empty, so there is nothing to back up"
@@ -903,7 +918,12 @@ def import_saves(
     if os.path.lexists(saves_dir) and not os.path.isdir(saves_dir):
         raise GameSavesError("The saves folder path is a file, not a folder")
 
-    tree = _scan_tree(source)
+    try:
+        tree = _scan_tree(source)
+    except OSError as exc:
+        raise GameSavesError(
+            f"Part of the folder to import cannot be read: {exc}"
+        ) from exc
     if not tree.files:
         raise GameSavesError("The folder to import has no files")
     if is_within(saves_dir, backups_root):

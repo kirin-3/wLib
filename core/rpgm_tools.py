@@ -18,10 +18,10 @@ from typing import cast
 
 from core.game_tools import (
     CHUNK_SIZE,
-    PARTIAL_SUFFIX,
     CancelFn,
     GameToolError,
     ProgressFn,
+    create_temp_file,
 )
 
 ENCRYPTED_EXTENSIONS = {
@@ -165,9 +165,9 @@ class _Cancelled(Exception):
 
 
 def _decrypt_file(asset: Asset, key: bytes, cancelled: CancelFn) -> None:
-    temporary = asset.destination + PARTIAL_SUFFIX
+    fd, temporary = create_temp_file(asset.destination)
     try:
-        with open(asset.path, "rb") as source, open(temporary, "wb") as out:
+        with os.fdopen(fd, "wb") as out, open(asset.path, "rb") as source:
             _ = source.seek(FILE_HEADER_LENGTH)
             block = source.read(ENCRYPTED_PREFIX_LENGTH)
             _ = out.write(_xor(block, key) + block[len(key) :])
@@ -283,7 +283,7 @@ def set_use_decrypted(root: str, enabled: bool) -> None:
                 f"{pending} encrypted asset(s) still need decrypting first"
             )
     data = _load_system(root)
-    temporary = path + PARTIAL_SUFFIX
+    temporary = ""
     try:
         backup = path + BACKUP_SUFFIX
         if enabled and not os.path.exists(backup):
@@ -293,13 +293,16 @@ def set_use_decrypted(root: str, enabled: bool) -> None:
             data["hasEncryptedAudio"] = False
         else:
             data.update(_original_flags(backup))
-        with open(temporary, "w", encoding="utf-8", newline="") as file:
-            _ = file.write(json.dumps(data, ensure_ascii=False, separators=(",", ":")))
+        text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        fd, temporary = create_temp_file(path)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as file:
+            _ = file.write(text)
         os.replace(temporary, path)
     except (OSError, RecursionError) as exc:
         raise GameToolError(str(exc)) from exc
     finally:
-        try:
-            os.remove(temporary)
-        except FileNotFoundError:
-            pass
+        if temporary:
+            try:
+                os.remove(temporary)
+            except FileNotFoundError:
+                pass

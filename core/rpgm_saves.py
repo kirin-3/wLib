@@ -12,6 +12,7 @@ Save formats:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -22,6 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import ClassVar, cast
 
+from core.game_tools import create_temp_file
 from core.lzstring import LZStringError, compress_to_base64, decompress_from_base64
 
 FORMAT_MV = "mv"
@@ -804,6 +806,27 @@ def load_save(path: str, names: Mapping[str, object]) -> JsonDict:
     }
 
 
+_CHANGED = "The save changed since it was opened. Reopen the slot."
+
+
+def _read_fingerprint(path: str) -> tuple[bytes, tuple[int, int, int, int, str]]:
+    """Read `path` and return its bytes and a fingerprint of those bytes.
+
+    The fingerprint holds the size, mtime_ns, device and inode from the open
+    handle, and a SHA-256 of the bytes read.
+    """
+    try:
+        with open(path, "rb") as handle:
+            stat = os.fstat(handle.fileno())
+            data = handle.read()
+    except FileNotFoundError as exc:
+        raise SaveChanged("The save file is gone. Reopen the slot.") from exc
+    except OSError as exc:
+        raise RpgmSaveError("The save file could not be read", "read_failed") from exc
+    digest = hashlib.sha256(data).hexdigest()
+    return data, (len(data), stat.st_mtime_ns, stat.st_dev, stat.st_ino, digest)
+
+
 def write_save(
     path: str,
     patches: Sequence[object],
@@ -814,33 +837,29 @@ def write_save(
 ) -> str:
     """Apply `patches` to the slot file safely and return the backup name.
 
-    Order: size/mtime check, decode and apply, backup, encode, verify, then an
-    atomic replace. Any failure leaves the original file untouched.
+    Order: read and fingerprint, size/mtime check, decode and apply, backup,
+    encode, verify, write a temp file, recheck the fingerprint, then an atomic
+    replace. Any failure leaves the original file untouched.
+
+    The recheck right before the replace makes sure that a game which wrote
+    the slot after it was read (for example during the backup) does not lose
+    that write. A check-then-replace is not fully atomic, but the window is
+    only the time between the last read and `os.replace`.
     """
-    try:
-        stat = os.stat(path)
-    except OSError as exc:
-        raise SaveChanged("The save file is gone. Reopen the slot.") from exc
-    if stat.st_size != size or stat.st_mtime_ns != mtime_ns:
-        raise SaveChanged("The save changed since it was opened. Reopen the slot.")
+    data, fingerprint = _read_fingerprint(path)
+    if fingerprint[0] != size or fingerprint[1] != mtime_ns:
+        raise SaveChanged(_CHANGED)
     fmt = format_for_name(os.path.basename(path))
-    try:
-        with open(path, "rb") as handle:
-            data = handle.read()
-    except OSError as exc:
-        raise RpgmSaveError("The save file could not be read", "read_failed") from exc
-    if len(data) != size:
-        raise SaveChanged("The save changed since it was opened. Reopen the slot.")
     tree = decode_save(data, fmt)
     apply_patches(tree, patches, names)
     backup_name = backup()
     encoded = encode_save(tree, fmt)
     if decode_save(encoded, fmt) != tree:
         raise RpgmSaveError("The edited save failed its check, nothing was written")
-    folder, name = os.path.split(path)
-    temp = os.path.join(folder, f".{name}{TEMP_SUFFIX}")
+    temp = ""
     try:
-        with open(temp, "wb") as handle:
+        fd, temp = create_temp_file(path, TEMP_SUFFIX)
+        with os.fdopen(fd, "wb") as handle:
             _ = handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
@@ -848,13 +867,16 @@ def write_save(
             shutil.copymode(path, temp)
         except OSError:
             pass
+        _, current = _read_fingerprint(path)
+        if current != fingerprint:
+            raise SaveChanged(_CHANGED)
         os.replace(temp, path)
     except OSError as exc:
         raise RpgmSaveError(
             f"The save could not be written: {exc.strerror or exc}", "write_failed"
         ) from exc
     finally:
-        if os.path.lexists(temp):
+        if temp and os.path.lexists(temp):
             try:
                 os.remove(temp)
             except OSError:

@@ -908,6 +908,12 @@ class Launcher:
         # of a runner that died without reporting its end.
         self._external: dict[int, RunningGame] = {}
         self.external_alive: Callable[[int], bool] | None = None
+        # True when games this launcher cannot see may share its Wine
+        # prefixes (the Steam runner knows only its own game). stop() then
+        # never runs wineserver -k and spares the prefix's Wine services.
+        self.prefix_owner_uncertain: bool = False
+        # Prefixes whose wineserver stop() is ending; launches on them are refused.
+        self._killing_prefixes: set[str] = set()
         # Set while shutting down so exit callbacks skip the (closed) UI window.
         self.shutting_down: bool = False
         _ = atexit.register(self.shutdown)
@@ -926,6 +932,8 @@ class Launcher:
         """Why entry cannot share its prefix with a running game. Caller holds _running_lock."""
         if not entry.prefix:
             return None
+        if entry.prefix in self._killing_prefixes:
+            return "Another game on this Wine prefix is closing. Try again in a moment."
         self._prune_external_locked()
         for other_id, other in (*self._running.items(), *self._external.items()):
             if other_id == game_id or entry.prefix != other.prefix:
@@ -1176,10 +1184,34 @@ class Launcher:
                 return ""
 
             running_prefix = shareable_prefix(running) if running is not None else ""
-            prefix_shared = bool(running_prefix) and any(
-                other_id != game_id and shareable_prefix(other) == running_prefix
-                for other_id, other in self._running.items()
+            # Steam-shortcut games run in other processes; their reservations
+            # sit in _external and count too.
+            self._prune_external_locked()
+            prefix_shared = bool(running_prefix) and (
+                self.prefix_owner_uncertain
+                or any(
+                    other_id != game_id and shareable_prefix(other) == running_prefix
+                    for other_id, other in (
+                        *self._running.items(),
+                        *self._external.items(),
+                    )
+                )
             )
+            # Hold the prefix until wineserver -k returns, so a game that
+            # starts on it in the meantime is not killed with this one.
+            kill_prefix = ""
+            if (
+                running is not None
+                and proc is not None
+                and running.kill_info
+                and not prefix_shared
+                and not running.sandbox_box
+                and not is_windows()
+                and running_prefix not in self._killing_prefixes
+            ):
+                kill_prefix = running_prefix
+                if kill_prefix:
+                    self._killing_prefixes.add(kill_prefix)
         if running is None:
             return {
                 "success": False,
@@ -1192,81 +1224,86 @@ class Launcher:
                 "code": "starting",
                 "error": "Game is still starting",
             }
-        with self._running_lock:
-            tools = list(self._tools.pop(game_id, {}).values())
-        self._close_tool_processes(tools)
-        pid = proc.pid
         try:
-            if running.sandbox_box:
-                game_sandbox.terminate_box(running.sandbox_tool, running.sandbox_box)
-            elif is_windows() and running.job is not None and running.job.stop_game():
-                # Also ends what a launcher that already exited started.
-                pass
-            elif is_windows():
-                result = subprocess.run(
-                    ["taskkill", "/T", "/F", "/PID", str(pid)],
-                    capture_output=True,
-                    timeout=5,
-                    check=False,
-                    creationflags=no_console_window(),
-                )
-                if result.returncode:
-                    return {
-                        "success": False,
-                        "error": "Could not stop the game. It may require administrator rights; close the game itself.",
-                    }
-            else:
-                if running.kill_info and not prefix_shared:
-                    wineserver, env = running.kill_info
-                    try:
-                        _ = subprocess.run(
-                            host_command([wineserver, "-k"], env=env),
-                            env=env,
-                            capture_output=True,
-                            timeout=2,
-                            check=False,
-                        )
-                    except (OSError, subprocess.TimeoutExpired):
-                        pass
-                killpg = cast(Callable[[int, int], None], getattr(os, "killpg"))
-                # Another game on this prefix relies on the wineserver and
-                # services in this group, so signal only this game's processes.
-                spare_wine = prefix_shared and not running.host_native and not running.sandboxed
-
-                def signal_game(sig: int) -> None:
-                    members = _wine_group_pids(pid) if spare_wine else None
-                    if members is None:
-                        killpg(pid, sig)
-                        return
-                    if not members[0]:
-                        raise ProcessLookupError(pid)
-                    for member in members[0]:
+            with self._running_lock:
+                tools = list(self._tools.pop(game_id, {}).values())
+            self._close_tool_processes(tools)
+            pid = proc.pid
+            try:
+                if running.sandbox_box:
+                    game_sandbox.terminate_box(running.sandbox_tool, running.sandbox_box)
+                elif is_windows() and running.job is not None and running.job.stop_game():
+                    # Also ends what a launcher that already exited started.
+                    pass
+                elif is_windows():
+                    result = subprocess.run(
+                        ["taskkill", "/T", "/F", "/PID", str(pid)],
+                        capture_output=True,
+                        timeout=5,
+                        check=False,
+                        creationflags=no_console_window(),
+                    )
+                    if result.returncode:
+                        return {
+                            "success": False,
+                            "error": "Could not stop the game. It may require administrator rights; close the game itself.",
+                        }
+                else:
+                    if running.kill_info and not prefix_shared:
+                        wineserver, env = running.kill_info
                         try:
-                            os.kill(member, sig)
+                            _ = subprocess.run(
+                                host_command([wineserver, "-k"], env=env),
+                                env=env,
+                                capture_output=True,
+                                timeout=2,
+                                check=False,
+                            )
+                        except (OSError, subprocess.TimeoutExpired):
+                            pass
+                    killpg = cast(Callable[[int, int], None], getattr(os, "killpg"))
+                    # Another game on this prefix relies on the wineserver and
+                    # services in this group, so signal only this game's processes.
+                    spare_wine = prefix_shared and not running.host_native and not running.sandboxed
+
+                    def signal_game(sig: int) -> None:
+                        members = _wine_group_pids(pid) if spare_wine else None
+                        if members is None:
+                            killpg(pid, sig)
+                            return
+                        if not members[0]:
+                            raise ProcessLookupError(pid)
+                        for member in members[0]:
+                            try:
+                                os.kill(member, sig)
+                            except ProcessLookupError:
+                                pass
+
+                    try:
+                        signal_game(signal.SIGTERM)
+                    except ProcessLookupError:
+                        # The tracking thread removes the entry and flushes final playtime.
+                        return {"success": True}
+
+                    def force_stop() -> None:
+                        time.sleep(5)
+                        try:
+                            # Check the group even if its original parent already exited.
+                            killpg(pid, 0)
+                            signal_game(signal.SIGKILL)
                         except ProcessLookupError:
                             pass
+                        except OSError as exc:
+                            print(f"Could not force-stop game {game_id}: {exc}")
 
-                try:
-                    signal_game(signal.SIGTERM)
-                except ProcessLookupError:
-                    # The tracking thread removes the entry and flushes final playtime.
-                    return {"success": True}
-
-                def force_stop() -> None:
-                    time.sleep(5)
-                    try:
-                        # Check the group even if its original parent already exited.
-                        killpg(pid, 0)
-                        signal_game(signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    except OSError as exc:
-                        print(f"Could not force-stop game {game_id}: {exc}")
-
-                threading.Thread(target=force_stop, daemon=True).start()
-            return {"success": True}
-        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
-            return {"success": False, "error": str(exc)}
+                    threading.Thread(target=force_stop, daemon=True).start()
+                return {"success": True}
+            except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                return {"success": False, "error": str(exc)}
+        finally:
+            if kill_prefix:
+                with self._running_lock:
+                    self._killing_prefixes.discard(kill_prefix)
 
     def _resolve_runner_candidate_path(self, raw_path: str) -> str:
         path_module = _host_path_module()

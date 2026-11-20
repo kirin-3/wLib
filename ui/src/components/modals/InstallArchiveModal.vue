@@ -11,7 +11,7 @@ import {
 } from "../../services/api";
 import { notifyError } from "../../utils/toast";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
-import { createInstallPreview, defaultDeleteArchive, mergeArchiveFields, openInstallArchive, preselectLibraryFolder, formatLibraryFreeSpace, type InstallArchiveSeed } from "../../utils/installArchive";
+import { choicesAfterInspect, createInstallPreview, mergeArchiveFields, openInstallArchive, preselectLibraryFolder, formatLibraryFreeSpace, type InstallArchiveSeed } from "../../utils/installArchive";
 import { defaultTargetLabel, isWishlisted } from "../../utils/libraryGames";
 import PathStatus from "../PathStatus.vue";
 
@@ -51,7 +51,12 @@ const toolError = ref("");
 const oldFolder = ref("");
 const removable = ref(false);
 const removeReason = ref("");
+// The user's choice; the old folder is removed only while it is also removable.
 const removeOld = ref(true);
+const removeOldChecked = computed(() => removable.value && removeOld.value);
+const onRemoveOldChange = (event: Event) => {
+  if (event.target instanceof HTMLInputElement) removeOld.value = event.target.checked;
+};
 const deleteArchive = ref(false);
 // Set by the preview: a folder from a finished torrent, and whether its torrent still shares the files.
 const sourceKind = ref<'archive' | 'folder'>('archive');
@@ -159,9 +164,12 @@ useModalKeyboard(modalRef, () => isOpen.value, close);
 let inspectRequestId = 0;
 // Title and version guessed from the current archive's file name.
 let archiveGuess = { title: "", version: "" };
+// The source of the last successful inspection; its checkbox choices are kept.
+let inspectedArchive = "";
 
 const reset = () => {
   inspectRequestId++;
+  inspectedArchive = "";
   archiveGuess = { title: "", version: "" };
   lookupRequestId++;
   lastLookupUrl = "";
@@ -320,8 +328,16 @@ const inspect = async () => {
     sourceKind.value = info.source_kind === 'folder' ? 'folder' : 'archive';
     torrentSource.value = !!info.torrent_source;
     torrentSeeding.value = !!info.torrent_seeding;
+    // Defaults apply only to a new source; a re-inspection keeps the user's choices.
     // Torrent files are removed with the torrent, never by the install checkbox.
-    deleteArchive.value = torrentSource.value ? false : defaultDeleteArchive(info.downloaded_by_wlib);
+    const choices = choicesAfterInspect(
+      path === inspectedArchive ? { removeOld: removeOld.value, deleteArchive: deleteArchive.value } : null,
+      info.downloaded_by_wlib,
+      torrentSource.value,
+    );
+    inspectedArchive = path;
+    removeOld.value = choices.removeOld;
+    deleteArchive.value = choices.deleteArchive;
     // A guess from a previously picked archive is replaced; thread, seed and typed values are kept.
     const replaceable = (field: "title" | "version", value: string) =>
       !edited.has(field) && (!value.trim() || value === archiveGuess[field]);
@@ -344,8 +360,6 @@ const inspect = async () => {
     oldFolder.value = info.old_folder || "";
     removable.value = !!info.removable;
     removeReason.value = info.remove_reason || "";
-    if (!removable.value) removeOld.value = false;
-    else if (isUpdate.value) removeOld.value = true;
     phase.value = "ready";
     updatePreview();
   } catch (e) {
@@ -513,7 +527,7 @@ const install = async (exeRelpath = "") => {
       links: requestSeed.value?.links,
       library_folder: libraryFolder.value || undefined,
       target_id: targetId.value,
-      remove_old: removeOld.value,
+      remove_old: removeOldChecked.value,
       delete_archive: torrentSource.value ? false : deleteArchive.value,
       source_kind: sourceKind.value,
       exe_relpath: exeRelpath || undefined,
@@ -765,7 +779,7 @@ watch(phase, (next, prev) => {
 
         <div v-if="isUpdate && oldFolder" class="space-y-2">
           <label class="flex items-start gap-2 text-sm" :class="{ 'opacity-60': !removable }" style="color: var(--text-primary)">
-            <input v-model="removeOld" type="checkbox" :disabled="!removable || phase === 'installing'" class="mt-1" />
+            <input :checked="removeOldChecked" type="checkbox" :disabled="!removable || phase === 'installing'" class="mt-1" @change="onRemoveOldChange" />
             <span>
               Remove old version
               <span class="block text-xs font-mono break-all" style="color: var(--text-muted)">{{ oldFolder }}</span>

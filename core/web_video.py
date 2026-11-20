@@ -18,7 +18,7 @@ import struct
 import subprocess
 import threading
 from collections.abc import Callable, Iterator
-from typing import BinaryIO, TypedDict, cast
+from typing import BinaryIO, NotRequired, TypedDict, cast
 
 from core.host_platform import (
     get_data_dir,
@@ -599,6 +599,9 @@ class StreamInfo(TypedDict):
     video: list[str]
     audio: list[str]
     duration: float | None
+    # Embedded subtitle tracks. They are copied as they are; if the MP4 muxer
+    # cannot hold one, ffmpeg fails and the original file is kept.
+    subtitle: NotRequired[list[str]]
 
 
 SUPPORTED_VIDEO = ("av1", "vp9")
@@ -606,7 +609,7 @@ SUPPORTED_AUDIO = ("opus", "mp3", "flac")
 
 
 def parse_probe(text: str) -> StreamInfo:
-    info: StreamInfo = {"video": [], "audio": [], "duration": None}
+    info: StreamInfo = {"video": [], "audio": [], "duration": None, "subtitle": []}
     try:
         raw = cast(object, json.loads(text or "{}"))
     except ValueError:
@@ -629,6 +632,8 @@ def parse_probe(text: str) -> StreamInfo:
                 info["video"].append(name)
             elif kind == "audio":
                 info["audio"].append(name)
+            elif kind == "subtitle":
+                info.setdefault("subtitle", []).append(name)
     container = data.get("format")
     if isinstance(container, dict):
         try:
@@ -642,6 +647,8 @@ def verify_output(source: StreamInfo, output: StreamInfo) -> str | None:
     """Why the converted file is not usable, or None."""
     if bool(source["video"]) != bool(output["video"]) or bool(source["audio"]) != bool(output["audio"]):
         return "streams are missing"
+    if len(source.get("subtitle", [])) != len(output.get("subtitle", [])):
+        return "subtitles are missing"
     if any(name not in SUPPORTED_VIDEO for name in output["video"]):
         return "video codec is wrong"
     if any(name not in SUPPORTED_AUDIO for name in output["audio"]):
@@ -658,7 +665,9 @@ def encode_command(info: FfmpegInfo, source: str, target: str, streams: StreamIn
     cmd = [info["ffmpeg"], "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", source]
     # `0:V` (capital) leaves out cover art, which would otherwise become a
     # one-frame AV1 track or stop the mux with "received no packets".
-    cmd += ["-map", "0:V?", "-map", "0:a?", "-sn", "-dn"]
+    # Subtitle tracks are kept; the built-in player ignores them, but the
+    # installed copy must not lose captions or translations.
+    cmd += ["-map", "0:V?", "-map", "0:a?", "-map", "0:s?", "-dn"]
     if streams["video"] and all(name in SUPPORTED_VIDEO for name in streams["video"]):
         cmd += ["-c:v", "copy"]
     elif info["video_encoder"] == "libsvtav1":
@@ -672,7 +681,7 @@ def encode_command(info: FfmpegInfo, source: str, target: str, streams: StreamIn
         cmd += ["-c:a", "copy"]
     else:
         cmd += ["-c:a", AUDIO_ENCODER, "-b:a", "96k"]
-    cmd += ["-movflags", "+faststart", "-f", "mp4", target]
+    cmd += ["-c:s", "copy", "-movflags", "+faststart", "-f", "mp4", target]
     return cmd
 
 

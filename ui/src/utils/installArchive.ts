@@ -38,6 +38,27 @@ export const openInstallArchive = (request: InstallArchiveRequest = {}): void =>
 /** Select deletion only for archives staged by wLib. */
 export const defaultDeleteArchive = (downloadedByWlib: boolean | undefined): boolean => downloadedByWlib === true;
 
+/** The "Remove old version" and "Delete archive after install" choices. */
+export interface ArchiveInstallChoices {
+  removeOld: boolean;
+  deleteArchive: boolean;
+}
+
+/**
+ * The choices after an inspection. Defaults apply only to a source that was not
+ * inspected before; inspecting the same source again (a new library folder or
+ * launch target) keeps what the user chose. `removeOld` is the user's choice,
+ * not the checkbox: the old folder is removed only while it is also removable.
+ */
+export const choicesAfterInspect = (
+  previous: ArchiveInstallChoices | null,
+  downloadedByWlib: boolean | undefined,
+  torrentSource: boolean,
+): ArchiveInstallChoices =>
+  previous
+    ? { ...previous }
+    : { removeOld: true, deleteArchive: torrentSource ? false : defaultDeleteArchive(downloadedByWlib) };
+
 /** Apply automatic fills only to fields the user has left untouched. */
 export function mergeArchiveFields<T extends Record<string, string>>(
   current: T, incoming: Partial<T>, edited: ReadonlySet<keyof T>,

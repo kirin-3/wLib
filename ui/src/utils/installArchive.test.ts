@@ -6,6 +6,7 @@ import {
   INSTALL_ARCHIVE_EVENT,
   openInstallArchive,
   defaultDeleteArchive,
+  choicesAfterInspect,
   mergeArchiveFields,
   preselectLibraryFolder,
   formatLibraryFreeSpace,
@@ -127,4 +128,22 @@ test("only staged archives default to deletion", () => {
   assert.equal(defaultDeleteArchive(true), true);
   assert.equal(defaultDeleteArchive(false), false);
   assert.equal(defaultDeleteArchive(undefined), false);
+});
+
+test("a first inspection applies the default choices", () => {
+  assert.deepEqual(choicesAfterInspect(null, true, false), { removeOld: true, deleteArchive: true });
+  assert.deepEqual(choicesAfterInspect(null, false, false), { removeOld: true, deleteArchive: false });
+  assert.deepEqual(choicesAfterInspect(null, true, true), { removeOld: true, deleteArchive: false });
+});
+
+test("re-inspecting the same source keeps the user's choices", () => {
+  // The user unchecked both boxes, then changed the library folder or launch target.
+  const kept = { removeOld: false, deleteArchive: false };
+  assert.deepEqual(choicesAfterInspect(kept, true, false), kept);
+  assert.notEqual(choicesAfterInspect(kept, true, false), kept);
+  // A user who checked deletion of a non-staged archive keeps it too.
+  assert.deepEqual(choicesAfterInspect({ removeOld: true, deleteArchive: true }, false, false), {
+    removeOld: true,
+    deleteArchive: true,
+  });
 });

@@ -931,7 +931,7 @@ def test_install_save_copy_failure_leaves_db_untouched(tmp_path, monkeypatch):
     archive = tmp_path / "Game-2.0.zip"
     _write_game_zip(archive, {"Game.exe": b"new"})
 
-    def _boom(_old, _new):
+    def _boom(_old, _new, **_kwargs):
         raise ai.ArchiveInstallError("save copy boom")
 
     monkeypatch.setattr(ai, "copy_infolder_saves", _boom)

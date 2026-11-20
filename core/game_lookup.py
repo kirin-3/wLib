@@ -23,6 +23,16 @@ class PageResolution(TypedDict):
     attach_lc_available: bool
 
 
+# SQLite binds Python ints only up to a signed 64-bit value.
+_MAX_SQLITE_INT = 2**63 - 1
+
+
+def _sqlite_ids(values: Sequence[str]) -> list[int]:
+    """The ASCII-digit IDs that SQLite can bind, sorted; others are skipped."""
+    ids = {int(value) for value in values if value.isascii() and value.isdigit()}
+    return sorted(value for value in ids if value <= _MAX_SQLITE_INT)
+
+
 def _strings(value: object) -> list[str]:
     try:
         items = cast(object, json.loads(str(value or "[]")))
@@ -352,7 +362,7 @@ def lc_thread_entries(thread_ids: Sequence[str]) -> dict[str, dict[str, object]]
 
 def lc_thread_tiers(thread_ids: Sequence[str]) -> dict[str, str]:
     """The catalog tier of each LC thread that has one (a small read for library loads)."""
-    ids = sorted({int(value) for value in thread_ids if value.isascii() and value.isdigit()})
+    ids = _sqlite_ids(thread_ids)
     if not ids or database.get_setting("catalog_enabled") == "0":
         return {}
     path = Path(database.DB_PATH).parent / CATALOG_FILE
@@ -444,7 +454,8 @@ def f95_thread_cover(thread_id: str) -> str:
     F95 hides every starter-post attachment, the cover included, from guests,
     so a scrape without the signed-in extension has no cover of its own.
     """
-    if not thread_id.isdigit():
+    ids = _sqlite_ids([thread_id])
+    if not ids:
         return ""
     path = Path(database.DB_PATH).parent / CATALOG_FILE
     try:
@@ -455,7 +466,7 @@ def f95_thread_cover(thread_id: str) -> str:
                 tuple[object] | None,
                 conn.execute(
                     "SELECT cover_url FROM f95_threads WHERE thread_id = ?",
-                    (int(thread_id),),
+                    (ids[0],),
                 ).fetchone(),
             )
     except (sqlite3.Error, OSError, ValueError):
@@ -466,7 +477,7 @@ def f95_thread_cover(thread_id: str) -> str:
 
 def _thread_screenshots(table: str, thread_ids: Sequence[str]) -> dict[str, list[str]]:
     """Catalog screenshot lists by thread ID; IDs without a readable row are left out."""
-    ids = sorted({int(thread_id) for thread_id in thread_ids if thread_id.isdigit()})
+    ids = _sqlite_ids(thread_ids)
     if not ids:
         return {}
     path = Path(database.DB_PATH).parent / CATALOG_FILE

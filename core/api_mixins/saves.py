@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from contextlib import closing
 from typing import cast
@@ -12,6 +13,76 @@ from core.host_platform import (
 )
 from core.game_saves import SaveLocation
 from core.api_mixins.base import ApiBase
+
+# A save-editor backup can come from the game's own RPG Maker `save` folder
+# while the effective saves folder is elsewhere (an override). A hidden note
+# next to such a backup sends its restore back to that folder. The note holds
+# the backup folder's identity, so a later backup that reuses the name (with
+# no note of its own) is not redirected.
+_GAME_SAVE_SOURCE = "rpgm_game_save"
+_NOTE_SUFFIX = ".source.json"
+
+
+def _source_note_path(backup_dir: str, name: str) -> str:
+    return os.path.join(backup_dir, f".{name}{_NOTE_SUFFIX}")
+
+
+def _backup_identity(path: str) -> list[int]:
+    stat = os.stat(path, follow_symlinks=False)
+    return [stat.st_dev, stat.st_ino, stat.st_ctime_ns]
+
+
+def _write_source_note(backup_dir: str, name: str, source: str) -> None:
+    """Record where backup `name` came from. Raises OSError."""
+    import json
+    import tempfile
+
+    note = {"source": source, "id": _backup_identity(os.path.join(backup_dir, name))}
+    fd, temp = tempfile.mkstemp(prefix=".wlib-note-", dir=backup_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(note, handle)
+        os.replace(temp, _source_note_path(backup_dir, name))
+    finally:
+        if os.path.lexists(temp):
+            os.remove(temp)
+    # Notes of pruned backups are of no use; drop them.
+    try:
+        entries = os.listdir(backup_dir)
+    except OSError:
+        return
+    for entry in entries:
+        if not (entry.startswith(".") and entry.endswith(_NOTE_SUFFIX)):
+            continue
+        backup = entry[1 : -len(_NOTE_SUFFIX)]
+        if not os.path.isdir(os.path.join(backup_dir, backup)):
+            try:
+                os.remove(os.path.join(backup_dir, entry))
+            except OSError:
+                pass
+
+
+def _read_source_note(backup_dir: str, name: str) -> str:
+    """The recorded source of backup `name`, or "" for the effective folder."""
+    import json
+
+    try:
+        with open(_source_note_path(backup_dir, name), encoding="utf-8") as handle:
+            note = cast(object, json.load(handle))
+        identity = _backup_identity(os.path.join(backup_dir, name))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(note, dict):
+        return ""
+    data = cast(dict[str, object], note)
+    source = data.get("source")
+    if data.get("id") != identity or not isinstance(source, str):
+        return ""
+    return source
+
+
+def _same_folder(a: str, b: str) -> bool:
+    return bool(a) and bool(b) and os.path.realpath(a) == os.path.realpath(b)
 
 
 class SavesMixin(ApiBase):
@@ -298,30 +369,53 @@ class SavesMixin(ApiBase):
         }
 
     def _merge_into_game_saves(
-        self, game_id: object, source: str, verb: str = "Imported"
+        self,
+        game_id: object,
+        source: str,
+        verb: str = "Imported",
+        game_save_folder: str = "",
     ) -> dict[str, object]:
-        """Shared import/restore body."""
+        """Shared import/restore body.
+
+        `game_save_folder` restores into the game's own RPG Maker save folder
+        instead of the effective one.
+        """
         from core.database import get_save_backup_keep
-        from core.game_saves import GameSavesError, import_saves
+        from core.game_saves import GameSavesError, game_backup_dir, import_saves
 
         state = self._saves_game_state(game_id)
         if state is None:
             return self._game_saves_not_found()
         coerced_id, _row, effective, _detected = state
-        if not effective:
+        target = game_save_folder or effective
+        if not target:
             return {"success": False, "error": "Choose a saves folder first"}
+        elsewhere = bool(game_save_folder) and not _same_folder(target, effective)
         try:
             with self._save_operation(coerced_id, writes=True):
                 info = import_saves(
                     source,
-                    effective,
+                    target,
                     self._save_backups_root(),
                     coerced_id,
                     get_save_backup_keep(),
                 )
+                if elsewhere and info.backup is not None:
+                    # The safety backup holds the game's save folder too.
+                    try:
+                        _write_source_note(
+                            game_backup_dir(self._save_backups_root(), coerced_id),
+                            info.backup.name,
+                            _GAME_SAVE_SOURCE,
+                        )
+                    except OSError as exc:
+                        name = info.backup.name
+                        print(f"[wLib] Could not note the source of backup {name}: {exc}")
         except GameSavesError as exc:
             return {"success": False, "error": str(exc)}
         message = f"{verb} {info.files} file(s) ({self._format_bytes(info.bytes)})"
+        if elsewhere:
+            message += " into the game's own save folder"
         if info.skipped_links:
             message += f"; skipped {info.skipped_links} link(s)"
         if info.backup is not None:
@@ -347,18 +441,35 @@ class SavesMixin(ApiBase):
         self, game_id: object = None, backup_name: object = ""
     ) -> dict[str, object]:
         """Import one of the game's backups, like Import with that source."""
-        from core.game_saves import GameSavesError, resolve_backup
+        from core.game_saves import GameSavesError, game_backup_dir, resolve_backup
 
         coerced_id = self._coerce_db_id(game_id)
         if coerced_id is None:
             return self._game_saves_not_found()
+        name = str(backup_name or "")
         try:
-            source = resolve_backup(
-                self._save_backups_root(), coerced_id, str(backup_name or "")
-            )
+            source = resolve_backup(self._save_backups_root(), coerced_id, name)
         except GameSavesError as exc:
             return {"success": False, "error": str(exc)}
-        return self._merge_into_game_saves(coerced_id, source, "Restored")
+        game_save_folder = ""
+        backup_dir = game_backup_dir(self._save_backups_root(), coerced_id)
+        if _read_source_note(backup_dir, name) == _GAME_SAVE_SOURCE:
+            context = self._rpgm_save_context(coerced_id)
+            if isinstance(context, dict):
+                if context.get("error_code") == "game_not_found":
+                    return context
+                return {
+                    "success": False,
+                    "error": (
+                        "This backup came from the game's own save folder, which "
+                        "wLib cannot find now. Open the backup and copy the files "
+                        "by hand."
+                    ),
+                }
+            game_save_folder = os.path.join(context[1], "save")
+        return self._merge_into_game_saves(
+            coerced_id, source, "Restored", game_save_folder
+        )
 
     def _rpgm_save_context(
         self, game_id: object
@@ -475,14 +586,28 @@ class SavesMixin(ApiBase):
 
                 def backup() -> str:
                     try:
-                        return backup_saves(
+                        info = backup_saves(
                             folder,
                             self._save_backups_root(),
                             coerced_id,
                             get_save_backup_keep(),
-                        ).name
+                        )
                     except GameSavesError as exc:
                         raise BackupFailed(str(exc)) from exc
+                    if not _same_folder(folder, effective):
+                        # A restore must go back to this folder, not the
+                        # effective one. Without the note it would not.
+                        backup_dir = os.path.dirname(info.path)
+                        try:
+                            _write_source_note(
+                                backup_dir, info.name, _GAME_SAVE_SOURCE
+                            )
+                        except OSError as exc:
+                            shutil.rmtree(info.path, ignore_errors=True)
+                            raise BackupFailed(
+                                f"Backup failed: could not record its folder: {exc}"
+                            ) from exc
+                    return info.name
 
                 backup_name = write_save(
                     path, cast("list[object]", patches), size, stamp, load_names(root), backup
