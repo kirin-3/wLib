@@ -11,6 +11,7 @@ export interface InstallArchiveSeed {
   f95Url: string;
   lcUrl?: string;
   lcDismissed?: string;
+  screenshots?: string[];
   threadCompleted?: boolean;
   threadOnhold?: boolean;
   threadAbandoned?: boolean;

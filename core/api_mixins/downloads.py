@@ -944,6 +944,7 @@ class DownloadsMixin(ApiBase):
                 rating=str(payload.get("rating") or ""),
                 lc_url=lc_url,
                 lc_dismissed=lc_dismissed if lc_dismissed.isascii() and lc_dismissed.isdigit() else "",
+                screenshots=lewdcorner.page_screenshots(payload.get("screenshots")) if lc_url else [],
                 game_id=game_id,
                 target_id=target_id,
                 remove_old=remove_old,

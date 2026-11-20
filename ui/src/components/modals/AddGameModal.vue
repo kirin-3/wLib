@@ -75,6 +75,9 @@ const coverImage = ref("");
 // Screenshots sent by an LC page add, kept only for that LC thread.
 const screenshots = ref<string[]>([]);
 const screenshotsFor = ref("");
+const selectedScreenshots = computed(() =>
+  screenshotsFor.value && normalizeLcThreadUrl(lcUrl.value) === screenshotsFor.value ? screenshots.value : [],
+);
 const tags = ref("");
 const rating = ref("");
 const developer = ref("");
@@ -284,6 +287,7 @@ const installFromArchive = async () => {
     engine: engine.value, f95Url: f95Url.value, coverImage: coverImage.value,
     tags: tags.value, rating: rating.value,
     lcUrl: normalizeLcThreadUrl(lcUrl.value), lcDismissed: dismissedLc.value,
+    screenshots: selectedScreenshots.value,
     ...(threadCompleted.value !== undefined ? { threadCompleted: threadCompleted.value } : {}),
     ...(threadOnhold.value !== undefined ? { threadOnhold: threadOnhold.value } : {}),
     ...(threadAbandoned.value !== undefined ? { threadAbandoned: threadAbandoned.value } : {}),
@@ -361,7 +365,7 @@ const save = () => {
     engine: engine.value,
     launch_mode: launchMode.value,
     command_line_args: commandLineArgs.value,
-    screenshots: screenshotsFor.value && normalizeLcThreadUrl(lcUrl.value) === screenshotsFor.value ? screenshots.value : [],
+    screenshots: selectedScreenshots.value,
   });
 };
 </script>

@@ -291,10 +291,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
         }
         fetchWLibJson(`http://localhost:8183/api/check?${query}`)
-            .then(readWLibResponse)
-            .then(data => {
-                sendResponse({ success: true, matches: data.matches || {} });
+            .then(result => {
+                const data = readWLibResponse(result);
+                // Pairing errors arrive with HTTP 200 so version checks still work.
                 maybeReloadForNewExtensionVersion(data);
+                if (data.error_code) {
+                    throw new WLibServerError(result.response.status, data);
+                }
+                sendResponse({ success: true, matches: data.matches || {} });
             })
             .catch(error => sendResponse(wlibFailure(message.action, error)));
         return true;

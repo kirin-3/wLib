@@ -59,7 +59,7 @@ Allows the extension to decorate a supported page based on library ownership.
   ```
 - **Contract Notes:**
   - `canAttachThread: true` is present on F95 checks only when exactly one matching game has no F95 URL. The widget offers **Attach F95 thread** alongside Open; ambiguous matches never receive this flag.
-  - `gameId` is the local integer ID when a game matches. An ambiguous identity returns one game to open and never modifies any of the matches.
+  - `gameId` is the local integer ID when a game matches. On store pages the page's own work ID takes priority over related IDs. Ties at the same priority return the lowest local game ID. The check never modifies any of the matches.
   - `exists` remains the stable boolean consumed by both the thread widget and latest-alpha page badges.
   - `playStatus` is optional enrichment for matching games only. It may contain a canonical desktop status or a custom name (at most 40 characters).
   - `wishlisted` is present for matching games. It is `true` when `exe_path` is empty after trimming.
@@ -314,4 +314,4 @@ A check can return `attach_lc_available: true` for an existing F95 partner. To a
 {"action":"attach_lc","url":"https://lewdcorner.com/threads/5583/"}
 ```
 
-A successful attach returns `{"success":true,"attached":true,"id":42}`. An already-owned LC thread returns HTTP 409 with `error_code: "duplicate_url"`. For badges, use `/api/check?batch=1` with repeated `url` parameters. Its `matches` object maps the submitted LC URLs that are already stored in the library to game IDs.
+A successful attach returns `{"success":true,"attached":true,"id":42}`. An already-owned LC thread returns HTTP 409 with `error_code: "duplicate_url"`. For badges, use `/api/check?batch=1` with repeated `url` parameters. Its `matches` object maps the submitted LC URLs that are already stored in the library to game IDs. Pairing errors trigger the extension's batch retry backoff.

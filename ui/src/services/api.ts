@@ -691,6 +691,7 @@ export interface ArchiveInstallOptions {
   f95_url?: string | undefined;
   lc_url?: string | undefined;
   lc_dismissed?: string | undefined;
+  screenshots?: string[] | undefined;
   thread_completed?: boolean | undefined;
   thread_onhold?: boolean | undefined;
   thread_abandoned?: boolean | undefined;

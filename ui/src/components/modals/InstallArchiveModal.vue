@@ -538,6 +538,7 @@ const install = async (exeRelpath = "") => {
       f95_url: f95Url.value.trim(),
       lc_url: target.value ? undefined : requestSeed.value?.lcUrl,
       lc_dismissed: target.value ? undefined : requestSeed.value?.lcDismissed,
+      screenshots: target.value ? undefined : requestSeed.value?.screenshots,
       thread_completed: target.value ? undefined : requestSeed.value?.threadCompleted,
       thread_onhold: target.value ? undefined : requestSeed.value?.threadOnhold,
       thread_abandoned: target.value ? undefined : requestSeed.value?.threadAbandoned,

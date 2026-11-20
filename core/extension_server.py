@@ -14,6 +14,7 @@ import threading
 from collections.abc import Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Protocol, cast, override
+from urllib.parse import urlsplit
 
 from core import lewdcorner
 from collections.abc import Callable
@@ -210,13 +211,27 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(url, str) or not url.strip():
             return None
 
-        from core.database import find_game_by_f95_url, find_game_by_lc_url, get_game
+        from core.database import find_game_by_f95_url, find_game_by_lc_url, find_games_by_links, get_game
         from core.game_lookup import resolve_page
+        from core.store_links import parse_store_link
 
         thread_game = find_game_by_lc_url(url) if lewdcorner.extract_thread_id(url) else find_game_by_f95_url(url)
         if thread_game:
             return thread_game
-        matches = resolve_page(url, ids)["matches"]
+        resolved = resolve_page(url, ids)
+        matches = resolved["matches"]
+        if len(matches) > 1:
+            page = parse_store_link(url)
+            if page is None:
+                try:
+                    host = urlsplit(url).hostname
+                except ValueError:
+                    host = None
+                if host in {"ryuugames.com", "www.ryuugames.com"}:
+                    # A post permalink carries its own ID via the page or catalog.
+                    page = next((link for link in resolved["ids"] if link["source"] == "ryuugames"), None)
+            if page is not None:
+                matches = find_games_by_links([page]) or matches
         return get_game(matches[0]) if matches else None
 
     def _build_check_payload(
