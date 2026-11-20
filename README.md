@@ -36,8 +36,8 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - **Updates in one click.** Check the whole library against F95Zone, download the new build through the browser extension or as an RPDL torrent, and install it over the old one with your saves moved across.
 - **Made for Linux.** Wine, Proton through umu-launcher, an RPG Maker runner, GameMode, MangoHud, gamescope, Winetricks and per-game sandboxing are built in.
 - **Steam Deck ready.** Controller navigation, a TV mode that turns on in Gaming Mode, and games added to Steam as shortcuts.
-- **Light.** About 140 MB of RAM when idle, about half of what the Electron-based managers use ([details](docs/feature-comparison.md)).
-- **Your data stays yours.** Back up to a single JSON file, sync through a folder, Dropbox or Google Drive with optional encryption, and import from F95Checker, Atlas, XLibrary, f69 or Playnite.
+- **Light.** About 137 MB of RAM when idle on Windows, about half of what the Electron-based managers use ([details](docs/feature-comparison.md)).
+- **Your data stays yours.** Back up to a single JSON file, sync through a folder, Dropbox or Google Drive with optional encryption, and import from F95Checker, Atlas, XLibrary, f69, Game-List or Playnite.
 
 ## Features
 
@@ -45,9 +45,11 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 
 - Grid, list, compact and banner views, with a card-size slider.
 - Cover art (animated covers play always, on hover or never, and pause while a game runs), tags with colors, ratings, play status (including your own statuses), Markdown notes and PDF, TXT or MD attachments.
-- Collections as tabs, saved filters, and active filters shown as removable chips.
+- Collections as tabs, saved filters, and active filters shown as removable chips. Tag, engine and source filters can include or exclude a value.
+- LewdCorner threads next to F95 threads: wLib fills in the other site's thread for games on both sites, reads LC covers and screenshots, and detects LC Plus. Turn it on in Settings.
 - Select several games at once to change status, collections, favorites, tags, engine, launch mode, sandbox or Wine/Proton prefix, back up saves, refresh F95 covers, ratings and tags, check for updates, uninstall, move or remove them. Most actions can be undone for a few seconds, also with Ctrl+Z.
-- A wishlist that tells you when a game is marked Completed.
+- A wishlist that tells you when a game is marked Completed, and downloads a wishlisted game straight from its F95 thread.
+- On Hold and Abandoned thread states from F95 and LewdCorner, with a **Thread state** filter and an alert when a game is abandoned. The **Archived** play status keeps a game out of automatic update checks.
 - Playtime tracking and a per-version **Journal**. **Unplayed update** and **New since finished** collections show what's new.
 - Thread screenshots in the detail window, served from the shared game catalog.
 - View and edit thread details such as the overview, original title, aliases, languages and developer links. Search aliases and filter by developer or language.
@@ -57,8 +59,8 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 
 ### Updates and downloads
 
-- Check every game against F95Zone at once, or on a schedule. Games from Ryuugames without an F95 thread are checked against the catalog.
-- **Download update** reads the thread's links through the extension, picks a suitable build, and downloads it from MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire and other hosts. Sign in to your own Pixeldrain or MEGA account to use it for downloads.
+- Check every game against F95Zone and LewdCorner at once, or on a schedule. For a game on both sites, the newest post wins. Games from Ryuugames without an F95 thread are checked against the catalog.
+- **Download update** reads the F95 or LewdCorner thread's links through the extension, picks a suitable build, and downloads it from MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire and other hosts. Sign in to your own Pixeldrain or MEGA account to use it for downloads.
 - **RPDL torrents** show up next to the thread's links, matched to the game's title and version. Downloads resume after a restart, and you choose whether to keep seeding, up to a ratio or time limit. You can also save the `.torrent`, copy the magnet link, or send it to your own torrent client's watch folder.
 - **Downloads page** lists every download in one queue: reorder it, start one now, pause and resume, and see why one failed with the next step to take. Set how many run at once and a speed limit for file hosts and torrents together, and let downloads wait while you play or run on battery.
 - Install a new game or an update from a `.zip`, `.7z` or `.rar`, including multi-part archives, or from a tar archive (`.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`/`.tbz2`/`.tbz`, `.tar.xz`/`.txz`), the format of many Ren'Py Linux builds. wLib moves your saves over and removes the old version, and it also spots matching archives in your Downloads folder. Installs use every CPU core and are fast on NFS and SMB network drives too.
@@ -86,7 +88,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - **Run in sandbox** uses bubblewrap on Linux and Sandboxie-Plus on Windows. If the tool is missing, the game doesn't launch, so it never runs unsandboxed by accident.
 - **No internet** cuts a single game off from the network on both Linux and Windows.
 - HTML and Flash games play in a built-in player with playtime, Stop, sandbox and No internet. Each game keeps its own saves. Flash runs through Ruffle. wLib warns you about videos the player can't play (H.264, H.265, AAC) and can convert them with ffmpeg. F12 opens DevTools. You can still open a game in your browser instead.
-- On Windows, `.exe`, `.bat` and `.cmd` files run directly and `.jar` games run through Java.
+- On Windows, `.exe`, `.bat` and `.cmd` files run directly, `.jar` games run through Java, and the Japanese locale option uses Locale Emulator.
 
 ### Controller and Steam Deck
 
@@ -97,7 +99,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 
 - Back up everything to one JSON file, optionally protected with a passphrase, and restore it on another machine, including between Linux and Windows.
 - Sync between computers through a shared folder (Syncthing, MEGA and so on), Dropbox or Google Drive, with optional encryption. wLib keeps the last five synced copies so you can go back, and asks you when both computers changed. File paths and launch settings stay on each computer. The [privacy policy](PRIVACY.md) explains exactly what is synced.
-- Import your library from F95Checker, Atlas, XLibrary, f69 or Playnite.
+- Import your library from F95Checker, Atlas, XLibrary, f69, Game-List or Playnite, and your F95 **Watched** and **Bookmarked** games through the extension.
 
 ### Interface
 
@@ -122,11 +124,12 @@ A short version of the [full feature comparison](docs/feature-comparison.md), re
 | Ren'Py and RPG Maker tools | Yes | No | No | Yes |
 | GameMode, MangoHud, Winetricks | Yes | No | No | No |
 | Cloud sync | Folder, Dropbox, Google Drive | Google Drive | No | No |
-| Import from other apps | 5 apps | 4 apps | 2 apps | 2 apps |
+| LewdCorner | Yes | Yes | Yes | No |
+| Import from other apps | 6 apps | 4 apps | 2 apps | 2 apps |
 
 \* Tested on 2026-11-16 on a Windows 11 VM with empty libraries, using wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.14 and f69 0.14.1. The number is the median RAM that the app and its child processes hold over 4 minutes.
 
-Other apps have things wLib doesn't yet, such as LewdCorner support, browsing the full catalog, machine translation and applying patches with rollback. The [full comparison](docs/feature-comparison.md) lists them.
+Other apps have things wLib doesn't yet, such as browsing the full catalog, machine translation and applying patches with rollback. The [full comparison](docs/feature-comparison.md) lists them.
 
 ## Screenshots
 
@@ -300,7 +303,7 @@ To install it, add the flake as an input and put `inputs.wlib.packages.x86_64-li
 
 ## Browser extension
 
-The Chrome and Firefox extension adds **Add to wLib**, **Wishlist** and **Open in wLib** buttons to F95Zone threads, and to DLsite, VNDB and Ryuugames pages once you turn those sites on in its options. It also handles in-app downloads, and it retries requests with your browser's sign-in when F95Zone challenges wLib.
+The Chrome and Firefox extension adds **Add to wLib**, **Wishlist** and **Open in wLib** buttons to F95Zone threads, and to LewdCorner, DLsite, VNDB and Ryuugames pages once you turn those sites on in its options. It also handles in-app downloads, and it retries requests with your browser's sign-in when F95Zone challenges wLib.
 
 It only talks to wLib on your own computer (port `8183`), so wLib has to be running. The first time it connects, wLib asks you to allow it, and you can remove it later on the Extension page. It updates itself, so you only install it once. Click **Open Extension Folder** in wLib to find the files.
 

@@ -1,6 +1,6 @@
 # Feature comparison: wLib, xLib, Atlas, f69
 
-Snapshot from 2026-11-16: wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f69 0.15.24
+Snapshot from 2026-11-16: wLib 0.4.8, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f69 0.15.24
 
 ✅ supported · ⚠️ partial or limited · ❌ not found in the source
 
@@ -43,12 +43,12 @@ Snapshot from 2026-11-16: wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f
 | Feature | wLib | xLib | Atlas | f69 |
 |---|---|---|---|---|
 | F95Zone | ✅ | ✅ | ✅ | ✅ |
-| LewdCorner | ❌ | ✅ | ✅ (tier detection) | ❌ |
+| LewdCorner | ✅ (Plus detection, update checks, downloads) | ✅ | ✅ (tier detection) | ❌ |
 | DLsite / VNDB | ✅ (+ Ryuugames) | ✅ | ❌ | ❌ |
 | Steam / GOG / itch library | ❌ | ✅ Steam, itch | ✅ Steam, GOG | ❌ |
 | Shared metadata catalog | ✅ catalog.db | ✅ catalog packages | ✅ AtlasDB | ✅ F95Indexer |
 | In-app F95 login | ❌ (uses extension's session) | ⚠️ via plugins | ✅ | ✅ (password, TOTP, cookie) |
-| Import F95 bookmarks | ❌ | ⚠️ F95 lists import | ❌ | ✅ |
+| Import F95 bookmarks | ✅ Watched and Bookmarked, through the extension | ⚠️ F95 lists import | ❌ | ✅ |
 
 ## Updates and downloads
 
@@ -57,7 +57,7 @@ Snapshot from 2026-11-16: wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f
 | Library update check | ✅ | ✅ | ✅ | ✅ |
 | Skip / pin a version | ✅ skip | ❌ | ❌ | ✅ pin |
 | Desktop notifications | ✅ (Linux) | ✅ | ❌ | ✅ |
-| In-app downloads | ✅ via extension: MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire, Mixdrop +4; Downloads page with one queue (reorder, pause/resume, shared speed limit) | ✅ ~20 hosts, JDownloader hand-off; Downloads page with one queue (reorder, start now, speed limit, pause while playing or on battery); MEGA, Pixeldrain, Mediafire account sign-in | ✅ MEGA, Pixeldrain, Gofile, Buzzheavier; F95 and LewdCorner links | ✅ aria2: donor DDL, masked links, MEGAcmd |
+| In-app downloads | ✅ via extension: MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire, Mixdrop +4; F95 and LewdCorner links; Downloads page with one queue (reorder, pause/resume, shared speed limit) | ✅ ~20 hosts, JDownloader hand-off; Downloads page with one queue (reorder, start now, speed limit, pause while playing or on battery); MEGA, Pixeldrain, Mediafire account sign-in | ✅ MEGA, Pixeldrain, Gofile, Buzzheavier; F95 and LewdCorner links | ✅ aria2: donor DDL, masked links, MEGAcmd |
 | Torrents / RPDL | ✅ RPDL, with seeding, in the same Downloads queue; export .torrent/magnet or send to a client's watch folder | ✅ | ❌ | ✅ |
 | Install from archive, keep saves | ✅ | ✅ | ✅ | ✅ |
 | App self-update | ⚠️ checks GitHub | ✅ | ✅ stable/nightly | ❌ |
@@ -96,8 +96,8 @@ Snapshot from 2026-11-16: wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f
 
 | Feature | wLib | xLib | Atlas | f69 |
 |---|---|---|---|---|
-| Import from other apps | F95Checker, Atlas, XLibrary, f69, Playnite | F95Checker, Game-List, Playnite, older XLibrary | F95Checker, XLibrary | F95Checker, XLibrary |
+| Import from other apps | F95Checker, Atlas, XLibrary, f69, Game-List, Playnite | F95Checker, Game-List, Playnite, older XLibrary | F95Checker, XLibrary | F95Checker, XLibrary |
 | Export / backup | ✅ JSON, optional passphrase | ✅ local backups, plugin exports | ❌ | ✅ F95Checker DB export, auto DB backups |
 | Cloud sync | ✅ folder, Dropbox, Google Drive (encrypted) | ✅ Google Drive | ❌ | ❌ |
-| Browser extension | ✅ Chrome, Firefox (F95, DLsite, VNDB, Ryuugames) | ✅ Chrome, Firefox | ✅ Chrome, Firefox, Edge (F95, LewdCorner) | ❌ (stub only) |
+| Browser extension | ✅ Chrome, Firefox (F95, LewdCorner, DLsite, VNDB, Ryuugames) | ✅ Chrome, Firefox | ✅ Chrome, Firefox, Edge (F95, LewdCorner) | ❌ (stub only) |
 | Diagnostics page / logs | ✅ | ✅ | ✅ | ✅ |
