@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -39,6 +40,10 @@ def test_second_launch_exits_when_focus_times_out_during_startup(
     setup_log.assert_called_once_with(str(tmp_path))
 
 
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="fcntl locks are POSIX only")
+
+
+@posix_only
 @pytest.mark.parametrize("code", ["ENOLCK", "EOPNOTSUPP", "ENOSYS"])
 def test_data_folder_without_lock_support_still_starts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str
@@ -55,6 +60,7 @@ def test_data_folder_without_lock_support_still_starts(
     lock.close()
 
 
+@posix_only
 def test_data_folder_held_by_another_copy_is_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

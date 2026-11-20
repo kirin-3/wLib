@@ -43,7 +43,9 @@ def test_decrypt_reports_unusable_copy_and_accepts_readable_symlink(blocked_copy
         _ = rpgm_tools.decrypt_assets(root, no_progress, never)
 
     if blocked_copy.is_symlink():
-        assert blocked_copy.readlink() == blocked_copy.with_name("shared.png")
+        # Windows reports the link target with a \\?\ prefix.
+        target = str(blocked_copy.readlink()).removeprefix("\\\\?\\")
+        assert Path(target) == blocked_copy.with_name("shared.png")
     else:
         assert blocked_copy.is_dir()
         blocked_copy.rmdir()

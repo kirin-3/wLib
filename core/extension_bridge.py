@@ -14,6 +14,7 @@ import binascii
 import json
 import logging
 import socket
+import sys
 import threading
 import time
 import uuid
@@ -867,6 +868,16 @@ def _send_raw(wfile: BinaryIO | BufferedIOBase, data: bytes) -> None:
     _ = wfile.flush()
 
 
+def _cut_socket(sock: socket.socket) -> None:
+    """End a socket so a thread blocked in recv() on it returns."""
+    sock.shutdown(socket.SHUT_RDWR)
+    if sys.platform == "win32":
+        # Windows shutdown() does not wake a blocked recv(); only closing the
+        # handle does. close() waits while makefile() streams exist, so detach
+        # the handle and close it here. The reader then gets an OSError.
+        socket.socket(fileno=sock.detach()).close()  # pyright: ignore[reportUnreachable]
+
+
 def serve_bridge_connection(
     sock: object,
     rfile: BinaryIO | BufferedIOBase,
@@ -888,7 +899,7 @@ def serve_bridge_connection(
     conn = BridgeConnection(send_text=_send_text)
     conn.pairing_id = pairing_id
     if isinstance(sock, socket.socket):
-        conn.shutdown = lambda: sock.shutdown(socket.SHUT_RDWR)
+        conn.shutdown = lambda: _cut_socket(sock)
     _register_connection(conn)
     state = extension_ws.MessageState()
     try:

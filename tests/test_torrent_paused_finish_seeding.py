@@ -27,6 +27,8 @@ def _setup(tmp_path, monkeypatch, mode):
         return True
 
     monkeypatch.setattr(sup, "_send", send)
+    # No real helper: a started one would leave restart timers that run in later tests.
+    monkeypatch.setattr(sup, "_spawn", lambda: True)
     job = _Job(1, "Game", "1", 7)
     folder = tmp_path / "torrent"
     folder.mkdir()
