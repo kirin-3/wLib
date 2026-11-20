@@ -1700,9 +1700,13 @@ watch(
     if (action === "import" && (queryUrl || readQueryValue(q.lcurl) || readStoreLinks(readQueryValue(q.links)).length)) {
       await loadGames();
       if (route.query !== q) return;
-      if (showDetailModal.value && detailModal.value && !(await detailModal.value.requestClose())) {
-        void router.replace({ path: "/", query: {} });
-        return;
+      if (showDetailModal.value && detailModal.value) {
+        const closed = await detailModal.value.requestClose();
+        if (route.query !== q) return;
+        if (!closed) {
+          void router.replace({ path: "/", query: {} });
+          return;
+        }
       }
       // Keep the import query until the dialog closes so its archive hand-off
       // can identify the extension entry point and retain all seed metadata.
@@ -1717,6 +1721,7 @@ watch(
       // Fetch directly: on mount, the view's own loadGames() supersedes one awaited here.
       try {
         await gamesStore.refresh();
+        if (route.query !== q) return;
         const lcUrl = normalizeLcThreadUrl(queryUrl);
         const gameId = extensionGameId(q.gameId);
         const match = games.value.find((g) =>
@@ -1725,8 +1730,11 @@ watch(
         if (match && showDetailModal.value && selectedGame.value && selectedGame.value.id !== match.id) {
           // Switch games through the modal's own close so unsaved edits get the
           // discard prompt and the next open reloads every per-game panel.
-          if (await detailModal.value?.requestClose()) {
+          const closed = await detailModal.value?.requestClose();
+          if (route.query !== q) return;
+          if (closed) {
             await nextTick();
+            if (route.query !== q) return;
             openDetail(match);
           }
         } else if (match) {
@@ -1737,7 +1745,7 @@ watch(
       }
       // Consume the request: an identical route push is ignored as a duplicate,
       // so a leftover query would swallow the next "Open in wLib" for this game.
-      void router.replace({ path: "/", query: {} });
+      if (route.query === q) void router.replace({ path: "/", query: {} });
     }
   },
   { immediate: true },

@@ -159,12 +159,8 @@ def launch_tracked(
     from core.host_platform import is_linux
 
     lock_fd: int | None = None
-    if game_id is not None and game_id > 0 and is_linux():
-        from core.game_run_lock import acquire_launch_lock
-
-        lock_fd = acquire_launch_lock(game_id)
-        if lock_fd is None:
-            return {"success": False, "code": "already_running", "error": "Game is already running"}
+    exit_owns_lock = False
+    launch_ended = False
 
     def release_lock() -> None:
         nonlocal lock_fd
@@ -213,32 +209,42 @@ def launch_tracked(
             })
 
     def on_exit(delta: int, is_final: bool = True) -> None:
+        nonlocal launch_ended
         if game_id is None:
             return
-        try:
-            with session_lock:
+        with session_lock:
+            try:
                 if session_id is None and not session_failed:
                     pending_ticks.append((delta, is_final))
                 else:
                     save_tick(delta, is_final)
-        except Exception as e:
-            print(f"Failed to update playtime for game {game_id}: {e}")
-        finally:
-            if is_final:
-                release_lock()
-
-    optional_options: _OptionalLaunchOptions = {}
-    if stored_game.get("html_player"):
-        optional_options["html_player"] = str(stored_game["html_player"])
-    if gamescope_options is not None:
-        optional_options["gamescope"] = gamescope_options
-    if request.get("check_web_media") and target_path.lower().endswith((".html", ".htm")) and resolve_web_player(
-        target_path, launch_mode, stored_game.get("html_player"), html_builtin_player_enabled()
-    ) == "builtin":
-        # Only HTML in the built-in player is checked; other launchers never see the option.
-        optional_options["check_web_media"] = True
+            except Exception as e:
+                print(f"Failed to update playtime for game {game_id}: {e}")
+            finally:
+                if is_final:
+                    launch_ended = True
+                    if exit_owns_lock:
+                        release_lock()
 
     try:
+        if game_id is not None and game_id > 0 and is_linux():
+            from core.game_run_lock import acquire_launch_lock
+
+            lock_fd = acquire_launch_lock(game_id)
+            if lock_fd is None:
+                return {"success": False, "code": "already_running", "error": "Game is already running"}
+
+        optional_options: _OptionalLaunchOptions = {}
+        if stored_game.get("html_player"):
+            optional_options["html_player"] = str(stored_game["html_player"])
+        if gamescope_options is not None:
+            optional_options["gamescope"] = gamescope_options
+        if request.get("check_web_media") and target_path.lower().endswith((".html", ".htm")) and resolve_web_player(
+            target_path, launch_mode, stored_game.get("html_player"), html_builtin_player_enabled()
+        ) == "builtin":
+            # Only HTML in the built-in player is checked; other launchers never see the option.
+            optional_options["check_web_media"] = True
+
         result = launcher.launch(
             target_path,
             command_line_args,
@@ -258,31 +264,29 @@ def launch_tracked(
             # Only passed when set, so launchers without the option keep working.
             **optional_options,
         )
+        if result.get("success") and result.get("tracks_playtime", True) and game_id is not None:
+            with session_lock:
+                # The final callback can run before launcher.launch returns.
+                exit_owns_lock = not launch_ended
+                try:
+                    session_id = start_play_session(game_id, launch_version)
+                except Exception as exc:
+                    session_failed = True
+                    print(f"Failed to start play session for game {game_id}: {exc}")
+                for delta, is_final in pending_ticks:
+                    try:
+                        save_tick(delta, is_final)
+                    except Exception as exc:
+                        print(f"Failed to update playtime for game {game_id}: {exc}")
+                pending_ticks.clear()
+        return result
     except Exception as exc:
         # Launcher setup can still fail outside its own error paths (for
         # example creating the default Wine prefix). Keep the bridge
         # contract: report a failure payload instead of rejecting the call.
         print(f"Failed to launch game {game_id}: {exc}")
-        release_lock()
         return {"success": False, "error": str(exc) or "Could not launch the game."}
-    if (
-        result.get("success")
-        and result.get("tracks_playtime", True)
-        and game_id is not None
-    ):
-        with session_lock:
-            try:
-                session_id = start_play_session(game_id, launch_version)
-            except Exception as exc:
-                session_failed = True
-                print(f"Failed to start play session for game {game_id}: {exc}")
-            for delta, is_final in pending_ticks:
-                try:
-                    save_tick(delta, is_final)
-                except Exception as exc:
-                    print(f"Failed to update playtime for game {game_id}: {exc}")
-            pending_ticks.clear()
-    if not result.get("success") or not result.get("tracks_playtime", True):
-        release_lock()
-    return result
+    finally:
+        if not exit_owns_lock:
+            release_lock()
 

@@ -151,12 +151,21 @@ def resolve_key(root: str, assets: list[Asset]) -> tuple[str | None, str]:
     return None, ""
 
 
+def _has_readable_copy(path: str) -> bool:
+    return os.path.isfile(path) and os.access(path, os.R_OK)
+
+
+def _invalid_copy_message(root: str, destination: str) -> str:
+    path = os.path.relpath(destination, root).replace(os.sep, "/")
+    return f"Decrypted asset path {path} must point to a readable regular file"
+
+
 def missing_copies(assets: list[Asset]) -> list[Asset]:
-    """Really encrypted assets that have no decrypted copy yet."""
+    """Really encrypted assets without a readable decrypted copy."""
     return [
         asset
         for asset in assets
-        if not os.path.lexists(asset.destination) and is_encrypted_file(asset.path)
+        if not _has_readable_copy(asset.destination) and is_encrypted_file(asset.path)
     ]
 
 
@@ -206,12 +215,14 @@ def decrypt_assets(
             was_cancelled = True
             break
         progress(done, total, os.path.relpath(asset.path, root).replace(os.sep, "/"))
-        if os.path.lexists(asset.destination):
+        if _has_readable_copy(asset.destination):
             already += 1
             continue
         if not is_encrypted_file(asset.path):
             skipped += 1
             continue
+        if os.path.lexists(asset.destination):
+            raise GameToolError(_invalid_copy_message(root, asset.destination))
         try:
             _decrypt_file(asset, key, cancelled)
         except _Cancelled:
@@ -277,11 +288,14 @@ def _original_flags(backup: str) -> dict[str, bool]:
 def set_use_decrypted(root: str, enabled: bool) -> None:
     path = system_json_path(root)
     if enabled:
-        pending = len(missing_copies(scan_assets(root)))
+        pending = missing_copies(scan_assets(root))
         if pending:
-            raise GameToolError(
-                f"{pending} encrypted asset(s) still need decrypting first"
-            )
+            message = f"{len(pending)} encrypted asset(s) still need decrypting first"
+            for asset in pending:
+                if os.path.lexists(asset.destination):
+                    message += f". {_invalid_copy_message(root, asset.destination)}"
+                    break
+            raise GameToolError(message)
     data = _load_system(root)
     temporary = ""
     try:

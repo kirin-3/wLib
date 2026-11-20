@@ -16,6 +16,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
+from os.path import expanduser
 from pathlib import Path
 from typing import final
 from urllib.parse import urlsplit
@@ -375,7 +376,7 @@ class DownloadManager:
 
     def release(self, path: str) -> None:
         with self._lock:
-            self._open_archives.discard(Path(path).resolve())
+            self._open_archives.discard(Path(expanduser(path)).resolve())
 
     def delete_archive(self, path: str) -> bool:
         """Delete a finished download's archive, when it is in staging and not open."""

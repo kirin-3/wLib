@@ -166,9 +166,18 @@ let inspectRequestId = 0;
 let archiveGuess = { title: "", version: "" };
 // The source of the last successful inspection; its checkbox choices are kept.
 let inspectedArchive = "";
+// Inspection protects staged downloads from cleanup while the dialog holds them.
+let heldArchive = "";
+
+const releaseHeldArchive = () => {
+  const path = heldArchive;
+  heldArchive = "";
+  if (path) return api.releaseDownloadArchive(path);
+};
 
 const reset = () => {
   inspectRequestId++;
+  void releaseHeldArchive();
   inspectedArchive = "";
   archiveGuess = { title: "", version: "" };
   lookupRequestId++;
@@ -184,7 +193,6 @@ const reset = () => {
   lookupLoading.value = false;
   previewError.value = "";
   phase.value = "pick";
-  if (archive.value) void api.releaseDownloadArchive(archive.value);
   archive.value = "";
   title.value = "";
   version.value = "";
@@ -300,7 +308,10 @@ const loadLibraryFolder = async () => {
 const inspect = async () => {
   const path = archive.value.trim();
   // A newer inspect supersedes any in-flight one via inspectRequestId.
-  if (!path) return;
+  if (!path) {
+    void releaseHeldArchive();
+    return;
+  }
   const requestId = ++inspectRequestId;
   inspecting.value = true;
   phase.value = "inspecting";
@@ -309,14 +320,19 @@ const inspect = async () => {
   launchCandidates.value = [];
   duplicateGameId.value = null;
   try {
+    if (heldArchive && heldArchive !== path) {
+      await releaseHeldArchive();
+      if (requestId !== inspectRequestId || !isOpen.value) return;
+    }
     const info = await api.inspectArchive(path, target.value?.id ?? null, targetId.value, folderEdited.value ? libraryFolder.value : null);
+    const staged = info?.downloaded_by_wlib || info?.torrent_source;
     if (requestId !== inspectRequestId || !isOpen.value) {
-      if (info.downloaded_by_wlib) void api.releaseDownloadArchive(path);
+      if (staged && path !== heldArchive) void api.releaseDownloadArchive(path);
       return;
     }
     // The field was edited without committing; wait for its change event.
     if (archive.value.trim() !== path) {
-      if (info.downloaded_by_wlib) void api.releaseDownloadArchive(path);
+      if (staged && path !== heldArchive) void api.releaseDownloadArchive(path);
       phase.value = "pick";
       return;
     }
@@ -325,6 +341,7 @@ const inspect = async () => {
       phase.value = "pick";
       return;
     }
+    if (staged) heldArchive = path;
     sourceKind.value = info.source_kind === 'folder' ? 'folder' : 'archive';
     torrentSource.value = !!info.torrent_source;
     torrentSeeding.value = !!info.torrent_seeding;
@@ -386,7 +403,6 @@ const browseArchive = async () => {
   try {
     const path = await api.browseArchiveFile(archive.value);
     if (path && isOpen.value) {
-      if (archive.value && archive.value !== path) void api.releaseDownloadArchive(archive.value);
       archive.value = path;
       await inspect();
     }
@@ -491,6 +507,8 @@ onBeforeUnmount(() => {
   stopPolling();
   preview.cancel();
   lookupRequestId++;
+  inspectRequestId++;
+  if (phase.value !== "installing") void releaseHeldArchive();
 });
 
 const install = async (exeRelpath = "") => {

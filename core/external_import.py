@@ -753,7 +753,10 @@ def _xlibrary_executables(
             dropped += 1
             continue
         if kept:
-            targets.append({"label": name, "exe_path": kept})
+            if not exe_path:
+                exe_path = kept
+            else:
+                targets.append({"label": name, "exe_path": kept})
     return exe_path, targets, dropped
 
 
@@ -1024,7 +1027,10 @@ def _translate_atlas_game(
         if not kept:
             dropped += 1
             continue
-        targets.append({"label": f"v{version_text}", "exe_path": kept})
+        if not exe_path:
+            exe_path = kept
+        else:
+            targets.append({"label": f"v{version_text}", "exe_path": kept})
 
     if not _has_import_identity(
         f95_url or lc_url, coerce_store_links(metadata.get("links")), exe_path

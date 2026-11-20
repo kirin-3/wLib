@@ -84,6 +84,10 @@ _RUNTIME_FOLDERS = {
 }
 
 
+class _RuntimeManifestError(ValueError):
+    pass
+
+
 def required_runtime(runner: str) -> str:
     # umu resolves codenames to a concrete build before it reads the manifest,
     # so a GE-Proton build may still need sniper (steamrt3).
@@ -93,13 +97,17 @@ def required_runtime(runner: str) -> str:
         except ValueError:
             return "steamrt4"
     folder = runner if os.path.isdir(runner) else os.path.dirname(runner)
+    manifest_path = os.path.join(folder, "toolmanifest.vdf")
     try:
-        with open(
-            os.path.join(folder, "toolmanifest.vdf"), encoding="utf-8"
-        ) as manifest:
+        with open(manifest_path, encoding="utf-8") as manifest:
             content = manifest.read()
     except OSError:
         return "steamrt4"
+    except UnicodeDecodeError as exc:
+        raise _RuntimeManifestError(
+            f"Proton manifest {manifest_path} contains invalid UTF-8. "
+            + "Repair the file or reinstall the selected Proton build."
+        ) from exc
     match = re.search(r'"require_tool_appid"\s*"(\d+)"', content)
     return _RUNTIME_FOLDERS.get(match.group(1) if match else "", "steamrt4")
 
@@ -118,7 +126,10 @@ def _runtime_installed(root: str) -> bool:
 
 
 def runtime_status(runner: str) -> dict[str, object]:
-    runtime = required_runtime(runner)
+    try:
+        runtime = required_runtime(runner)
+    except _RuntimeManifestError as exc:
+        return {"runtime": "", "path": "", "ready": False, "error": str(exc)}
     root = os.path.join(umu_data_dir(), runtime)
     return {"runtime": runtime, "path": root, "ready": _runtime_installed(root)}
 
@@ -614,9 +625,14 @@ class UmuRuntimePrepare:
             environment["PROTONPATH"] = proton_path
         else:
             _ = environment.pop("PROTONPATH", None)
-        runtime_path = str(runtime_status(runner)["path"])
-        stamp_before = _runtime_stamp(runtime_path)
         try:
+            runtime = runtime_status(runner)
+            if error := runtime.get("error"):
+                with self._lock:
+                    self._status.update(error=error, error_class="other")
+                return
+            runtime_path = str(runtime["path"])
+            stamp_before = _runtime_stamp(runtime_path)
             with tempfile.TemporaryFile() as output:
                 process = subprocess.Popen(
                     host_command(

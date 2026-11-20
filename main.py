@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib
 import json
@@ -942,7 +943,7 @@ def track_minimized(window: object) -> None:
 
 
 def focus_running_instance() -> bool:
-    """Ask a wLib already holding port 8183 to show its window; False if it isn't wLib."""
+    """Ask the process serving port 8183 to show its window."""
     import urllib.request
 
     request = urllib.request.Request(
@@ -957,9 +958,7 @@ def focus_running_instance() -> bool:
                 dict[str, object], payload
             )
     except Exception:
-        # A stale or foreign process may hold the port and answer with
-        # something other than HTTP/JSON (BadStatusLine, truncated body, ...).
-        # Treat every failure as "not wLib" so this launch can start normally.
+        # The server might still be starting or belong to another application.
         return False
 
 
@@ -1206,26 +1205,67 @@ def restore_ctrl_c() -> None:
         _ = signal.signal(signal.SIGINT, signal.default_int_handler)
 
 
+def acquire_instance_lock(path: str) -> IO[bytes] | None:
+    """Hold the data directory until the returned file is closed."""
+    os.makedirs(path, exist_ok=True)
+    # Keep the lock file in place so all launches lock the same file.
+    lock = open(os.path.join(path, ".wlib-instance.lock"), "a+b")
+    try:
+        if sys.platform == "win32":
+            import msvcrt  # pyright: ignore[reportUnreachable]
+
+            _ = lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BaseException as exc:
+        lock.close()
+        if isinstance(exc, BlockingIOError) or (
+            isinstance(exc, OSError) and exc.errno == errno.EACCES and is_windows()
+        ):
+            return None
+        raise
+    return lock
+
+
 def main() -> None:
     restore_ctrl_c()
     ssl_summary = configure_ssl_certificates()
 
-    global window_ref
-
-    # A second copy would share the database.
-    extension_server = bind_extension_server()
-    if extension_server is None and focus_running_instance():
-        print("[wLib] wLib is already running; showing its window instead.")
+    try:
+        instance_lock = acquire_instance_lock(APP_DATA_DIR)
+    except OSError as exc:
+        show_fatal_startup_error(
+            f"wLib cannot lock its data folder {APP_DATA_DIR}: {exc.strerror or exc}. "
+            + "Make the folder writable, or set WLIB_DATA_DIR to another folder."
+        )
+        raise SystemExit(1) from exc
+    if instance_lock is None:
+        print("[wLib] wLib is already running for this data folder.")
+        _ = focus_running_instance()
         return
+
+    with instance_lock:
+        start_desktop(ssl_summary)
+
+
+def start_desktop(ssl_summary: str | None) -> None:
+    global window_ref
 
     problem = data_dir_problem(APP_DATA_DIR)
     if problem:
-        if extension_server is not None:
-            extension_server.server_close()
         show_fatal_startup_error(
             f"{problem} Make the folder writable, or set WLIB_DATA_DIR to another folder."
         )
         raise SystemExit(1)
+
+    extension_server = bind_extension_server()
+    # Older wLib processes only advertise ownership through the extension port.
+    if extension_server is None and focus_running_instance():
+        print("[wLib] wLib is already running; showing its window instead.")
+        return
 
     _ = setup_app_log(APP_DATA_DIR)
     if is_linux():
@@ -1238,10 +1278,7 @@ def main() -> None:
     print(f"[wLib] SSL certificates: {ssl_summary or 'system defaults'}")
     database_ready = threading.Event()
     if extension_server is not None:
-        # Serve before the slow WebView/API startup. The port is the
-        # single-instance lock, so a second launch during this window must
-        # still get a reply and exit instead of opening a second window that
-        # shares the database.
+        # Serve focus requests before the slow WebView/API startup.
         print("Starting extension HTTP receiver on port 8183...")
         cast(ExtensionServer, extension_server).database_ready = database_ready
         threading.Thread(
@@ -1349,9 +1386,7 @@ def main() -> None:
         api.controller_watcher.stop()
         api.cover_cache.stop()
         api.cover_cards.stop()
-        # Release the port before the final sync can take up to 10 seconds:
-        # relaunching wLib while it shuts down must be able to bind it instead
-        # of finding this closing instance and exiting.
+        # Release the port while the data-directory lock still protects final sync.
         if extension_server is not None:
             try:
                 extension_server.shutdown()

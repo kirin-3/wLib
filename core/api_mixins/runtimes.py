@@ -154,6 +154,8 @@ class RuntimesMixin(ApiBase):
         target = self._resolve_runtime_install_target()
         preparation = self._umu_prepare.status()
         runtime = runtime_status(target["proton_path"])
+        if error := runtime.get("error"):
+            preparation.update(error=error, error_class="other")
         if preparation["cancelled"] or preparation["error"]:
             runtime["ready"] = False
         return {"success": True, **runtime, **preparation}

@@ -25,6 +25,18 @@ KNOWN_PLUGINS: dict[str, tuple[str, str]] = {
 }
 
 _DIGITS_RE = re.compile(r"^\d+$", re.ASCII)
+_JS_COMMENT_OR_STRING_RE = re.compile(
+    r"""
+    (?P<comment>
+        //[^\r\n\u2028\u2029]*
+        | /\*(?:[^*]++|\*(?!/))*+(?:\*/|\Z)
+    )
+    | '(?:[^'\\\r\n]++|\\.)*+'
+    | "(?:[^"\\\r\n]++|\\.)*+"
+    | `(?:[^`\\]++|\\.)*+`
+    """,
+    re.VERBOSE | re.DOTALL,
+)
 _MANAGER_RE = {
     "width": re.compile(r"SceneManager\._screenWidth\s*=\s*(\d+)\s*;", re.ASCII),
     "height": re.compile(r"SceneManager\._screenHeight\s*=\s*(\d+)\s*;", re.ASCII),
@@ -74,6 +86,10 @@ def _mv_size(root: str, prefix: str) -> NativeSize:
     result = NativeSize(*MV_DEFAULT, "MV default")
     managers = _read_text(os.path.join(root, "js", "rpg_managers.js"), MAX_FILE_BYTES)
     if managers is not None:
+        # Comments are whitespace, while strings still occupy a token.
+        managers = _JS_COMMENT_OR_STRING_RE.sub(
+            lambda match: " " if match.group("comment") else '""', managers
+        )
         width = _MANAGER_RE["width"].search(managers)
         height = _MANAGER_RE["height"].search(managers)
         size = _size(int(width.group(1)), int(height.group(1))) if width and height else None
