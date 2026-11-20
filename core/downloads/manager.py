@@ -377,15 +377,6 @@ class DownloadManager:
         with self._lock:
             self._open_archives.discard(Path(path).resolve())
 
-    def delete_part(self, name: str) -> None:
-        """Delete one partial file of a removed download."""
-        if not name or '/' in name or '\\' in name or not name.endswith('.part'):
-            return
-        try:
-            (staging_dir() / name).unlink(missing_ok=True)
-        except OSError:
-            pass
-
     def delete_archive(self, path: str) -> bool:
         """Delete a finished download's archive, when it is in staging and not open."""
         if not path:
