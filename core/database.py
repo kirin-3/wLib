@@ -917,11 +917,13 @@ def _check_database(conn: sqlite3.Connection) -> None:
     )
 
 
-def _backup_before_migration(conn: sqlite3.Connection) -> str | None:
+def _backup_before_migration() -> str | None:
     """Copy the database to `db-backups/` and keep the newest few copies.
 
-    A failed copy is reported and does not stop the start: refusing to open
-    the library because the disk is full would be worse.
+    The caller holds the write lock, so the copy (read through a second
+    connection) is the state before this update. A failed copy is reported
+    and does not stop the start: refusing to open the library because the
+    disk is full would be worse.
     """
     folder = db_backup_dir()
     target = os.path.join(folder, f"wlib-{datetime.now():%Y%m%d-%H%M%S}.db")
@@ -938,9 +940,18 @@ def _backup_before_migration(conn: sqlite3.Connection) -> str | None:
         # The copy holds the same secrets as wlib.db.
         _create_private_file(partial)
         # The backup API also copies pages that are still in the WAL file.
-        with closing(sqlite3.connect(partial)) as copy:
-            conn.backup(copy)
-        os.replace(partial, target)
+        with closing(sqlite3.connect(DB_PATH, timeout=10)) as source, closing(
+            sqlite3.connect(partial)
+        ) as copy:
+            source.backup(copy)
+        try:
+            # Unlike os.replace, a link never overwrites a copy that another
+            # process published after the check above.
+            os.link(partial, target)
+        except FileExistsError:
+            pass
+        finally:
+            os.remove(partial)
     except (OSError, sqlite3.Error) as exc:
         print(f"[wLib] Could not copy the database before its update: {exc}")
         try:
@@ -969,16 +980,27 @@ def init_db() -> None:
     try:
         _check_database(conn)
         fingerprint = schema_fingerprint()
-        row = cast(tuple[int] | None, conn.execute("PRAGMA user_version").fetchone())
-        if row is not None and row[0] == _schema_state(conn, fingerprint):
+
+        def current() -> bool:
+            row = cast(tuple[int] | None, conn.execute("PRAGMA user_version").fetchone())
+            return row is not None and row[0] == _schema_state(conn, fingerprint)
+
+        if current():
+            return
+        # WAL is stored in the database file, so setting it once covers every
+        # connection. It cannot change inside the transaction below.
+        _ = conn.execute("PRAGMA journal_mode=WAL;")
+        # Another wLib process (the app and the Steam runner) can start the
+        # same update. The write lock makes the second one wait, then skip.
+        _ = conn.execute("PRAGMA busy_timeout = 120000")
+        _ = conn.execute("BEGIN IMMEDIATE")
+        if current():
             return
         if conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'games'"
         ).fetchone():
-            _ = _backup_before_migration(conn)
+            _ = _backup_before_migration()
         conn.row_factory = sqlite3.Row
-        # WAL is stored in the database file, so setting it once covers every connection.
-        _ = conn.execute("PRAGMA journal_mode=WAL;")
         _migrate_schema(conn)
         conn.row_factory = None
         state = _schema_state(conn, fingerprint)
@@ -2037,7 +2059,8 @@ def store_thread_update(
             same = normalize_version(version) == normalize_version(game.get(version_key))
             if not (keep_newer and at and stored_at > at and not same):
                 fields[version_key] = version
-                fields[time_key] = stored_at if same else at
+                # An undated read of this version takes the first date seen.
+                fields[time_key] = (stored_at or at) if same else at
             fields["latest_version"], fields["latest_site"] = _latest_for_game(
                 {**game, **fields}, lc_enabled
             )
@@ -2457,6 +2480,9 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
                 f95_after = safe_fields.get("f95_url", row[2] if row else "")
                 if not str(f95_after or "").strip():
                     _reset_thread_states(safe_fields)
+                    # The Finished flag came from the old LC thread too.
+                    if "thread_completed" not in safe_fields:
+                        safe_fields["thread_completed"] = 0
                 # LC screenshots show the old thread; F95 and other ones stay.
                 if row is not None and "screenshots" not in safe_fields:
                     stored = _decode_game_screenshots(cast(object, row[1]))
@@ -2500,6 +2526,11 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
                 for field in THREAD_DETAIL_FIELDS:
                     safe_fields[field] = thread_detail_column_value(field, "")
                 safe_fields[BASELINE_COLUMN] = None
+                # Store links read from the old thread's first post.
+                _ = conn.execute(
+                    "DELETE FROM game_links WHERE game_id = ? AND origin = 'f95_post'",
+                    (game_id,),
+                )
             elif not normalize_thread_url(stored_url) and normalize_thread_url(safe_fields["f95_url"]):
                 # A first F95 thread decides from now on; the stored states
                 # came from LC.
@@ -2688,16 +2719,20 @@ def normalize_library_folders(raw: object) -> list[str]:
 _NEW_SYNC_UID_SQL = "lower(hex(randomblob(16)))"
 
 
-def read_library_folders() -> tuple[list[str], str]:
-    """Return the normalized folder-list/default pair without writing repairs.
+def _read_folder_settings(conn: sqlite3.Connection) -> tuple[str | None, str | None]:
+    """The stored `library_folders` and `library_folder` values, read together."""
+    rows = dict(cast(list[tuple[str, str]], conn.execute(
+        "SELECT key, value FROM settings WHERE key IN ('library_folders', 'library_folder')"
+    ).fetchall()))
+    return rows.get("library_folders"), rows.get("library_folder")
 
-    Safe to call while another connection holds the write lock.
-    """
-    default = (get_setting("library_folder") or "").strip()
+
+def _normalized_library_folders(
+    raw_folders: str | None, raw_default: str | None
+) -> tuple[list[str], str]:
+    default = (raw_default or "").strip()
     try:
-        folders = normalize_library_folders(
-            cast(object, json.loads(get_setting("library_folders") or "[]"))
-        )
+        folders = normalize_library_folders(cast(object, json.loads(raw_folders or "[]")))
     except (ValueError, TypeError):
         folders = []
     if default:
@@ -2715,14 +2750,42 @@ def read_library_folders() -> tuple[list[str], str]:
     return folders, default
 
 
+def read_library_folders() -> tuple[list[str], str]:
+    """Return the normalized folder-list/default pair without writing repairs.
+
+    Safe to call while another connection holds the write lock.
+    """
+    with closing(get_connection()) as conn:
+        return _normalized_library_folders(*_read_folder_settings(conn))
+
+
 def get_library_folders() -> tuple[list[str], str]:
-    """Read and repair the additive folder-list/default setting pair."""
-    folders, default = read_library_folders()
-    encoded = json.dumps(folders)
-    if get_setting("library_folders") != encoded:
-        update_setting("library_folders", encoded)
-    if get_setting("library_folder") != default:
-        update_setting("library_folder", default)
+    """Read and repair the additive folder-list/default setting pair.
+
+    The repair reads both keys again under the write lock, so it never
+    writes back values that a concurrent settings save replaced.
+    """
+    with closing(get_connection()) as conn:
+        raw = _read_folder_settings(conn)
+        folders, default = _normalized_library_folders(*raw)
+        if raw == (json.dumps(folders), default):
+            return folders, default
+        _ = conn.execute("BEGIN IMMEDIATE")
+        raw = _read_folder_settings(conn)
+        folders, default = _normalized_library_folders(*raw)
+        repairs = [
+            (key, value)
+            for key, value, stored in (
+                ("library_folders", json.dumps(folders), raw[0]),
+                ("library_folder", default, raw[1]),
+            )
+            if stored != value
+        ]
+        _ = conn.executemany(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            repairs,
+        )
+        conn.commit()
     return folders, default
 
 
@@ -2768,10 +2831,19 @@ def update_settings(
             ),
         }
     with closing(get_connection()) as conn:
-        for status in removed:
-            _ = conn.execute(
-                "UPDATE games SET play_status = ? WHERE play_status = ? COLLATE NOCASE",
-                (DEFAULT_PLAY_STATUS, status),
+        if removed:
+            # SQLite's NOCASE folds ASCII only; match with casefold() like above.
+            folded = {status.casefold() for status in removed}
+            stored = cast(list[tuple[str]], conn.execute(
+                "SELECT DISTINCT play_status FROM games WHERE play_status IS NOT NULL"
+            ).fetchall())
+            _ = conn.executemany(
+                "UPDATE games SET play_status = ? WHERE play_status = ?",
+                [
+                    (DEFAULT_PLAY_STATUS, status)
+                    for (status,) in stored
+                    if str(status).casefold() in folded
+                ],
             )
         _ = conn.executemany(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",

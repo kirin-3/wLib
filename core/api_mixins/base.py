@@ -1635,6 +1635,9 @@ class ApiBase:
         with closing(get_connection()) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
+            # Match the rows under the write lock: a URL edit that lands
+            # between the match and the writes would get the old thread's data.
+            _ = conn.execute("BEGIN IMMEDIATE")
             _ = cursor.execute(
                 """SELECT id, f95_url, lc_url, lc_mode, thread_main_post_last_edit_at,
                           thread_main_post_checked_at, thread_completed, screenshots,
@@ -1706,11 +1709,10 @@ class ApiBase:
                 )
                 updated_rows += 1
 
-            if updated_rows:
+            for game_id in link_game_ids:
+                replace_game_links(game_id, "f95_post", incoming_links, connection=conn)
+            if updated_rows or link_game_ids:
                 conn.commit()
-
-        for game_id in link_game_ids:
-            replace_game_links(game_id, "f95_post", incoming_links)
 
         return newly_finished_ids
 

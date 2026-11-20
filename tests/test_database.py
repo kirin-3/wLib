@@ -2273,8 +2273,8 @@ def test_init_db_copies_the_database_before_a_migration(monkeypatch):
     stamps = iter(f"wlib-2026010{day}-120000.db" for day in range(1, 9))
     real_backup = database._backup_before_migration
 
-    def backup(conn):
-        target = real_backup(conn)
+    def backup():
+        target = real_backup()
         assert target is not None
         renamed = os.path.join(os.path.dirname(target), next(stamps))
         os.replace(target, renamed)

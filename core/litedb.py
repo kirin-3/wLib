@@ -8,6 +8,7 @@ Only live documents reached through the collection's primary index are read.
 from __future__ import annotations
 
 import struct
+from decimal import Decimal
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from uuid import UUID
@@ -112,6 +113,14 @@ def _document(cursor: _Cursor, depth: int = 0) -> dict[str, object]:
             value = None
         elif kind == 16:
             value = body.number("<i")
+        elif kind == 19:
+            # LiteDB 4 writes .NET decimals with BinaryWriter: lo, mid, hi, flags.
+            lo, mid, hi, flags = struct.unpack("<IIIi", body.take(16))
+            scale = (flags >> 16) & 0xFF
+            if flags & 0x7F00FFFF or scale > 28:
+                raise _invalid()
+            digits = tuple(int(digit) for digit in str(lo | mid << 32 | hi << 64))
+            value = Decimal((int(flags < 0), digits, -scale))
         elif kind == 18:
             value = body.number("<q")
         else:

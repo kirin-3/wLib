@@ -65,8 +65,7 @@ def test_migration_copies_are_owner_only(open_umask):
     database.init_db()
     _ = database.add_game("Game", "/games/game.exe")
     credentials.put({credentials.RPDL_PASSWORD: "hunter2"})
-    with closing(database.get_connection()) as conn:
-        target = database._backup_before_migration(conn)  # pyright: ignore[reportPrivateUsage]
+    target = database._backup_before_migration()  # pyright: ignore[reportPrivateUsage]
     assert target is not None
     assert _mode(target) == 0o600
     assert _mode(database.db_backup_dir()) == 0o700
