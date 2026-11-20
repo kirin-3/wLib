@@ -251,11 +251,32 @@ def test_trash_failed_rename_deletes_in_place(lib, tmp_path, monkeypatch):
     def refuse(_src, _dst):
         raise PermissionError("busy")
 
+    monkeypatch.setattr(gf, "is_windows", lambda: False)
     monkeypatch.setattr(gf.os, "rename", refuse)
     monkeypatch.setattr(gf, "defer_remove_tree", lambda path, trash: False)
     assert gf.trash_root(str(root), [str(library)]) == "in_place"
     assert gf.list_jobs("trash") == []
     assert _wait_gone(str(root))
+
+
+def test_trash_failed_rename_on_windows_keeps_the_folder(lib, tmp_path, monkeypatch):
+    # Windows refuses the rename while a game runs from the folder; deleting
+    # in place would remove only the files the game is not using.
+    library, _ctx = lib
+    root = tmp_path / "Elsewhere" / "Game"
+    root.mkdir(parents=True)
+    (root / "file").write_text("x")
+
+    def refuse(_src, _dst):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(gf, "is_windows", lambda: True)
+    monkeypatch.setattr(gf.os, "rename", refuse)
+    monkeypatch.setattr(gf, "defer_remove_tree", lambda path, trash: False)
+    assert gf.trash_root(str(root), [str(library)]) == "kept"
+    assert gf.list_jobs("trash") == []
+    time.sleep(0.1)
+    assert (root / "file").read_text() == "x"
 
 
 def test_sweep_after_crash(lib, tmp_path):

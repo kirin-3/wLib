@@ -294,6 +294,44 @@ def test_network_install_and_update_defers_old_folder(tmp_path, monkeypatch):
     assert db.get_all_games()[0]["version"] == "2.0"
 
 
+@pytest.mark.parametrize("in_use", [False, True])
+def test_windows_update_keeps_an_old_folder_it_cannot_move(tmp_path, monkeypatch, in_use):
+    # Windows refuses the rename while a game runs from the old folder; the
+    # update keeps it instead of deleting the files the game is not using.
+    db = _isolated_db(tmp_path, monkeypatch)
+    lib = tmp_path / "lib"
+    first = tmp_path / "Game-1.0.zip"
+    _mixed_zip(first)
+    r1 = ai.install_archive(
+        str(first), library_folder=str(lib), pattern="{title}/{version}",
+        title="Game", version="1.0",
+    )
+    real_defer = ai.defer_remove_tree
+    monkeypatch.setattr(ai, "_is_windows", lambda platform=None: True)
+    monkeypatch.setattr(
+        ai, "defer_remove_tree",
+        (lambda _path, _trash: False) if in_use else real_defer,
+    )
+    second = tmp_path / "Game-2.0.zip"
+    _mixed_zip(second)
+    r2 = ai.install_archive(
+        str(second), library_folder=str(lib), pattern="{title}/{version}",
+        title="Game", version="2.0", game_id=int(str(r1["game_id"])), remove_old=True,
+    )
+    old = lib / "Game" / "1.0"
+    if in_use:
+        assert r2["removed_old"] is False
+        assert "could not be moved to the trash" in str(r2["kept_old_folder_reason"])
+        assert _snapshot(old)
+    else:
+        assert r2["removed_old"] is True
+        assert not old.exists()
+        for name in os.listdir(lib):
+            if name.startswith(TRASH_PREFIX):
+                assert _wait_gone(lib / name)
+    assert db.get_all_games()[0]["version"] == "2.0"
+
+
 @pytest.mark.parametrize("listed_size", [10, None])
 def test_network_tool_archive_skips_scratch_without_local_space(tmp_path, monkeypatch, listed_size):
     _isolated_db(tmp_path, monkeypatch)

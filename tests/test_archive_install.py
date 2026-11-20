@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import zipfile
 import zlib
 from pathlib import Path
@@ -675,6 +676,10 @@ def test_install_same_folder_pattern_replaces_safely(tmp_path, monkeypatch):
     # The renamed previous contents are removed, not left as .wlib-old-*.
     assert result["removed_old"] is True
     assert result["kept_old_folder_reason"] == ""
+    # Windows moves the old folder to the trash and deletes it in the background.
+    deadline = time.monotonic() + 5
+    while len(list(lib.iterdir())) > 1 and time.monotonic() < deadline:
+        time.sleep(0.02)
     assert [p.name for p in lib.iterdir()] == ["Game"]
 
 
@@ -963,6 +968,8 @@ def test_install_rmtree_failure_reports_but_update_stands(tmp_path, monkeypatch)
     archive = tmp_path / "Game-2.0.zip"
     _write_game_zip(archive, {"Game.exe": b"new"})
     monkeypatch.setattr(ai, "remove_tree_collect", lambda _p: ["busy"])
+    # Windows would first try the trash, then delete in the background.
+    monkeypatch.setattr(ai, "defer_remove_tree", lambda _p, _t: False)
     result = ai.install_archive(
         str(archive),
         library_folder=str(lib),

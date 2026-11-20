@@ -155,3 +155,78 @@ def test_zip_cancel_stops_inside_one_member(
     with pytest.raises(InstallCancelled):
         _ = extract_zip(str(archive), str(tmp_path / "staging"), cancel=cancel)
     assert len(writes) == 1
+
+
+def _refuse_symlinks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows without admin rights or Developer Mode: no symlinks."""
+
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise OSError(22, "A required privilege is not held by the client")
+
+    monkeypatch.setattr(ai, "_is_windows", lambda platform=None: True)
+    monkeypatch.setattr(ai.os, "symlink", refuse)
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("link_first", [False, True])
+def test_tar_symlink_without_symlink_rights_is_copied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, link_first: bool, compressed: bool
+) -> None:
+    file = ("game/lib/libfoo.so.1", "file", b"elf")
+    link = ("game/lib/libfoo.so", "sym", "libfoo.so.1")
+    chain = ("game/lib/libfoo.so.0", "sym", "libfoo.so")
+    data = _tar_bytes([link, chain, file] if link_first else [file, link, chain])
+    archive = tmp_path / ("g.tar.gz" if compressed else "g.tar")
+    _ = archive.write_bytes(gzip.compress(data) if compressed else data)
+    _refuse_symlinks(monkeypatch)
+    staging = tmp_path / "staging"
+    assert extract_tar(str(archive), str(staging)) == 3
+    lib = staging / "game" / "lib"
+    for name in ("libfoo.so", "libfoo.so.0", "libfoo.so.1"):
+        assert not (lib / name).is_symlink()
+        assert (lib / name).read_bytes() == b"elf"
+
+
+def test_tar_folder_symlink_without_symlink_rights_gets_both_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "dirs.tar"
+    _ = archive.write_bytes(
+        _tar_bytes(
+            [
+                ("lib64", "dir", b""),
+                ("lib", "sym", "lib64"),
+                ("lib64/a.so", "file", b"a"),
+                ("lib/b.so", "file", b"b"),
+            ]
+        )
+    )
+    _refuse_symlinks(monkeypatch)
+    staging = tmp_path / "staging"
+    assert extract_tar(str(archive), str(staging)) == 4
+    for folder in ("lib", "lib64"):
+        assert (staging / folder / "a.so").read_bytes() == b"a"
+        assert (staging / folder / "b.so").read_bytes() == b"b"
+
+
+def test_tar_symlink_without_symlink_rights_still_refuses_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "escape.tar"
+    _ = archive.write_bytes(_tar_bytes([("game/out", "sym", "../../outside")]))
+    _refuse_symlinks(monkeypatch)
+    with pytest.raises(ArchiveSafetyError):
+        _ = extract_tar(str(archive), str(tmp_path / "staging"))
+
+
+def test_tar_symlink_to_nothing_without_symlink_rights_is_left_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "dangling.tar"
+    _ = archive.write_bytes(
+        _tar_bytes([("game/run.sh", "file", b"x"), ("game/gone", "sym", "missing")])
+    )
+    _refuse_symlinks(monkeypatch)
+    staging = tmp_path / "staging"
+    assert extract_tar(str(archive), str(staging)) == 2
+    assert not os.path.lexists(staging / "game" / "gone")

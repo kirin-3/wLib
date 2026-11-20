@@ -1348,6 +1348,8 @@ def extract_tar(
     # Key -> True for a folder, False for anything else.
     seen: dict[str, bool] = {}
     files: set[str] = set()
+    # Symlinks Windows refused, made as copies once every member is out.
+    copies: list[tuple[str, str]] = []
     count = 0
     try:
         size = os.path.getsize(archive_path)
@@ -1394,13 +1396,17 @@ def extract_tar(
                             )
                     if member.isreg() or member.islnk():
                         files.add(key)
-                    tf.extract(member, staging_dir, filter="data")
+                    if windows and member.issym():
+                        _extract_windows_symlink(member, staging_dir, copies)
+                    else:
+                        tf.extract(member, staging_dir, filter="data")
                     count += 1
             if unpacked is not None:
                 # Read to the end so the gzip CRC (or bzip2/xz check) is
                 # verified; a corrupt archive must not install.
                 while unpacked.read(_COPY_CHUNK):
                     pass
+        _copy_refused_symlinks(copies, staging_dir)
     except tarfile.FilterError as exc:
         raise ArchiveSafetyError(f"Archive entry is unsafe: {exc}") from exc
     except ArchiveInstallError:
@@ -1422,6 +1428,69 @@ def extract_tar(
         raise
     check_symlinks_inside_staging(staging_dir)
     return count
+
+
+def _extract_windows_symlink(
+    member: tarfile.TarInfo, staging_dir: str, copies: list[tuple[str, str]]
+) -> None:
+    """Make a tar symlink on Windows, or note it to copy later.
+
+    Windows makes symlinks only for an admin or in Developer Mode. tarfile
+    then copies the link target, which a stream read cannot reach again
+    ("seeking backwards is not allowed"). The data filter checks the link
+    first, as for the other members.
+    """
+    checked = tarfile.data_filter(member, staging_dir)
+    target = os.path.join(staging_dir, *checked.name.replace("\\", "/").split("/"))
+    if os.path.lexists(target):
+        raise ArchiveSafetyError(f"Archive has duplicate or colliding entry: {member.name!r}")
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    link = checked.linkname.replace("/", os.sep)
+    source = os.path.normpath(os.path.join(os.path.dirname(target), link))
+    try:
+        os.symlink(link, target, target_is_directory=os.path.isdir(source))
+    except OSError:
+        copies.append((target, source))
+
+
+def _copy_refused_symlinks(copies: list[tuple[str, str]], staging_dir: str) -> None:
+    """Copy each refused symlink's target to the link's place.
+
+    Repeats while copies succeed, so a link to a link that is copied later
+    still gets its file. A link whose target is not in the archive is left
+    out, as it would point nowhere.
+    """
+    staging_real = os.path.realpath(staging_dir)
+    pending = list(copies)
+    while pending:
+        waiting: list[tuple[str, str]] = []
+        for target, source in pending:
+            source_real = os.path.realpath(source)
+            if not is_within_real(source_real, staging_real):
+                raise ArchiveSafetyError(f"Archive link points outside the archive: {target!r}")
+            target_real = os.path.realpath(target)
+            if os.path.isfile(source_real):
+                if os.path.lexists(target):
+                    raise ArchiveSafetyError(f"Archive has duplicate or colliding entry: {target!r}")
+                _ = shutil.copy2(source_real, target)
+            elif os.path.isdir(source_real):
+                if is_within_real(target_real, source_real) or is_within_real(
+                    source_real, target_real
+                ):
+                    raise ArchiveSafetyError(f"Archive link points into itself: {target!r}")
+                # Later members may have gone "through" the link name into a
+                # real folder; both names then get every file, as with a link.
+                written_through = os.path.isdir(target)
+                _ = shutil.copytree(source_real, target, symlinks=True, dirs_exist_ok=True)
+                if written_through:
+                    _ = shutil.copytree(target, source_real, symlinks=True, dirs_exist_ok=True)
+            else:
+                waiting.append((target, source))
+        if len(waiting) == len(pending):
+            for target, _source in waiting:
+                _log.warning("Archive link %s points to no file; it was left out", target)
+            return
+        pending = waiting
 
 
 def _tool_failure(
@@ -3695,24 +3764,36 @@ def install_archive(
             if guard.get("removable"):
                 cleanup_root = old_backup or old_install
                 if _real(cleanup_root) != dest_real:
-                    errors: list[str] = []
-                    # On a network share deleting thousands of files takes as
-                    # long as extracting them; move the old version aside
-                    # (instant) and delete it in the background instead.
-                    if not (
-                        is_network_filesystem(cleanup_root)
-                        and defer_remove_tree(
-                            cleanup_root,
-                            _trash_root_for(cleanup_root, library_folders),
-                        )
-                    ):
-                        errors = remove_tree_collect(cleanup_root)
-                    if errors:
-                        kept_reason = (
-                            f"Could not fully remove {cleanup_root}: {errors[0]}"
-                        )
+                    cleanup_trash = _trash_root_for(cleanup_root, library_folders)
+                    if _is_windows() and cleanup_trash and os.path.isdir(cleanup_root):
+                        # Windows refuses the rename while a program has a file
+                        # open in the folder, often a game that wLib did not
+                        # start. Deleting in place would remove only the files
+                        # it is not using, so the folder is kept instead.
+                        if defer_remove_tree(cleanup_root, cleanup_trash):
+                            removed_old = True
+                        else:
+                            kept_reason = (
+                                f"{cleanup_root} could not be moved to the trash, so it "
+                                + "was kept. A program may still use it: close it, "
+                                + "then delete the folder."
+                            )
                     else:
-                        removed_old = True
+                        errors: list[str] = []
+                        # On a network share deleting thousands of files takes
+                        # as long as extracting them; move the old version
+                        # aside (instant) and delete it in the background.
+                        if not (
+                            is_network_filesystem(cleanup_root)
+                            and defer_remove_tree(cleanup_root, cleanup_trash)
+                        ):
+                            errors = remove_tree_collect(cleanup_root)
+                        if errors:
+                            kept_reason = (
+                                f"Could not fully remove {cleanup_root}: {errors[0]}"
+                            )
+                        else:
+                            removed_old = True
                 else:
                     kept_reason = "The old and new folders are the same."
             else:

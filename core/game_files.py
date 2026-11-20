@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import cast
 
 from core.game_scan import MOVE_PREFIX, UNINSTALL_PREFIX
+from core.host_platform import is_windows
 from core.archive_install import (
     NETWORK_IO_WORKERS,
     TRASH_PREFIX,
@@ -612,8 +613,9 @@ def trash_root(root: str, library_folders: Sequence[str]) -> str:
     """Move `root` out of the way and delete it in the background.
 
     Returns how: "library" (trash in the deepest library folder), "recorded"
-    (`<parent>/.wlib-trash-<ns>`, recorded for the next start) or "in_place"
-    (the rename failed, so the folder is deleted where it is).
+    (`<parent>/.wlib-trash-<ns>`, recorded for the next start), "in_place"
+    (the rename failed, so the folder is deleted where it is) or "kept"
+    (Windows refused the rename, so nothing is deleted).
     """
     library_trash = trash_root_for(root, library_folders)
     if library_trash and defer_remove_tree(root, library_trash):
@@ -629,6 +631,11 @@ def trash_root(root: str, library_folders: Sequence[str]) -> str:
             os.rename(root, trash)
         except OSError:
             remove_job("trash", trash)
+            if is_windows():
+                # Windows refuses the rename while a program has a file open
+                # in the folder, often a game that wLib did not start. Deleting
+                # in place would remove only the files it is not using.
+                return "kept"
             _delete_in_place(root)
             return "in_place"
     finally:
@@ -1022,6 +1029,11 @@ def run_move_job(
     warning = ""
     if how == "in_place":
         warning = "The old folder could not be moved to the trash, so it is deleted in place."
+    elif how == "kept":
+        warning = (
+            f"The old folder {root} could not be moved to the trash, so it was kept. "
+            + "A program may still use it: close it, then delete the folder."
+        )
     return MoveOutcome("moved", warning=warning)
 
 
