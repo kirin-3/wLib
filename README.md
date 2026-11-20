@@ -136,26 +136,26 @@ Other apps have things wLib doesn't yet, such as browsing the full catalog, mach
 <table>
   <tr>
     <td align="center"><b>Library</b></td>
-    <td align="center"><b>List view</b></td>
+    <td align="center"><b>Game details</b></td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/library.png" alt="Library" /></td>
-    <td><img src="docs/screenshots/library-list.png" alt="List view" /></td>
-  </tr>
-  <tr>
-    <td align="center"><b>Game details</b></td>
-    <td align="center"><b>Launch options</b></td>
-  </tr>
-  <tr>
     <td><img src="docs/screenshots/game-overview.png" alt="Game details" /></td>
-    <td><img src="docs/screenshots/game-launch.png" alt="Launch options" /></td>
   </tr>
   <tr>
     <td align="center"><b>Updates</b></td>
-    <td align="center"><b>TV mode on Steam Deck</b></td>
+    <td align="center"><b>Downloads</b></td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/updates.png" alt="Updates" /></td>
+    <td><img src="docs/screenshots/downloads.png" alt="Downloads queue" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Launch options</b></td>
+    <td align="center"><b>TV mode on Steam Deck</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/game-launch.png" alt="Launch options" /></td>
     <td><img src="docs/screenshots/tv-mode.png" alt="TV mode on Steam Deck" /></td>
   </tr>
 </table>
@@ -165,60 +165,68 @@ Other apps have things wLib doesn't yet, such as browsing the full catalog, mach
 
 <table>
   <tr>
+    <td align="center"><b>List view</b></td>
     <td align="center"><b>Compact view</b></td>
-    <td align="center"><b>Banner view</b></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/library-list.png" alt="List view" /></td>
     <td><img src="docs/screenshots/library-compact.png" alt="Compact view" /></td>
-    <td><img src="docs/screenshots/library-banner.png" alt="Banner view" /></td>
   </tr>
   <tr>
+    <td align="center"><b>Banner view</b></td>
     <td align="center"><b>Selecting several games</b></td>
-    <td align="center"><b>Play journal</b></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/library-banner.png" alt="Banner view" /></td>
     <td><img src="docs/screenshots/library-bulk.png" alt="Selecting several games" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Play journal</b></td>
+    <td align="center"><b>RPG Maker tools</b></td>
+  </tr>
+  <tr>
     <td><img src="docs/screenshots/game-journal.png" alt="Play journal" /></td>
+    <td><img src="docs/screenshots/game-tools.png" alt="RPG Maker tools" /></td>
   </tr>
   <tr>
-    <td align="center"><b>Ren'Py tools</b></td>
     <td align="center"><b>Game info</b></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/game-tools.png" alt="Ren'Py tools" /></td>
-    <td><img src="docs/screenshots/game-info.png" alt="Game info" /></td>
-  </tr>
-  <tr>
     <td align="center"><b>Browser extension</b></td>
-    <td align="center"><b>Sync</b></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/game-info.png" alt="Game info" /></td>
     <td><img src="docs/screenshots/extension.png" alt="Browser extension" /></td>
-    <td><img src="docs/screenshots/sync.png" alt="Sync" /></td>
   </tr>
   <tr>
+    <td align="center"><b>Sync</b></td>
     <td align="center"><b>Backup and restore</b></td>
-    <td align="center"><b>Import from another app</b></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/sync.png" alt="Sync" /></td>
     <td><img src="docs/screenshots/import-export.png" alt="Backup and restore" /></td>
-    <td><img src="docs/screenshots/import-other-apps.png" alt="Import from another app" /></td>
   </tr>
   <tr>
+    <td align="center"><b>Import from another app</b></td>
     <td align="center"><b>Settings</b></td>
-    <td align="center"><b>Appearance</b></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/import-other-apps.png" alt="Import from another app" /></td>
     <td><img src="docs/screenshots/settings-general.png" alt="Settings" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Appearance</b></td>
+    <td align="center"><b>Wine, Proton and gamescope</b></td>
+  </tr>
+  <tr>
     <td><img src="docs/screenshots/settings-appearance.png" alt="Appearance" /></td>
+    <td><img src="docs/screenshots/settings-wine.png" alt="Wine, Proton and gamescope" /></td>
   </tr>
   <tr>
-    <td align="center"><b>Wine and Proton</b></td>
-    <td align="center"><b>Steam</b></td>
+    <td align="center"><b>Steam and custom tools</b></td>
+    <td align="center"><b>Library folders and LewdCorner</b></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/settings-wine.png" alt="Wine and Proton" /></td>
-    <td><img src="docs/screenshots/settings-steam.png" alt="Steam" /></td>
+    <td><img src="docs/screenshots/settings-steam.png" alt="Steam and custom tools" /></td>
+    <td><img src="docs/screenshots/settings-library.png" alt="Library folders and LewdCorner" /></td>
   </tr>
 </table>
 
