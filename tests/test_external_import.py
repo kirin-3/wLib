@@ -42,9 +42,9 @@ def setup_test_db(tmp_path, monkeypatch):
     db_file = tmp_path / "test_wlib_external.db"
     monkeypatch.setattr("core.database.DB_PATH", str(db_file))
     init_db()
+    # pytest removes tmp_path; deleting the file here races with background
+    # threads that still hold it open, which Windows refuses.
     yield
-    if os.path.exists(db_file):
-        os.remove(db_file)
 
 
 @pytest.fixture(autouse=True)

@@ -5,7 +5,6 @@ Bug-finding tests for wLib application.
 These tests identify edge cases, vulnerabilities, and logic errors.
 """
 
-import os
 import sqlite3
 from unittest.mock import MagicMock, patch
 
@@ -33,9 +32,9 @@ def setup_test_db(tmp_path, monkeypatch):
     monkeypatch.setattr("core.database.DB_PATH", str(db_file))
     monkeypatch.setattr("core.launcher.is_windows", lambda: False)
     init_db()
+    # pytest removes tmp_path; deleting the file here races with background
+    # threads that still hold it open, which Windows refuses.
     yield
-    if os.path.exists(db_file):
-        os.remove(db_file)
 
 
 # ==========================
