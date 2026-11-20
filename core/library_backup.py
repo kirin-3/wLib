@@ -87,6 +87,7 @@ METADATA_FIELDS = (
     "tags",
     "tags_user_edited",
     "f95_tags",
+    "user_f95_tags",
     "f95_url",
     "lc_url",
     "lc_mode",
@@ -1542,7 +1543,7 @@ def _normalize_game_field(field: str, value: object) -> object:
     if field == "lc_dismissed":
         dismissed = _coerce_text(value).strip()
         return dismissed.lstrip("0") if dismissed.isascii() and dismissed.isdigit() else ""
-    if field == "tags":
+    if field in {"tags", "user_f95_tags"}:
         return _coerce_text(value)
     if field == "f95_tags":
         # NULL means "no F95 tag baseline yet", which is not an empty list.

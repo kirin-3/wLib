@@ -1916,6 +1916,26 @@ def test_f95_tags_and_rating_updated_at_migration_and_update():
     assert "rating_updated_at" in SYNC_GAME_COLUMNS
 
 
+def test_user_f95_tags_migration_and_update():
+    game_id = add_game("Kept", "/tmp/kept.exe")
+    assert game_id is not None
+    init_db()
+    conn = get_connection()
+    try:
+        conn.execute("DROP TRIGGER sync_games_update")
+        conn.execute("ALTER TABLE games DROP COLUMN user_f95_tags")
+        conn.commit()
+    finally:
+        conn.close()
+
+    init_db()
+
+    assert get_all_games()[0]["user_f95_tags"] == ""
+    assert update_game(game_id, {"user_f95_tags": "sandbox"}) == {"user_f95_tags": "sandbox"}
+    assert get_all_games()[0]["user_f95_tags"] == "sandbox"
+    assert "user_f95_tags" in SYNC_GAME_COLUMNS
+
+
 def test_save_backup_keep_validation():
     assert get_save_backup_keep() is None
     for raw, expected in (

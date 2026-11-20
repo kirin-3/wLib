@@ -1107,23 +1107,28 @@ export class MockBackend {
                     const tags = Array.isArray(game.tags) ? game.tags.join(", ") : game.tags || "";
                     if (changed) {
                       // The thread adds "sandbox". Like core/f95_tags.py: F95 tags
-                      // first (minus user removals), then the user-added tags.
+                      // first (minus user removals), then the user-added tags. A
+                      // user-added tag is not in the baseline, or is a kept user tag.
                       const split = (value: string) => value.split(",").map((tag) => tag.trim()).filter(Boolean);
                       const key = (tag: string) => tag.toLowerCase();
                       const current = split(tags);
                       const baseline = split(game.f95_tags ?? tags);
+                      const kept = game.f95_tags == null ? [] : split(game.user_f95_tags || "");
                       const f95 = [...baseline.filter((tag) => key(tag) !== "sandbox"), "sandbox"];
                       const has = (list: string[], tag: string) => list.some((item) => key(item) === key(tag));
+                      const added = current.filter((tag) => !has(baseline, tag) || has(kept, tag));
                       const merged = [
                         ...f95.filter((tag) => !has(baseline, tag) || has(current, tag)),
-                        ...current.filter((tag) => !has(baseline, tag) && !has(f95, tag)),
+                        ...added.filter((tag) => !has(f95, tag)),
                       ];
+                      const newKept = added.filter((tag) => has(f95, tag));
                       updates.set(game.id, {
                         cover_image_path: `https://example.com/refreshed-${game.id}.jpg`,
                         rating: "4.6/5 (120 reviews)",
                         rating_updated_at: new Date().toISOString(),
                         tags: merged.join(", "),
                         f95_tags: f95.join(", "),
+                        user_f95_tags: newKept.join(", "),
                       });
                     }
                     return {
@@ -1131,7 +1136,7 @@ export class MockBackend {
                       has_update: false, error: "", error_code: "",
                       info_changed: changed,
                       previous: changed
-                        ? { cover_image_path: game.cover_image_path || "", rating: game.rating || "", rating_updated_at: game.rating_updated_at || "", tags, f95_tags: game.f95_tags ?? null }
+                        ? { cover_image_path: game.cover_image_path || "", rating: game.rating || "", rating_updated_at: game.rating_updated_at || "", tags, f95_tags: game.f95_tags ?? null, user_f95_tags: game.user_f95_tags || "" }
                         : {},
                     };
                   });

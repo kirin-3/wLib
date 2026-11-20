@@ -324,6 +324,7 @@ export interface RefreshInfoPrevious {
   rating_updated_at?: string;
   tags?: string;
   f95_tags?: string | null;
+  user_f95_tags?: string;
 }
 
 export interface UpdateStatusResponse extends ApiBasicResponse {
@@ -1212,6 +1213,8 @@ export interface GameRecord {
   tags_user_edited?: boolean;
   // The last F95 tag list wLib saw; null means no baseline yet.
   f95_tags?: string | null;
+  // User-added tags that the last F95 tag list also has (core/f95_tags.py).
+  user_f95_tags?: string;
   id: number;
   title: string;
   exe_path: string;

@@ -1188,11 +1188,12 @@ class ApiBase:
                     # put the thread's tags first and keep those.
                     from core.f95_tags import merge_f95_tags, split_tags
 
-                    merged, _ = merge_f95_tags(
+                    merged, _, kept = merge_f95_tags(
                         split_tags(tags_current) or [], [], split_tags(tags_value) or [], False
                     )
                     fields["tags"] = ", ".join(merged)
                     fields["f95_tags"] = tags_value
+                    fields["user_f95_tags"] = ", ".join(kept)
                 if cover_value and self._is_missing_text(cover_current):
                     fields["cover_image_path"] = cover_value
                 developer_current = str(cast(object, game["developer"]) or "").strip()
@@ -1547,7 +1548,7 @@ class ApiBase:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             _ = cursor.execute(
-                "SELECT id, cover_image_path, tags, f95_tags, tags_user_edited FROM games WHERE f95_url = ?",
+                "SELECT id, cover_image_path, tags, f95_tags, user_f95_tags, tags_user_edited FROM games WHERE f95_url = ?",
                 (normalized_url,),
             )
             for game in cast(list[sqlite3.Row], cursor.fetchall()):
@@ -1565,11 +1566,13 @@ class ApiBase:
                 stored_tags = str(cast(object, game["tags"]) or "")
                 raw_baseline = cast(object, game["f95_tags"])
                 stored_baseline = None if raw_baseline is None else str(raw_baseline)
-                tags, baseline = merge_f95_tags(
+                stored_kept = str(cast(object, game["user_f95_tags"]) or "")
+                tags, baseline, kept = merge_f95_tags(
                     split_tags(stored_tags) or [],
                     split_tags(stored_baseline),
                     f95_tags,
                     bool(cast(object, game["tags_user_edited"])),
+                    split_tags(stored_kept) or [],
                 )
                 new_tags = ", ".join(tags)
                 if new_tags != ", ".join(split_tags(stored_tags) or []):
@@ -1579,6 +1582,10 @@ class ApiBase:
                 if new_baseline != stored_baseline:
                     fields["f95_tags"] = new_baseline
                     previous["f95_tags"] = stored_baseline
+                new_kept = ", ".join(kept)
+                if new_kept != ", ".join(split_tags(stored_kept) or []):
+                    fields["user_f95_tags"] = new_kept
+                    previous["user_f95_tags"] = stored_kept
 
                 if fields:
                     set_clause = ", ".join(f"{key} = ?" for key in fields)
