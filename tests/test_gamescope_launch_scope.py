@@ -102,3 +102,27 @@ def test_wine_wait_follows_the_game_group_not_the_prefix(tmp_path):
         except ProcessLookupError:
             pass
         _ = waiter.wait(timeout=10)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")
+def test_wine_wait_ignores_the_gamescope_reaper(tmp_path):
+    """gamescope 3.15+ starts the waiter through gamescopereaper, in the same group;
+    the reaper waits for the waiter, so counting it would keep gamescope open forever."""
+    ws = tmp_path / "wineserver"
+    ws.write_text("#!/bin/sh\nexec sleep 1000\n")
+    ws.chmod(0o755)
+    reaper = tmp_path / "gamescopereaper"
+    reaper.symlink_to("/bin/sleep")
+    leader = subprocess.Popen(
+        ["sh", "-c", '"$1" 1000 & shift; exec sh -c "$@"', "sh", str(reaper),
+         GAMESCOPE_WINE_WAIT, "sh", str(ws), "sh", "-c", "exit 7"],
+        start_new_session=True,
+    )
+    try:
+        assert leader.wait(timeout=10) == 7
+    finally:
+        try:
+            os.killpg(leader.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        _ = leader.wait(timeout=10)

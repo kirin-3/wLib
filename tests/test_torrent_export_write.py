@@ -58,3 +58,20 @@ def test_export_keeps_the_umask_mode(tmp_path):
     finally:
         _ = os.umask(old)
     assert os.stat(path).st_mode & 0o777 == 0o644
+
+
+def test_export_opens_its_part_file_in_binary_mode(tmp_path, monkeypatch):
+    # Windows os.open() is text mode without O_BINARY: LF bytes become CR LF.
+    o_binary = 0x40000000
+    real_open = os.open
+    flags_seen: list[int] = []
+
+    def fake_open(path, flags, mode=0o777, *args, **kwargs):
+        flags_seen.append(flags)
+        return real_open(path, flags & ~o_binary, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "O_BINARY", o_binary, raising=False)
+    monkeypatch.setattr(torrent_export.os, "open", fake_open)
+    path = write_torrent(str(tmp_path), "game.torrent", b"d4:info\n\ne")
+    assert flags_seen and all(flags & o_binary for flags in flags_seen)
+    assert open(path, "rb").read() == b"d4:info\n\ne"

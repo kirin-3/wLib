@@ -836,6 +836,8 @@ _WINE_BACKGROUND_NAMES = frozenset(
         "gamescope",
         "gamescope-wl",
         "xwayland",
+        # gamescope 3.15+ starts the game through this reaper, in the same group.
+        "gamescopereaper",
     }
 )
 

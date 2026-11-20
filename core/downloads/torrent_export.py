@@ -63,7 +63,11 @@ def write_torrent(folder: str, file_name: str, data: bytes) -> str:
     while True:
         part = os.path.join(folder, f".{file_name}.{secrets.token_hex(4)}.part")
         try:
-            fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            # O_BINARY: os.open() is text mode on Windows, which would turn
+            # each LF byte of the bencoded data into CR LF.
+            fd = os.open(
+                part, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o666
+            )
         except FileExistsError:
             continue
         break
