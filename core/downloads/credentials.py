@@ -2,7 +2,9 @@
 """Device-local file-host account settings.
 
 These keys live in the settings table but are deliberately absent from the
-backup/sync allowlists, so they never leave this device.
+backup/sync allowlists, so they never leave this device. They are stored as
+plain text, so core/database.py keeps wlib.db, its WAL files and its
+pre-migration copies owner-only.
 """
 from __future__ import annotations
 

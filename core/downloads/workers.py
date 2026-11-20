@@ -31,7 +31,7 @@ from core.downloads.queue import (
 )
 from core.downloads.manager import RESUMABLE_HOSTS, DownloadManager, Resolve
 from core.downloads.torrents import ACTIVE_STAGES, MSG_LOW_DISK, TorrentSupervisor
-from core.downloads.transfer import DownloadError, staging_dir
+from core.downloads.transfer import DownloadError, delete_part, staging_dir
 
 _TORRENT_DETAIL_KEYS = (
     "stage", "hint", "peers", "upload_speed", "ratio", "ratio_target", "seed_state",
@@ -100,10 +100,18 @@ class TorrentWorker:
             )
             return
         if snapshot.get("stage") == "fetching":
+            # Prepared paused, or paused during the fetch: it moves data
+            # once the `.torrent` arrives.
+            _ = supervisor.resume(job.id)
+            return
+        if snapshot.get("stage") == "done":
+            # A finished torrent has nothing to resume: the next tick reads
+            # its "done" stage and makes the job ready.
             return
         if not supervisor.resume(job.id):
             refreshed = self._snapshot(job.id) or {}
-            if refreshed.get("stage") != "downloading":
+            # "done": it finished between the snapshot and the resume.
+            if refreshed.get("stage") not in ("downloading", "done"):
                 raise DownloadError(str(refreshed.get("error") or "") or MSG_LOW_DISK)
 
     def stop(self, job: QueueJob) -> None:
@@ -253,6 +261,17 @@ class HostWorker:
         self._manager = manager
         # Reads the thread again and returns a resolve for the saved build and mirror.
         self._relink = relink
+        # The partial file each job continues from. Jobs for the same host
+        # file share one, so removing one job keeps it for the others.
+        self._parts: dict[str, str] = {}
+        self._parts_lock = threading.Lock()
+
+    def _note_part(self, job_id: str, part: str) -> None:
+        with self._parts_lock:
+            if part:
+                self._parts[job_id] = part
+            else:
+                _ = self._parts.pop(job_id, None)
 
     def _host(self, job: QueueJob) -> str:
         return str(job.source.get("host") or "")
@@ -298,11 +317,15 @@ class HostWorker:
         if not archive and job.source.get("archive"):
             archive = str(staging_dir() / str(job.source.get("archive")))
         busy = self._manager.busy(job.id)
+        with self._parts_lock:
+            _ = self._parts.pop(job.id, None)
+            shared = part in self._parts.values()
         # A running transfer deletes its own partial file when cancelled, and
-        # keeps a resumable one when paused.
+        # keeps a resumable one when paused. A partial file that another job
+        # continues from or writes stays.
         self._manager.forget(job.id, keep_partial=keep_partial)
-        if part and not busy and not keep_partial:
-            self._manager.delete_part(part)
+        if part and not busy and not keep_partial and not shared:
+            _ = delete_part(part)
         if job.state == READY and archive:
             _ = self._manager.delete_archive(archive)
 
@@ -319,6 +342,8 @@ class HostWorker:
             job.source["archive"] = Path(archive).name
         total = snapshot.get("total")
         phase = _HOST_PHASES.get(str(snapshot.get("outcome") or ""), PHASE_IDLE)
+        # A finished job's partial file became its archive.
+        self._note_part(job.id, "" if phase == PHASE_DONE else str(job.source.get("part_file") or ""))
         return WorkerState(
             phase=phase,
             error=str(snapshot.get("error") or ""),
@@ -338,6 +363,7 @@ class HostWorker:
             self._manager.restore_finished(job.id, job.game_id, self._host(job), str(path))
             return True
         self._ensure(job)
+        self._note_part(job.id, str(job.source.get("part_file") or ""))
         return True
 
     def unclaimed(self, claimed: set[str]) -> list[QueueJob]:

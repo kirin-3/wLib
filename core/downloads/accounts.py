@@ -60,13 +60,15 @@ def disconnect_mega() -> None:
 
 def connect_rpdl(username: str, password: str) -> str:
     token, name = rpdl.login(username, password)
-    credentials.put({
-        credentials.RPDL_USERNAME: name,
-        credentials.RPDL_PASSWORD: password,
-        credentials.RPDL_TOKEN: token,
-    })
+    with rpdl.account_lock:
+        credentials.put({
+            credentials.RPDL_USERNAME: name,
+            credentials.RPDL_PASSWORD: password,
+            credentials.RPDL_TOKEN: token,
+        })
     return name
 
 
 def disconnect_rpdl() -> None:
-    credentials.put({credentials.RPDL_USERNAME: "", credentials.RPDL_PASSWORD: "", credentials.RPDL_TOKEN: ""})
+    with rpdl.account_lock:
+        credentials.put({credentials.RPDL_USERNAME: "", credentials.RPDL_PASSWORD: "", credentials.RPDL_TOKEN: ""})

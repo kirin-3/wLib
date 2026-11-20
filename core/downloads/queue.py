@@ -353,11 +353,12 @@ class DownloadQueue:
 
     def _sync_workers(self, now: float) -> None:
         for job in self._ordered():
-            if job.state in (READY, RETRY_WAIT, QUEUED, HELD) or (
+            if job.state in (READY, RETRY_WAIT) or (
                 job.state == ATTENTION and not self._transient_attention(job)
             ):
                 continue
-            if job.state == PAUSED and job.reason != REASON_PREPARING:
+            if self._stopped(job):
+                self._finish_if_done(job, now)
                 continue
             state = self._worker(job).snapshot(job)
             self._take_progress(job, state, now)
@@ -386,8 +387,13 @@ class DownloadQueue:
                 if job.state != ATTENTION:
                     self._set_state(job, ATTENTION, REASON_BROWSER_CHECK)
             elif phase == PHASE_PREPARED:
-                if job.state in (PREPARING, ATTENTION):
+                if job.state in (PREPARING, ATTENTION, RUNNING):
+                    # RUNNING or a started job: back from a browser check
+                    # that its start needed. It waits for a slot again, first.
+                    had_slot = job.state == RUNNING or job.started_at > 0
                     self._set_state(job, QUEUED)
+                    if had_slot:
+                        self._move_to_top_of_waiting([job])
             elif phase == PHASE_RUNNING:
                 if job.state != RUNNING and len(self._running()) >= self._max_active:
                     # Back from a browser check, but its slot went to another
@@ -404,6 +410,19 @@ class DownloadQueue:
             elif phase == PHASE_STOPPED and job.state == RUNNING:
                 # The worker stopped by itself without a result; wait again.
                 self._set_state(job, QUEUED)
+
+    @staticmethod
+    def _stopped(job: QueueJob) -> bool:
+        """A job whose worker was stopped (waiting, held or paused by the user)."""
+        return job.state in (QUEUED, HELD) or (job.state == PAUSED and job.reason != REASON_PREPARING)
+
+    def _finish_if_done(self, job: QueueJob, now: float) -> None:
+        """A stopped worker can still finish: a torrent paused after its last
+        piece arrived reports "finished" later. Only that result counts here."""
+        state = self._worker(job).snapshot(job)
+        if state.phase == PHASE_DONE:
+            self._take_progress(job, state, now)
+            self._finish(job, now)
 
     def _take_progress(self, job: QueueJob, state: WorkerState, now: float) -> None:
         job.can_continue = state.can_continue
@@ -651,38 +670,45 @@ class DownloadQueue:
         or "first" (no job could give up its slot; this job is next).
         """
         with self._lock:
-            job = self._jobs.get(job_id)
-            if job is None:
-                raise QueueError("The download was not found")
-            if job.state not in (QUEUED, RETRY_WAIT, HELD, PAUSED):
-                raise QueueError("The download cannot start now")
-            if job.state == PAUSED and job.reason == REASON_PREPARING:
-                self._set_state(job, PREPARING)
-                self._move_to_top_of_waiting([job])
-                return "first"
-            now = self._clock()
-            job.retry_at = None
-            self._move_to_top_of_waiting([job])
-            self._set_state(job, QUEUED)
-            if self._hold_active():
-                return "first"
-            running = sorted(self._running(), key=lambda item: item.started_at, reverse=True)
-            if len(running) < self._max_active:
-                self._start(job, now)
-                outcome = "started"
-            else:
-                victim = next((item for item in running if item.can_continue), None)
-                if victim is None:
-                    return "first"
-                self._worker(victim).stop(victim)
-                self._set_state(victim, QUEUED)
-                self._start(job, now)
-                # The stopped job becomes the first waiting job.
-                rest = [item for item in self._ordered() if item is not job and item is not victim]
-                self._move_to_top_of_waiting([job, victim, *rest])
-                outcome = "yielded"
+            outcome = self._start_now(job_id)
+        # Also on "first": a waiting job needs the tick thread, or nothing
+        # starts it when the hold clears or a slot opens.
         self.poke()
         return outcome
+
+    def _start_now(self, job_id: str) -> str:
+        """The body of start_now. Call with the lock held."""
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise QueueError("The download was not found")
+        if job.state not in (QUEUED, RETRY_WAIT, HELD, PAUSED):
+            raise QueueError("The download cannot start now")
+        if job.state == PAUSED and job.reason == REASON_PREPARING:
+            self._set_state(job, PREPARING)
+            self._move_to_top_of_waiting([job])
+            return "first"
+        now = self._clock()
+        job.retry_at = None
+        self._move_to_top_of_waiting([job])
+        self._set_state(job, QUEUED)
+        # The cached hold can be older than this click (no tick ran since the unplug).
+        self._evaluate_holds()
+        if self._hold_active():
+            return "first"
+        running = sorted(self._running(), key=lambda item: item.started_at, reverse=True)
+        if len(running) < self._max_active:
+            self._start(job, now)
+            return "started"
+        victim = next((item for item in running if item.can_continue), None)
+        if victim is None:
+            return "first"
+        self._worker(victim).stop(victim)
+        self._set_state(victim, QUEUED)
+        self._start(job, now)
+        # The stopped job becomes the first waiting job.
+        rest = [item for item in self._ordered() if item is not job and item is not victim]
+        self._move_to_top_of_waiting([job, victim, *rest])
+        return "yielded"
 
     def pause(self, job_id: str) -> bool:
         with self._lock:
@@ -691,6 +717,7 @@ class DownloadQueue:
                 return False
             if not self._pause(job):
                 return False
+            self._evaluate_holds()
             self._fill_slots(self._clock())
         self.poke()
         return True
@@ -716,6 +743,7 @@ class DownloadQueue:
             if job is None or job.state != PAUSED:
                 return False
             self._set_state(job, PREPARING if job.reason == REASON_PREPARING else QUEUED)
+            self._evaluate_holds()
             self._fill_slots(self._clock())
         self.poke()
         return True
@@ -731,6 +759,7 @@ class DownloadQueue:
             paused = [job for job in self._ordered() if job.state == PAUSED]
             for job in paused:
                 self._set_state(job, PREPARING if job.reason == REASON_PREPARING else QUEUED)
+            self._evaluate_holds()
             self._fill_slots(self._clock())
         self.poke()
         return len(paused)
@@ -747,6 +776,7 @@ class DownloadQueue:
             job.error_code = job.error_text = ""
             self._set_state(job, QUEUED)
             self._save(job, "retries", "retry_at", "error_code", "error_text")
+            self._evaluate_holds()
             self._fill_slots(self._clock())
         self.poke()
         return True
@@ -769,6 +799,7 @@ class DownloadQueue:
                 return False
             self._store.delete(job.id)
             self._renumber()
+            self._evaluate_holds()
             self._fill_slots(self._clock())
         self._remove_data(job)
         self.poke()
@@ -783,6 +814,7 @@ class DownloadQueue:
                 self._store.delete(job.id)
             if jobs:
                 self._renumber()
+                self._evaluate_holds()
                 self._fill_slots(self._clock())
         for job in jobs:
             self._remove_data(job)
@@ -842,7 +874,10 @@ class DownloadQueue:
         with self._lock:
             now = self._clock()
             for job in self._ordered():
-                if job.state in (RUNNING, PREPARING, READY) or self._transient_attention(job):
+                if self._stopped(job):
+                    # Only paused jobs left means no tick thread to see a late finish.
+                    self._finish_if_done(job, now)
+                elif job.state in (RUNNING, PREPARING, READY) or self._transient_attention(job):
                     state = self._worker(job).snapshot(job)
                     if job.state == READY:
                         job.details = dict(state.details)
@@ -914,6 +949,18 @@ class DownloadQueue:
 
     # --- startup (2.5, 2.6) -----------------------------------------------
 
+    def _restored_done(self, job: QueueJob, now: float) -> bool:
+        """True when the worker already finished a restored job; takes its progress."""
+        try:
+            state = self._worker(job).snapshot(job)
+        except Exception as exc:
+            _log(f"could not read a restored {job.kind} download: {type(exc).__name__}")
+            return False
+        if state.phase != PHASE_DONE:
+            return False
+        self._take_progress(job, state, now)
+        return True
+
     def load(self) -> None:
         """Restore the saved queue, adopt worker jobs without a row, and clean up."""
         _ = queue_settings.migrate_legacy_limit()
@@ -951,6 +998,12 @@ class DownloadQueue:
                     alive = False
                 if not alive:
                     self._store.delete(job.id)
+                    continue
+                if job.state != READY and self._restored_done(job, now):
+                    # Finished after the last tick saved the row (the torrent
+                    # supervisor saves its own finish): ready, not restarted.
+                    self._jobs[job.id] = job
+                    self._finish(job, now)
                     continue
                 before = (job.state, job.reason)
                 if job.state in (RUNNING, HELD):
@@ -990,6 +1043,12 @@ class DownloadQueue:
             restarted.sort(key=lambda job: (job.position, job.created_at))
             self._move_to_top_of_waiting(restarted)
             self._apply_shares()
+            # Check the holds before the first start: no job may start on battery
+            # or while a game runs. A job that ran or was held stays held.
+            self._evaluate_holds()
+            if self._hold_active():
+                for job in restarted:
+                    self._set_state(job, HELD, self._hold)
             self._fill_slots(self._clock())
             self._ensure_thread()
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import shlex
+import stat
 import types
 import re
 import time
@@ -745,7 +746,49 @@ def attach_lc_thread(game_id: int, url: str, f95_url: str) -> bool:
     return True
 
 
+# wlib.db holds host account secrets (core/downloads/credentials.py), so it
+# and its copies are owner-only. SQLite gives new -wal, -shm and -journal
+# files the main file's mode.
+_DB_SIDE_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
+def _create_private_file(path: str) -> None:
+    """Create an empty owner-only file; an existing file is left alone."""
+    try:
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except OSError:
+        pass  # It exists, or sqlite3.connect reports the folder it cannot use.
+
+
+def _make_private(path: str) -> None:
+    """Remove group and other access from one wLib file or folder.
+
+    On Windows chmod only reads the owner write bit, so this changes nothing.
+    """
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        if mode & 0o077:
+            os.chmod(path, mode & ~0o077)
+    except OSError:
+        pass
+
+
+def _restrict_db_files() -> None:
+    """Make the database, its WAL files and the migration copies owner-only."""
+    for path in (DB_PATH, *(DB_PATH + suffix for suffix in _DB_SIDE_SUFFIXES)):
+        _make_private(path)
+    folder = db_backup_dir()
+    if os.path.isdir(folder):
+        _make_private(folder)
+        for name in list_db_backups():
+            _make_private(os.path.join(folder, name))
+
+
 def get_connection() -> sqlite3.Connection:
+    if not os.path.exists(DB_PATH):
+        # An empty file is a new SQLite database; making it here sets the
+        # mode before any secret is written.
+        _create_private_file(DB_PATH)
     conn = sqlite3.connect(DB_PATH, timeout=10)
     _ = conn.execute("PRAGMA foreign_keys=ON;")
     return conn
@@ -888,9 +931,12 @@ def _backup_before_migration(conn: sqlite3.Connection) -> str | None:
         # update; a second copy could hold a half-updated one.
         return target
     try:
-        os.makedirs(folder, exist_ok=True)
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        _make_private(folder)
         if os.path.exists(partial):
             os.remove(partial)
+        # The copy holds the same secrets as wlib.db.
+        _create_private_file(partial)
         # The backup API also copies pages that are still in the WAL file.
         with closing(sqlite3.connect(partial)) as copy:
             conn.backup(copy)
@@ -918,6 +964,7 @@ def init_db() -> None:
     SQLite's quick check, and a database that already holds a library is
     copied to `db-backups/` before the migrations change it.
     """
+    _restrict_db_files()
     conn = get_connection()
     try:
         _check_database(conn)

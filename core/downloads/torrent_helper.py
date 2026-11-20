@@ -27,7 +27,12 @@ from urllib.parse import urlsplit
 STATUS_INTERVAL = 1.0
 AUTOSAVE_INTERVAL = 300.0
 SHUTDOWN_WAIT = 8.0
+# libtorrent can drop an alert when its queue is full, so a flush with no
+# cache_flushed_alert is asked for again after FLUSH_WAIT. "finished" is never
+# sent without that alert; after FLUSH_GIVE_UP the helper drops the torrent
+# and reports an error, so the payload stays unavailable for installation.
 FLUSH_WAIT = 10.0
+FLUSH_GIVE_UP = 300.0
 EXIT_ENGINE_MISSING = 3
 
 MSG_UNAVAILABLE = "Torrent downloads are unavailable in this build"
@@ -35,6 +40,7 @@ MSG_UNSAFE = "The torrent has unsafe file paths"
 MSG_BAD_TORRENT = "The torrent file is not valid"
 MSG_BAD_COMMAND = "Bad command"
 MSG_TORRENT_ERROR = "The torrent reported an error"
+MSG_FLUSH_TIMEOUT = "The downloaded files could not be written to disk"
 
 if TYPE_CHECKING:
     import libtorrent as lt_types
@@ -120,8 +126,14 @@ def _free_port() -> int:
 
 
 def _write_atomic(path: str, data: bytes) -> None:
+    """Replace `path` with an owner-only file: resume data holds the tracker passkey."""
     tmp = path + ".tmp"
-    with open(tmp, "wb") as handle:
+    try:
+        os.remove(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+    with os.fdopen(fd, "wb") as handle:
         _ = handle.write(data)
     os.replace(tmp, path)
 
@@ -135,8 +147,9 @@ class _Entry:
     finished_sent: bool = False
     # libtorrent marks a torrent finished when the last piece passes its hash
     # check, which can be before that piece is on disk. "finished" waits for
-    # the disk cache flush (or FLUSH_WAIT) so an install never reads a short file.
+    # a confirmed disk cache flush so an install never reads a short file.
     flush_requested_at: float | None = None
+    flush_started_at: float | None = None
     flushed: bool = False
 
 
@@ -276,21 +289,35 @@ class Engine:
         torrents: list[dict[str, object]] = []
         for entry in list(self._entries.values()):
             status = self._status(entry)
+            # A storage error shows as state "error" in the status event; the
+            # parent fails the job, so it must not also see "finished".
+            if status["finished"] and status["state"] != "error" and not entry.finished_sent:
+                flush = self._flush(entry, now)
+                if flush == "timeout":
+                    del self._entries[entry.job_id]
+                    self._session.remove_torrent(entry.handle)
+                    self._error(entry.job_id, MSG_FLUSH_TIMEOUT, "flush_timeout")
+                    continue
+                if flush == "done":
+                    entry.finished_sent = True
+                    self._emit({"event": "finished", "id": entry.job_id})
+                    self._request_save(entry)
             torrents.append(status)
-            if status["finished"] and not entry.finished_sent and self._flushed(entry, now):
-                entry.finished_sent = True
-                self._emit({"event": "finished", "id": entry.job_id})
-                self._request_save(entry)
         self._emit({"event": "status", "torrents": torrents})
 
-    def _flushed(self, entry: _Entry, now: float) -> bool:
+    def _flush(self, entry: _Entry, now: float) -> str:
+        """"done" after a cache_flushed_alert, else "waiting" or "timeout"."""
         if entry.flushed:
-            return True
-        if entry.flush_requested_at is None:
-            entry.flush_requested_at = now
-            entry.handle.flush_cache()
-            return False
-        return now - entry.flush_requested_at >= FLUSH_WAIT
+            return "done"
+        if entry.flush_started_at is None:
+            entry.flush_started_at = now
+        elif now - entry.flush_started_at >= FLUSH_GIVE_UP:
+            return "timeout"
+        elif entry.flush_requested_at is not None and now - entry.flush_requested_at < FLUSH_WAIT:
+            return "waiting"
+        entry.flush_requested_at = now
+        entry.handle.flush_cache()
+        return "waiting"
 
     def _status(self, entry: _Entry) -> dict[str, object]:
         lt = self._lt
@@ -383,12 +410,20 @@ def _limit(kib: object) -> int:
 
 def _emit_to(out: TextIO) -> Emit:
     lock = threading.Lock()
+    # A broken or closed pipe means the parent is gone. Later events are
+    # dropped so shutdown can still save resume data for every torrent.
+    connected = [True]
 
     def emit(event: dict[str, object]) -> None:
         line = json.dumps(event, separators=(",", ":")) + "\n"
         with lock:
-            _ = out.write(line)
-            out.flush()
+            if not connected[0]:
+                return
+            try:
+                _ = out.write(line)
+                out.flush()
+            except (OSError, ValueError):
+                connected[0] = False
 
     return emit
 

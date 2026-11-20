@@ -16,6 +16,7 @@ from core.downloads.queue import DownloadQueue, QueueJob
 from core.downloads.transfer import DownloadError
 
 # A build identity: what a saved download stores instead of its link.
+# `kind` keeps an old-version build apart from the current one with the same label.
 # `mirror` is the mirror's own label and `copy` counts earlier mirrors with the
 # same identity in one thread read, so two Pixeldrain links in one row differ.
 class _LinkKey(NamedTuple):
@@ -23,6 +24,7 @@ class _LinkKey(NamedTuple):
     label: str
     section: str
     platform: str
+    kind: str
     host: str
     part: str
     mirror: str
@@ -148,7 +150,8 @@ class UpdateDownloads:
             mirrors: list[dict[str, object]] = []
             for mirror in build['mirrors']:
                 identifier = uuid.uuid4().hex
-                base = (selected, build['label'], build['section'], build['platform'], mirror['host'], mirror['part'], mirror['label'])
+                base = (selected, build['label'], build['section'], build['platform'], build['kind'],
+                        mirror['host'], mirror['part'], mirror['label'])
                 copy = copies.get(base, 0)
                 copies[base] = copy + 1
                 key = _LinkKey(*base, copy)
@@ -274,18 +277,21 @@ class UpdateDownloads:
         """
         source = job.source
         site: lewdcorner.Site = "lc" if source.get("site") == "lc" else "f95"
-        build = (
-            site, str(source.get('label') or ''), str(source.get('section') or ''),
-            str(source.get('platform') or ''), str(source.get('host') or ''),
-            str(source.get('part') or ''),
-        )
+        fields: dict[str, str] = {'site': site, **{
+            name: str(source.get(name) or '') for name in ('label', 'section', 'platform', 'host', 'part')
+        }}
         copy = source.get('copy')
         same: Callable[[_LinkKey], bool]
-        if isinstance(copy, int) and not isinstance(copy, bool) and 'mirror' in source:
-            same = _full_match(_LinkKey(*build, str(source.get('mirror') or ''), copy))
+        if isinstance(copy, int) and not isinstance(copy, bool) and 'mirror' in source and 'kind' in source:
+            same = _full_match(_LinkKey(
+                site, fields['label'], fields['section'], fields['platform'], str(source.get('kind') or ''),
+                fields['host'], fields['part'], str(source.get('mirror') or ''), copy,
+            ))
         else:
-            # A job saved before mirrors had an identity: only a single match is safe.
-            same = lambda key: tuple(key)[:len(build)] == build  # noqa: E731
+            # A job saved before mirrors or build kinds were in the identity: only a single match is safe.
+            if 'mirror' in source:
+                fields['mirror'] = str(source.get('mirror') or '')
+            same = lambda key: all(getattr(key, name) == value for name, value in fields.items())  # noqa: E731
         with self.lock:
             links = self._matches(job.game_id, same, job.version, fresh=True)
         if not links:

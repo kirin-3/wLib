@@ -310,7 +310,15 @@ class DownloadManager:
                 if resolve is None:
                     raise DownloadError('Download link is unavailable; reload the picker')
                 self._resolve(job, resolve, signals)
+                if signals.pause.is_set():
+                    raise DownloadPaused()
                 with self._lock:
+                    if job.outcome == NEEDS_USER:
+                        # The queue freed this job's slot for the browser
+                        # check: wait for a new slot before moving data.
+                        if job.signals is signals:
+                            job.outcome, job.stage = PREPARED, 'waiting'
+                        return
                     job.outcome, job.stage = RUNNING, 'downloading'
             if signals.pause.is_set():
                 raise DownloadPaused()

@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -51,14 +52,38 @@ MSG_KEEPS_STOPPING = "Torrent engine keeps stopping"
 MSG_RESTARTING = "Torrent engine stopped, restarting"
 MSG_INVALID = "Invalid torrent"
 MSG_LOW_DISK = "Free disk space, then resume"
+MSG_START_FAILED = "The torrent download could not start"
 
 ACTIVE_STAGES = ("fetching", "downloading", "paused")
 
 
 def torrents_dir() -> Path:
     path = staging_dir() / "torrents"
-    path.mkdir(parents=True, exist_ok=True)
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # The torrent folders hold the tracker passkey; an older wLib made them with the umask.
+    _make_private(path)
     return path
+
+
+def _make_private(path: Path) -> None:
+    """Remove group and other access from one file or folder; on Windows nothing changes."""
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+        if mode & 0o077:
+            path.chmod(mode & ~0o077)
+    except OSError:
+        pass
+
+
+def _write_private(path: Path, data: bytes) -> None:
+    """Write `data` to an owner-only file at `path` (mode 0600 from the start)."""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    # The empty file is owner-only before any secret is written to it.
+    os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    _ = path.write_bytes(data)
 
 
 def free_space(path: Path) -> int:
@@ -128,6 +153,10 @@ class _Job:
         self.upload_speed = 0
         self.peers = 0
         self.uploaded = 0
+        # The last "uploaded" count from the helper's current copy of this
+        # torrent; None until that copy reports. A restarted helper restores an
+        # older count from resume.dat, so only increases are added to `uploaded`.
+        self.helper_uploaded: int | None = None
         self.seeding_seconds = 0
         self.paused = False
         self.auto_paused = False
@@ -147,6 +176,14 @@ class _Job:
         self.seed_mode_note = ""
         # Set by load(): whether state.json said the user paused it.
         self.loaded_paused = False
+
+    def count_upload(self, reported: int) -> None:
+        """Add the growth of the helper's upload counter to `uploaded`."""
+        if self.helper_uploaded is None:
+            self.uploaded = max(self.uploaded, reported)
+        elif reported > self.helper_uploaded:
+            self.uploaded += reported - self.helper_uploaded
+        self.helper_uploaded = reported
 
     def eta(self) -> int | None:
         if self.stage != "downloading" or self.speed <= 0 or self.total <= 0:
@@ -249,6 +286,11 @@ class TorrentSupervisor:
             except (OSError, ValueError):
                 _log("helper could not start")
                 return False
+            if self._proc is not None:
+                # The old helper exited but its reader has not run `_on_exit` yet,
+                # and that call now skips it: the new helper holds no torrents.
+                for job in self._jobs.values():
+                    job.added = False
             self._proc = proc
             self._ready = False
             threading.Thread(target=self._read, args=(proc,), daemon=True).start()
@@ -280,7 +322,7 @@ class TorrentSupervisor:
                 except ValueError:
                     continue
                 if isinstance(event, dict):
-                    self._on_event(cast(dict[str, object], event))
+                    self._on_event(cast(dict[str, object], event), proc)
         _ = proc.wait()
         self._on_exit(proc)
 
@@ -297,35 +339,52 @@ class TorrentSupervisor:
             _log(f"helper exited with code {proc.returncode}")
             if self._engine_missing:
                 return
-            now = self._clock()
-            self._restarts = [t for t in self._restarts if now - t < RESTART_WINDOW]
-            self._restarts.append(now)
-            active = [j for j in self._jobs.values() if self._wants_helper(j)]
-            if len(self._restarts) > RESTART_LIMIT:
-                self._gave_up = True
-                for job in active:
-                    if job.stage == "done":
-                        self._end_seeding(job)
-                    else:
-                        self._fail(job, MSG_KEEPS_STOPPING)
-                return
+            delay = self._count_restart()
+        self._schedule_restart(delay)
+
+    def _count_restart(self) -> float | None:
+        """Spend one restart from the budget; give the delay to the next try, or None."""
+        now = self._clock()
+        self._restarts = [t for t in self._restarts if now - t < RESTART_WINDOW]
+        self._restarts.append(now)
+        active = [j for j in self._jobs.values() if self._wants_helper(j)]
+        if len(self._restarts) > RESTART_LIMIT:
+            self._gave_up = True
             for job in active:
-                job.restarting = True
-            delay = self._backoff[min(len(self._restarts) - 1, len(self._backoff) - 1)]
-        if active:
-            timer = threading.Timer(delay, self._restart)
-            timer.daemon = True
-            timer.start()
+                if job.stage == "done":
+                    self._end_seeding(job)
+                else:
+                    self._fail(job, MSG_KEEPS_STOPPING)
+            return None
+        for job in active:
+            job.restarting = True
+        if not active:
+            return None
+        return self._backoff[min(len(self._restarts) - 1, len(self._backoff) - 1)]
+
+    def _schedule_restart(self, delay: float | None) -> None:
+        if delay is None:
+            return
+        timer = threading.Timer(delay, self._restart)
+        timer.daemon = True
+        timer.start()
 
     def _restart(self) -> None:
         with self._lock:
             if self._closing or self._gave_up:
                 return
-            _ = self._spawn()
+            if self._spawn() or self._engine_missing:
+                return
+            # No new helper means no exit callback: a failed start spends the budget too.
+            delay = self._count_restart()
+        self._schedule_restart(delay)
 
-    def _on_event(self, event: dict[str, object]) -> None:
+    def _on_event(self, event: dict[str, object], proc: subprocess.Popen[str] | None = None) -> None:
+        """Handle one helper event; `proc` is the helper that sent it (None in tests)."""
         name = event.get("event")
         with self._lock:
+            if proc is not None and proc is not self._proc:
+                return  # A late line from a helper that was already replaced.
             if name == "ready":
                 self._ready = True
                 for job in self._jobs.values():
@@ -354,6 +413,7 @@ class TorrentSupervisor:
     def _add_to_helper(self, job: _Job) -> None:
         assert job.folder is not None
         job.removed.clear()
+        job.helper_uploaded = None
         job.added = self._send({"cmd": "add", "id": job.id, "dir": str(job.folder), "paused": job.paused})
         job.waiting_since = self._clock()
         job.peerless_since = self._clock()
@@ -381,7 +441,7 @@ class TorrentSupervisor:
             job.speed = _int(item.get("down"))
             job.upload_speed = _int(item.get("up"))
             job.peers = _int(item.get("peers"))
-            job.uploaded = _int(item.get("uploaded"))
+            job.count_upload(_int(item.get("uploaded")))
             job.seeding_seconds = _int(item.get("seeding_seconds"))
             if job.peers == 0:
                 job.peerless_since = job.peerless_since or now
@@ -443,7 +503,7 @@ class TorrentSupervisor:
             return
         job.upload_speed = _int(item.get("up"))
         job.peers = _int(item.get("peers"))
-        job.uploaded = max(job.uploaded, _int(item.get("uploaded")))
+        job.count_upload(_int(item.get("uploaded")))
         if item.get("state") == "seeding" and job.last_status_at is not None:
             # Only time spent seeding counts; a gap (helper restart) adds at most a few seconds.
             job.seeding_seconds += int(min(max(now - job.last_status_at, 0.0), 5.0) + 0.5)
@@ -532,13 +592,20 @@ class TorrentSupervisor:
         folder = job.folder
         if folder is None:
             return
+        job.folder = None
+        # A replacement job of the same torrent can claim the folder while this
+        # (cancelled) job still finishes; the folder is then that job's, not this one's.
+        if any(
+            other is not job and (other.info_hash == folder.name or other.folder == folder)
+            for other in self._jobs.values()
+        ):
+            return
         root = torrents_dir().resolve()
         try:
             if folder.resolve().parent == root:
                 shutil.rmtree(folder, ignore_errors=True)
         except OSError:
             pass
-        job.folder = None
 
     # --- public API -------------------------------------------------------
 
@@ -592,6 +659,14 @@ class TorrentSupervisor:
             with self._lock:
                 self._fail(job, "Files could not be written")
                 self._delete_folder(job)
+        except Exception as exc:  # The thread ends here: never leave the job in "fetching".
+            # Only the type: the message could hold the passkey or a tracker URL.
+            _log(f"torrent start failed: {type(exc).__name__}")
+            with self._lock:
+                if job.cancel.is_set():
+                    job.stage, job.phase, job.error = "cancelled", "cancelled", ""
+                else:
+                    self._fail(job, MSG_START_FAILED)
 
     def _prepare(self, job: _Job, meta: TorrentMeta, data: bytes) -> None:
         root = torrents_dir()
@@ -616,8 +691,10 @@ class TorrentSupervisor:
                 _ = self._jobs.pop(old.id, None)
             job.info_hash = meta.info_hash
         folder = root / meta.info_hash
-        (folder / "data").mkdir(parents=True, exist_ok=True)
-        _ = (folder / "meta.torrent").write_bytes(data)
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _make_private(folder)
+        (folder / "data").mkdir(exist_ok=True)
+        _write_private(folder / "meta.torrent", data)
         with self._lock:
             job.folder = folder
             if job.cancel.is_set():
@@ -664,6 +741,10 @@ class TorrentSupervisor:
     def pause(self, job_id: str) -> bool:
         with self._lock:
             job = self._jobs.get(job_id)
+            if job is not None and job.stage == "fetching":
+                # No helper torrent yet: `_prepare` adds it paused.
+                job.paused = True
+                return True
             if job is None or job.stage != "downloading":
                 return False
             job.auto_paused = False
@@ -675,6 +756,10 @@ class TorrentSupervisor:
         """Resume a paused job, or retry a failed one that still has its folder."""
         with self._lock:
             job = self._jobs.get(job_id)
+            if job is not None and job.stage == "fetching":
+                # Takes back a pause given during the fetch.
+                job.paused = False
+                return True
             if job is None or job.folder is None:
                 return False
             if job.stage == "paused":
@@ -871,6 +956,8 @@ class TorrentSupervisor:
             if _expired(state, now):
                 shutil.rmtree(folder, ignore_errors=True)
                 continue
+            for path in (folder, folder / "meta.torrent", folder / "resume.dat"):
+                _make_private(path)
             job = _Job(_int(state.get("game_id")), str(state.get("title") or ""), str(state.get("version") or ""), _int(state.get("rpdl_id")))
             job.id = str(state.get("job_id") or job.id)
             job.folder = folder

@@ -183,8 +183,12 @@ def test_restart_mid_seed_resumes_with_saved_ratio(make, settings, tmp_path, dat
     wait_for(lambda: any(c["cmd"] == "add" for c in log_commands(tmp_path)))
     add = next(c for c in log_commands(tmp_path) if c["cmd"] == "add")
     assert add["paused"] is False
-    status_event(sup, "seedjob", uploaded=10)
+    # The fake helper reports 0 uploaded first: the saved 50 is kept.
+    wait_for(lambda: sup._jobs["seedjob"].helper_uploaded is not None)  # pyright: ignore[reportPrivateUsage]
     assert snap(sup, "seedjob")["ratio"] == 0.5
+    # Uploads by the new helper add to the saved count.
+    status_event(sup, "seedjob", uploaded=10)
+    assert snap(sup, "seedjob")["ratio"] == 0.6
 
 
 def test_unanswered_question_survives_restart_without_seeding(make, settings, tmp_path, data_dir):

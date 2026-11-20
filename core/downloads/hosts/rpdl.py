@@ -35,6 +35,10 @@ SIGN_IN_MESSAGE = "Sign in to RPDL in Settings"
 
 _lock = threading.Lock()
 _last_request = 0.0
+# Guards every write of the RPDL account keys, so a token renewal that signed in with
+# an earlier username and password cannot save over a sign-out or a new account.
+# Never hold it across a network call.
+account_lock = threading.Lock()
 
 
 class RpdlError(DownloadError):
@@ -195,11 +199,25 @@ def authorized(call: Callable[[str], bytes]) -> bytes:
         fresh, _name = login(username, password)
     except RpdlError as exc:
         if exc.kind == KIND_BAD_LOGIN:
-            credentials.put({credentials.RPDL_TOKEN: ""})
+            _ = _save_renewed_token(username, password, "")
             raise _error(KIND_SIGN_IN) from exc
         raise
-    credentials.put({credentials.RPDL_TOKEN: fresh})
+    if not _save_renewed_token(username, password, fresh):
+        # The user signed out or changed the account while the login ran.
+        raise _error(KIND_SIGN_IN)
     return call(fresh)
+
+
+def _save_renewed_token(username: str, password: str, token: str) -> bool:
+    """Store `token` only if the account still has these credentials; False if it changed."""
+    with account_lock:
+        if (
+            credentials.get(credentials.RPDL_USERNAME) != username
+            or credentials.get(credentials.RPDL_PASSWORD) != password
+        ):
+            return False
+        credentials.put({credentials.RPDL_TOKEN: token})
+        return True
 
 
 # --- field normalisation ---------------------------------------------------

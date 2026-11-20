@@ -95,6 +95,26 @@ def _resume_part(directory: Path, info: FileInfo) -> Path | None:
     return directory / name if name else None
 
 
+def delete_part(name: str, directory: Path | None = None) -> bool:
+    """Delete a removed download's partial file, unless a transfer writes it.
+
+    Jobs for the same host file share one resumable partial file. The check
+    and the delete hold the lock that `transfer` takes the file with, so a
+    transfer never writes to a deleted file. True when the file is gone.
+    """
+    if not name or "/" in name or "\\" in name or not name.endswith(".part"):
+        return False
+    path = (directory or staging_dir()) / name
+    with _active_parts_lock:
+        if path in _active_parts:
+            return False
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            return False
+    return True
+
+
 def open_range(
     open_request: Callable[[dict[str, str]], BinaryIO], offset: int
 ) -> BinaryIO | None:
@@ -215,9 +235,21 @@ def transfer(
                     keep_part = True
                     raise DownloadError("network error") from exc
             if stream is None:
+                # Open the full file before the partial is dropped: a host
+                # that refuses both (a quota or captcha limit) keeps the
+                # bytes for a later retry.
+                try:
+                    stream = info.stream_factory()
+                except DownloadError:
+                    keep_part = True
+                    raise
                 part.unlink(missing_ok=True)
                 offset = 0
-                check_space()
+                try:
+                    check_space()
+                except BaseException:
+                    stream.close()
+                    raise
         if stream is None:
             stream = info.stream_factory()
         done = offset
@@ -299,16 +331,18 @@ def transfer(
         keep_part = False
         raise
     finally:
-        if resume_part is not None:
-            with _active_parts_lock:
+        # Delete the partial file before it is released, so a job that takes
+        # the same file next never has it deleted under it.
+        with _active_parts_lock:
+            if keep_part and part.is_file():
+                # Touch it: its download's last attempt.
+                try:
+                    os.utime(part)
+                except OSError:
+                    pass
+            else:
+                part.unlink(missing_ok=True)
+            if resume_part is not None:
                 _active_parts.discard(resume_part)
-        if keep_part and part.is_file():
-            # Touch it: its download's last attempt.
-            try:
-                os.utime(part)
-            except OSError:
-                pass
-        else:
-            part.unlink(missing_ok=True)
         if info.close:
             info.close()

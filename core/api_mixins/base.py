@@ -2657,14 +2657,26 @@ class ApiBase:
 
         from core.downloads.bencode import parse_torrent
         from core.downloads.hosts import rpdl
+        from core.downloads.torrents import MSG_INVALID
+        from core.downloads.transfer import DownloadError
 
         data = rpdl.fetch_torrent(torrent_id)
         try:
             info_hash = str(rpdl.details(torrent_id).get("info_hash") or "")
-        except rpdl.RpdlError:
-            info_hash = ""  # Details are optional; the .torrent is enough.
+        except (rpdl.RpdlError, ValueError, ArithmeticError):
+            # Details are optional; the .torrent is enough. Malformed details
+            # (for example a JSON NaN or Infinity in a number field) raise
+            # ValueError or OverflowError while they are read.
+            info_hash = ""
         # Only a hex v1 hash is comparable; RPDL may also send base32 or v2 hashes.
         hex_hash = info_hash.lower() if re.fullmatch(r"[0-9a-fA-F]{40}", info_hash) else ""
-        if hex_hash and hex_hash != parse_torrent(data).info_hash:
-            raise rpdl.RpdlError(rpdl.KIND_INVALID, "RPDL sent an invalid response")
+        if hex_hash:
+            try:
+                parsed_hash = parse_torrent(data).info_hash
+            except ValueError as exc:
+                # A ValueError here would end the fetch thread and leave the job
+                # in "fetching"; report the same error as the supervisor's parse.
+                raise DownloadError(MSG_INVALID) from exc
+            if hex_hash != parsed_hash:
+                raise rpdl.RpdlError(rpdl.KIND_INVALID, "RPDL sent an invalid response")
         return data

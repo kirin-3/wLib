@@ -68,7 +68,8 @@ def name_tokens(title: str) -> tuple[list[str], set[str]]:
             continue
         if word in RELEASE_WORDS or _FIX_TOKEN.match(word) or _CHAPTER_TOKEN.match(word):
             continue
-        if versioned and not word.isdigit() and len(word) <= 3:
+        # Drop short release suffixes after the version, but keep `DLC`/`OST` as markers.
+        if versioned and not word.isdigit() and len(word) <= 3 and word not in MARKER_WORDS:
             continue
         # `Season2` or `Game2` as one word: split off the number so the
         # marker and sequel checks see it.
@@ -149,18 +150,37 @@ def canonical_version(version: object) -> str:
     return text
 
 
-def versions_in_title(title: str) -> list[str]:
+def _name_number_spans(title: str, game_title: str) -> set[tuple[int, int]]:
+    """Where the game title's own numbers (`Game 2`) first appear in a listing title."""
+    digits = set(re.findall(r"\d+", game_title))
+    numbers = [token for token in name_tokens(game_title)[0] if token.isdigit() and token in digits]
+    spans: set[tuple[int, int]] = set()
+    start = 0
+    for number in numbers:
+        hit = re.compile(rf"(?<![\d.]){number}(?![\d.])").search(title, start)
+        if hit:
+            spans.add(hit.span())
+            start = hit.end()
+    return spans
+
+
+def versions_in_title(title: str, game_title: str = "") -> list[str]:
+    """Versions in a listing title; a number that belongs to `game_title` is not a version."""
+    text = _BRACKETS.sub(" ", title)
+    name_spans: set[tuple[int, int]] = _name_number_spans(text, game_title) if game_title else set()
     found: list[str] = []
-    for match in _VERSION_IN_TITLE.finditer(_BRACKETS.sub(" ", title)):
+    for match in _VERSION_IN_TITLE.finditer(text):
+        if match.span(1) in name_spans:
+            continue
         canonical = canonical_version(match.group(1))
         if canonical and canonical not in found:
             found.append(canonical)
     return found
 
 
-def listing_has_version(title: str, version: object) -> bool:
+def listing_has_version(title: str, version: object, game_title: str = "") -> bool:
     wanted = canonical_version(version)
-    return bool(wanted) and wanted in versions_in_title(title)
+    return bool(wanted) and wanted in versions_in_title(title, game_title)
 
 
 # --- query planning --------------------------------------------------------
@@ -207,7 +227,7 @@ def rank(
     for raw in results:
         title = str(raw.get("title") or "")
         seeders = _int(raw.get("seeders"))
-        has_version = listing_has_version(title, version) if want_version else None
+        has_version = listing_has_version(title, version, game_title) if want_version else None
         score = title_score(game_title, title)
         if score:
             score += 4 if has_version else 0
@@ -218,7 +238,10 @@ def rank(
         item: dict[str, object] = dict(raw)
         item.update(score=score, version_match=has_version, no_seeders=seeders == 0)
         scored.append(item)
-    scored.sort(key=lambda r: (-_int(r["score"]), -_int(r.get("seeders")), -_int(r.get("date"))))
+    # The 100 cap can erase the version bonus, so a version match breaks score ties before seeders.
+    scored.sort(key=lambda r: (
+        -_int(r["score"]), r["version_match"] is not True, -_int(r.get("seeders")), -_int(r.get("date")),
+    ))
     shown = scored[:MAX_SHOWN]
     eligible = [
         r for r in shown
