@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
 import stat
 import threading
 import time
@@ -75,49 +76,141 @@ def _jobs_path() -> str:
     return os.path.join(get_data_dir(), JOBS_FILE)
 
 
-def _read_jobs() -> dict[str, list[str]]:
+@dataclass(frozen=True)
+class RenameRecord:
+    """A same-device move: the game's folder goes from `src` to `dst`."""
+
+    game_id: int
+    src: str
+    dst: str
+    device: int | None = None
+
+
+@dataclass
+class _Jobs:
+    """The parsed jobs file.
+
+    `devices` holds the st_dev of each recorded folder's parent when it was
+    recorded, so a start with the drive unmounted (an empty mount point)
+    keeps the record. `renames` holds same-device moves whose library update
+    may not be saved yet.
+    """
+
+    lists: dict[str, list[str]] = field(
+        default_factory=lambda: {"trash": [], "move": []}
+    )
+    devices: dict[str, int] = field(default_factory=dict)
+    renames: list[RenameRecord] = field(default_factory=list)
+
+
+def _read_jobs() -> _Jobs:
+    result = _Jobs()
     try:
         with open(_jobs_path(), encoding="utf-8") as handle:
             raw = cast(object, json.load(handle))
     except (OSError, ValueError):
-        return {"trash": [], "move": []}
-    result: dict[str, list[str]] = {"trash": [], "move": []}
-    if isinstance(raw, dict):
-        data = cast(dict[str, object], raw)
-        for kind in result:
-            items = data.get(kind)
-            if isinstance(items, list):
-                result[kind] = [
-                    str(item) for item in cast(list[object], items) if isinstance(item, str) and item
-                ]
+        return result
+    if not isinstance(raw, dict):
+        return result
+    data = cast(dict[str, object], raw)
+    for kind in result.lists:
+        items = data.get(kind)
+        if isinstance(items, list):
+            result.lists[kind] = [
+                str(item) for item in cast(list[object], items) if isinstance(item, str) and item
+            ]
+    devices = data.get("devices")
+    if isinstance(devices, dict):
+        for key, value in cast(dict[object, object], devices).items():
+            if isinstance(key, str) and isinstance(value, int) and not isinstance(value, bool):
+                result.devices[key] = value
+    renames = data.get("renames")
+    if isinstance(renames, list):
+        for item in cast(list[object], renames):
+            if not isinstance(item, dict):
+                continue
+            record = cast(dict[str, object], item)
+            game_id, src, dst = record.get("game_id"), record.get("src"), record.get("dst")
+            device = record.get("device")
+            if (
+                isinstance(game_id, int)
+                and not isinstance(game_id, bool)
+                and isinstance(src, str)
+                and src
+                and isinstance(dst, str)
+                and dst
+            ):
+                result.renames.append(
+                    RenameRecord(
+                        game_id,
+                        src,
+                        dst,
+                        device if isinstance(device, int) and not isinstance(device, bool) else None,
+                    )
+                )
     return result
 
 
-def _write_jobs(data: Mapping[str, list[str]]) -> None:
+def _write_jobs(data: _Jobs) -> None:
     path = _jobs_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload: dict[str, object] = dict(data.lists)
+    # Only the paths still recorded keep their device; the keys are optional,
+    # so an older wLib reads the file as before.
+    recorded = {item for items in data.lists.values() for item in items}
+    devices = {key: value for key, value in data.devices.items() if key in recorded}
+    if devices:
+        payload["devices"] = devices
+    if data.renames:
+        payload["renames"] = [
+            {"game_id": r.game_id, "src": r.src, "dst": r.dst, "device": r.device}
+            for r in data.renames
+        ]
     temporary = f"{path}.{os.getpid()}.tmp"
     with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump(dict(data), handle, indent=2)
+        json.dump(payload, handle, indent=2)
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, path)
+
+
+def _parent_device(path: str) -> int | None:
+    try:
+        return os.stat(os.path.dirname(path)).st_dev
+    except OSError:
+        return None
+
+
+def _parent_online(path: str, device: int | None) -> bool:
+    """True when the parent folder of `path` is there, on the recorded device.
+
+    A drive that is not mounted can leave an empty mount-point folder; its
+    device differs from the recorded one. Records without a device (an
+    older file) only need the parent folder.
+    """
+    parent = os.path.dirname(path)
+    if not os.path.isdir(parent):
+        return False
+    return device is None or _parent_device(path) == device
 
 
 def add_job(kind: str, path: str) -> None:
     """Record a trash or move folder that wLib made outside the library folders."""
     with _jobs_lock:
         data = _read_jobs()
-        items = data.setdefault(kind, [])
+        items = data.lists.setdefault(kind, [])
         if path not in items:
             items.append(path)
+            device = _parent_device(path)
+            if device is not None:
+                data.devices[path] = device
             _write_jobs(data)
 
 
 def remove_job(kind: str, path: str) -> None:
     with _jobs_lock:
         data = _read_jobs()
-        items = data.get(kind, [])
+        items = data.lists.get(kind, [])
         if path in items:
             items.remove(path)
             _write_jobs(data)
@@ -125,7 +218,37 @@ def remove_job(kind: str, path: str) -> None:
 
 def list_jobs(kind: str) -> list[str]:
     with _jobs_lock:
-        return list(_read_jobs().get(kind, []))
+        return list(_read_jobs().lists.get(kind, []))
+
+
+def _job_device(path: str) -> int | None:
+    with _jobs_lock:
+        return _read_jobs().devices.get(path)
+
+
+def add_rename(game_id: int, src: str, dst: str) -> RenameRecord:
+    """Record a same-device move before its rename, for a crash before the library update."""
+    record = RenameRecord(game_id, src, dst, _parent_device(dst))
+    with _jobs_lock:
+        data = _read_jobs()
+        data.renames = [r for r in data.renames if r.dst != dst]
+        data.renames.append(record)
+        _write_jobs(data)
+    return record
+
+
+def remove_rename(record: RenameRecord) -> None:
+    with _jobs_lock:
+        data = _read_jobs()
+        kept = [r for r in data.renames if r != record]
+        if len(kept) != len(data.renames):
+            data.renames = kept
+            _write_jobs(data)
+
+
+def list_renames() -> list[RenameRecord]:
+    with _jobs_lock:
+        return list(_read_jobs().renames)
 
 
 # ── Context ──
@@ -507,9 +630,13 @@ def finish_removal(staged: StagedRemoval) -> str:
 def sweep_leftovers(library_folders: Sequence[str]) -> int:
     """Restart deletes of trash and move folders left by a crash or a quit.
 
-    Records whose folders are gone are dropped. A record whose parent folder
-    is missing (an offline drive) stays for a later start.
+    Same-device moves that stopped before their library update are finished
+    first. Records whose folders are gone are dropped. A record whose parent
+    folder is missing, or is on another device than when it was recorded (an
+    offline drive, or the empty mount point of an unmounted one), stays for
+    a later start.
     """
+    _ = finish_interrupted_renames()
     started = 0
     for folder in library_folders:
         if folder:
@@ -522,9 +649,58 @@ def sweep_leftovers(library_folders: Sequence[str]) -> int:
             if os.path.isdir(path) and not os.path.islink(path):
                 _start_recorded_delete(kind, path)
                 started += 1
-            elif os.path.isdir(os.path.dirname(path)):
+            elif _parent_online(path, _job_device(path)):
                 remove_job(kind, path)
     return started
+
+
+def finish_interrupted_renames() -> int:
+    """Finish the same-device moves that a crash stopped before the library update.
+
+    When only the new folder is there, the game's paths are pointed at it
+    (repoint_game_paths() changes nothing when that was already saved). When
+    only the old folder is there, the rename did not happen. When the drive
+    is offline, the record stays for a later start. Returns how many games
+    were repointed.
+    """
+    from core.database import repoint_game_paths
+
+    repointed = 0
+    for record in list_renames():
+        with _record_lock:
+            if record.dst in _active_records:
+                continue
+        src_there = os.path.lexists(record.src)
+        dst_there = os.path.lexists(record.dst)
+        if dst_there and not src_there:
+            try:
+                result = repoint_game_paths(record.game_id, record.src, record.dst)
+            except sqlite3.IntegrityError:
+                # The game is no longer in the library.
+                remove_rename(record)
+                continue
+            except Exception:
+                _log.exception(
+                    "Could not finish the move of game %s to %s", record.game_id, record.dst
+                )
+                continue
+            if result.get("game") or result.get("targets"):
+                repointed += 1
+                _log.info("Finished the move of game %s to %s", record.game_id, record.dst)
+            remove_rename(record)
+        elif src_there and not dst_there:
+            remove_rename(record)
+        elif src_there and dst_there:
+            _log.warning(
+                "Both %s and %s exist after a move of game %s; the library is not changed",
+                record.src,
+                record.dst,
+                record.game_id,
+            )
+            remove_rename(record)
+        elif _parent_online(record.dst, record.device):
+            remove_rename(record)
+    return repointed
 
 
 # ── Uninstall ──
@@ -676,18 +852,33 @@ def run_move_job(
         set_total(0)
         if os.path.lexists(final):
             return MoveOutcome("skipped", TARGET_EXISTS)
+        # The record lets the next start finish the library update when wLib
+        # stops between the rename and the commit.
+        with _record_lock:
+            _active_records.add(final)
         try:
-            os.rename(root, final)
-        except OSError as exc:
-            return MoveOutcome("failed", f"Could not move the folder: {exc}")
-        try:
-            _ = repoint_game_paths(job.game_id, root, final)
-        except Exception as exc:
+            record = add_rename(job.game_id, root, final)
             try:
-                os.rename(final, root)
-            except OSError as back_exc:
-                _log.error("Could not move %s back to %s: %s", final, root, back_exc)
-            return MoveOutcome("failed", f"Could not update the game's paths: {exc}")
+                os.rename(root, final)
+            except OSError as exc:
+                remove_rename(record)
+                return MoveOutcome("failed", f"Could not move the folder: {exc}")
+            try:
+                _ = repoint_game_paths(job.game_id, root, final)
+            except Exception as exc:
+                try:
+                    os.rename(final, root)
+                except OSError as back_exc:
+                    # The record stays: the next start points the game at
+                    # the folder where it is now.
+                    _log.error("Could not move %s back to %s: %s", final, root, back_exc)
+                else:
+                    remove_rename(record)
+                return MoveOutcome("failed", f"Could not update the game's paths: {exc}")
+            remove_rename(record)
+        finally:
+            with _record_lock:
+                _active_records.discard(final)
         hooks.moved(job.game_id)
         return MoveOutcome("moved")
 
@@ -807,8 +998,9 @@ class MoveQueue:
             if self._current is not None:
                 busy.add(self._current.game_id)
             if self._current is None and not self._queue:
+                # A summary the UI has not read yet stays; _finish_locked()
+                # adds this batch to it.
                 self._totals = _Totals()
-                self._summary = None
             for job in jobs:
                 if job.game_id in busy:
                     continue
@@ -865,13 +1057,23 @@ class MoveQueue:
     def _finish_locked(self) -> None:
         totals = self._totals
         if totals.done:
-            self._summary = {
+            summary: dict[str, object] = {
                 "moved": totals.moved,
                 "skipped": totals.skipped,
                 "cancelled": totals.cancelled,
                 "failed": totals.failed,
                 "first_reason": totals.first_reason,
             }
+            unread = self._summary
+            if unread is not None:
+                # An earlier batch's summary was not read yet: keep its counts
+                # and its reason.
+                for key in ("moved", "skipped", "cancelled", "failed"):
+                    earlier = unread.get(key)
+                    if isinstance(earlier, int):
+                        summary[key] = cast(int, summary[key]) + earlier
+                summary["first_reason"] = str(unread.get("first_reason") or "") or totals.first_reason
+            self._summary = summary
         self._totals = _Totals()
 
     def _work(self) -> None:

@@ -11,11 +11,17 @@ Value = int | bytes | list["Value"] | dict[bytes, "Value"]
 
 @dataclass(frozen=True)
 class TorrentMeta:
+    """`info_hash` is the hex SHA-1 v1 hash, or the hex SHA-256 v2 hash of a v2-only torrent.
+
+    `info_hash_v2` is the hex SHA-256 v2 hash of a v2 or hybrid torrent, else "".
+    """
+
     info_hash: str
     name: str
     size: int
     private: bool
     file_count: int
+    info_hash_v2: str = ""
 
 
 def _decode(data: bytes, pos: int, depth: int, spans: dict[bytes, tuple[int, int]] | None) -> tuple[Value, int]:
@@ -55,6 +61,23 @@ def _decode(data: bytes, pos: int, depth: int, spans: dict[bytes, tuple[int, int
     raise ValueError("bad bencode")
 
 
+def _file_tree_size(tree: Value | None, depth: int = 0) -> tuple[int, int]:
+    """Total length and file count of a v2 `file tree`; an empty key holds a file's own fields."""
+    if depth > 64 or not isinstance(tree, dict) or not tree:
+        raise ValueError("bad torrent")
+    size = count = 0
+    for key, node in tree.items():
+        if key == b"":
+            length = node.get(b"length") if isinstance(node, dict) else None
+            if not isinstance(length, int) or length < 0:
+                raise ValueError("bad torrent")
+            size, count = size + length, count + 1
+        else:
+            sub_size, sub_count = _file_tree_size(node, depth + 1)
+            size, count = size + sub_size, count + sub_count
+    return size, count
+
+
 def parse_torrent(data: bytes) -> TorrentMeta:
     """Info hash, name, total size and private flag; ValueError for anything else."""
     try:
@@ -68,7 +91,12 @@ def parse_torrent(data: bytes) -> TorrentMeta:
         start, stop = spans[b"info"]
         name = info.get(b"name")
         files = info.get(b"files")
-        if isinstance(files, list):
+        v2 = info.get(b"meta version") == 2
+        v2_only = v2 and files is None and b"length" not in info
+        if v2_only:
+            # v2-only (BEP 52): no v1 file list, so the v2 hash names the torrent.
+            size, count = _file_tree_size(info.get(b"file tree"))
+        elif isinstance(files, list):
             size = 0
             for entry in cast(list[Value], files):
                 length = entry.get(b"length") if isinstance(entry, dict) else None
@@ -81,12 +109,14 @@ def parse_torrent(data: bytes) -> TorrentMeta:
             if not isinstance(length, int):
                 raise ValueError("bad torrent")
             size, count = length, 1
+        v2_hash = hashlib.sha256(data[start:stop]).hexdigest() if v2 else ""
         return TorrentMeta(
-            info_hash=hashlib.sha1(data[start:stop]).hexdigest(),
+            info_hash=v2_hash if v2_only else hashlib.sha1(data[start:stop]).hexdigest(),
             name=name.decode("utf-8", "replace") if isinstance(name, bytes) else "",
             size=size,
             private=info.get(b"private") == 1,
             file_count=count,
+            info_hash_v2=v2_hash,
         )
     except (IndexError, ValueError) as exc:
         raise ValueError("bad torrent") from exc

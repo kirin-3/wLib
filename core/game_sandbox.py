@@ -251,6 +251,10 @@ _BUS_HELPER_PATTERN = "|".join(
     )
 )
 
+# The supervisor's first step writes this file in the sandbox home, so the
+# launcher can tell a sandbox that could not start from a game that ended.
+SANDBOX_STARTED_NAME = ".wlib-sandbox-started"
+
 # bwrap's namespace init (PID 1) and this shell remain after the launched
 # command exits, and bus helpers are ignored. Count before starting sleep, so
 # the waiting helper itself cannot keep us alive. bwrap's init waits for every
@@ -258,6 +262,7 @@ _BUS_HELPER_PATTERN = "|".join(
 # kill every other process in this PID namespace (`kill -1` cannot reach
 # outside it, and it skips this shell and PID 1).
 SUPERVISOR = (
+    f': > "$HOME/{SANDBOX_STARTED_NAME}" 2>/dev/null; '
     '"$@"; result=$?; while :; do n=0; '
     "for p in /proc/[0-9]*; do "
     'pid=${p#/proc/}; case "$pid" in 1|$$) continue;; esac; '

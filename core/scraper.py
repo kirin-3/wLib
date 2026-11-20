@@ -247,9 +247,13 @@ def _note_rate_limit(status: int) -> None:
 
 
 def _f95_get(url: str) -> tuple[int, str]:
-    status, body = _run_paced_f95_request(lambda: _urllib_f95_get(url))
-    _note_rate_limit(status)
-    return status, body
+    def _transport() -> tuple[int, str]:
+        status, body = _urllib_f95_get(url)
+        # Inside the slot, so the next queued request sees the cooldown.
+        _note_rate_limit(status)
+        return status, body
+
+    return _run_paced_f95_request(_transport)
 
 
 def _f95_get_via_extension(url: str) -> tuple[int, str]:
@@ -269,11 +273,11 @@ def _f95_get_via_extension(url: str) -> tuple[int, str]:
             if signed_in is None and _CLOUDFLARE_CHALLENGE_RE.search(response.body[:65536])
             else "",
         )
+        # Inside the slot, so the next queued request sees the cooldown.
+        _note_rate_limit(response.status)
         return response.status, response.body
 
-    status, body = _run_paced_f95_request(_transport)
-    _note_rate_limit(status)
-    return status, body
+    return _run_paced_f95_request(_transport)
 
 
 # A managed challenge loads /h/ scripts; rendered pages only carry the passive
@@ -545,8 +549,8 @@ class Scraper:
             # Word-bounded: "Over 18" or "Conversion 2" is not a version.
             rf"\b(?:Current\s+)?Version(?![a-z])\s*:?\s*v?({version_re})",
             rf"\bVer(?:sion)?(?![a-z])\.?\s*:?\s*v?({version_re})",
-            # A bare year ("Release 2024") is a date, not a version.
-            r"\bRelease(?![a-z])\s*:?\s*v?(?!(?:19|20)\d\d(?![\d.]|\.\d))(\d[\d.]*[a-zA-Z]?)",
+            # A bare year ("Release 2024", "Release: 2024.") is a date, not a version.
+            r"\bRelease(?![a-z])\s*:?\s*v?(?!(?:19|20)\d\d(?!\d|\.\d))(\d[\d.]*[a-zA-Z]?)",
         ]
         for pattern in text_patterns:
             match = re.search(pattern, _text(html), re.I)

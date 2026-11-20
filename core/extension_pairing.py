@@ -14,6 +14,7 @@ import re
 import threading
 import time
 from datetime import datetime, UTC
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, TypedDict, cast
 
@@ -56,6 +57,29 @@ def browser_name(origin: str) -> str:
     if origin.startswith("chrome-extension://"):
         return "Chromium"
     return "Unknown"
+
+
+# Called (outside any lock) with the id of each pairing that stopped being
+# allowed, by removal or by eviction at MAX_PAIRED. The bridge cuts its sockets.
+_removal_listeners: list[Callable[[str], None]] = []
+_listeners_lock = threading.Lock()
+
+
+def add_removal_listener(callback: Callable[[str], None]) -> None:
+    with _listeners_lock:
+        if callback not in _removal_listeners:
+            _removal_listeners.append(callback)
+
+
+def _notify_removed(pairing_ids: list[str]) -> None:
+    with _listeners_lock:
+        callbacks = list(_removal_listeners)
+    for pairing_id in pairing_ids:
+        for callback in callbacks:
+            try:
+                callback(pairing_id)
+            except Exception as exc:
+                print(f"[wLib] Pairing removal listener failed: {exc}")
 
 
 def _public(entry: _StoredEntry) -> PairingEntry:
@@ -170,15 +194,17 @@ class PairingStore:
                 return True
             paired = dict(self._load())
             paired[digest] = self._pending[digest]
+            evicted: list[str] = []
             while len(paired) > MAX_PAIRED:
-                del paired[next(iter(paired))]
+                evicted.append(paired.pop(next(iter(paired)))["id"])
             try:
                 self._save(paired)
             except OSError:
                 return False
             self._forget_pending(digest)
             self._paired = paired
-            return True
+        _notify_removed(evicted)
+        return True
 
     def revoke(self, pairing_id: str) -> bool:
         with self._lock:
@@ -194,7 +220,13 @@ class PairingStore:
             except OSError:
                 return False
             self._paired = paired
-            return True
+        _notify_removed([pairing_id])
+        return True
+
+    def is_paired_id(self, pairing_id: str) -> bool:
+        """True while an allowed extension has this pairing code."""
+        with self._lock:
+            return any(entry["id"] == pairing_id for entry in self._load().values())
 
 
 _store: PairingStore | None = None

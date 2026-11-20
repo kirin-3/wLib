@@ -842,6 +842,8 @@ class RunningGame:
     host_native: bool = True
     umu: bool = False
     network_blocked: bool = False
+    # bwrap path of the network-only wrapper; Wine tools for this run use it too.
+    network_bwrap: str = ""
     # Windows: the job that holds the game and the processes it starts.
     job: _WindowsJob | None = None
 
@@ -873,6 +875,33 @@ def _spawn_sandbox_process(
     if errors:
         raise errors[0]
     return processes[0]
+
+
+def _sandbox_start_failure(
+    proc: "subprocess.Popen[bytes] | _ElevatedProcess",
+    marker: str,
+    timeout: float = 5.0,
+) -> int | None:
+    """bwrap's exit status when it exits before its supervisor starts.
+
+    The supervisor writes `marker` (game_sandbox.SANDBOX_STARTED_NAME in the
+    sandbox home) as its first step, so a nonzero exit without the marker is a
+    sandbox that could not start, not a game that ended.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if os.path.lexists(marker):
+            return None
+        # object: a stand-in process (tests, odd wrappers) may not give an int.
+        code = cast(object, proc.poll())
+        if code is not None:
+            # The supervisor can write the marker just before bwrap exits.
+            if os.path.lexists(marker):
+                return None
+            return code if isinstance(code, int) and code != 0 else None
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.05)
 
 
 def _open_debug_log(path: str) -> IO[str]:
@@ -1137,6 +1166,19 @@ class Launcher:
                     if tool["kind"] == "command"
                     else os.path.dirname(tool["path"])
                 )
+                if tool["kind"] == "wine" and run.network_blocked:
+                    # The tool runs in the game's prefix, so it gets the same block.
+                    if not run.network_bwrap:
+                        return {
+                            "success": False,
+                            "error": f"{name}: cannot block the network for this tool",
+                        }
+                    command = game_sandbox.build_network_bwrap_argv(
+                        command,
+                        cwd=cwd,
+                        bwrap=run.network_bwrap,
+                        x11_sockets=host_x11_sockets(),
+                    )
                 proc = subprocess.Popen(
                     host_command(command, env=env, cwd=cwd, supervise=True),
                     env=env,
@@ -1723,6 +1765,7 @@ class Launcher:
 
             log_file = None
             effective_cwd = cwd_override or game_dir
+            started_marker = ""
             prefix = ""
             mount_prefix = ""
             if (
@@ -1753,6 +1796,9 @@ class Launcher:
                 host_native=not is_wine_executable,
                 umu=umu_run,
                 network_blocked=block,
+                network_bwrap=network_status["path"]
+                if network_status is not None and not sandboxed
+                else "",
             )
             # Serialize the prefix-tool check and running-game reservation.
             # Prefix tools take these locks in the same order.
@@ -1843,11 +1889,22 @@ class Launcher:
                         if mangohud_active
                         else None
                     )
+                    sandbox_home = game_sandbox.prepare_sandbox_home(game_id)
+                    started_marker = os.path.join(
+                        sandbox_home, game_sandbox.SANDBOX_STARTED_NAME
+                    )
+                    try:
+                        # unlink removes a planted symlink, not its target.
+                        os.unlink(started_marker)
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        started_marker = ""
                     cmd = game_sandbox.build_bwrap_argv(
                         cmd,
                         game_dir=sandbox_game_dir,
                         home=user_home,
-                        sandbox_home=game_sandbox.prepare_sandbox_home(game_id),
+                        sandbox_home=sandbox_home,
                         cwd=effective_cwd,
                         prefix=mount_prefix,
                         readonly_paths=readonly,
@@ -1957,6 +2014,35 @@ class Launcher:
                     entry.proc = game_proc
                     entry.last_saved_time = start_time
                     entry.log_file = log_file
+                failed_status = (
+                    _sandbox_start_failure(game_proc, started_marker)
+                    if started_marker
+                    else None
+                )
+                if failed_status is not None:
+                    with self._running_lock:
+                        if game_id is not None and self._running.get(game_id) is entry:
+                            del self._running[game_id]
+                    if log_file is not None:
+                        log_file.close()
+                    # A cached Ready result can be stale (kernel or policy change).
+                    status = game_sandbox.get_sandbox_status(recheck=True)
+                    if status["status"] != "ready":
+                        return {
+                            "success": False,
+                            "code": "sandbox_missing"
+                            if status["status"] == "missing"
+                            else "sandbox_unusable",
+                            "error": status["reason"],
+                        }
+                    return {
+                        "success": False,
+                        "error": (
+                            ("The sandbox or gamescope" if gamescope_cmd else "The sandbox")
+                            + f" exited before the game started (status {failed_status})."
+                            + (" See the debug log." if log_file is not None else "")
+                        ),
+                    }
                 if is_wine_executable and run_ce and not (sandboxed and umu_run):
                     # Spawn CE in a background thread after a delay
                     def game_still_running() -> bool:
@@ -1978,6 +2064,14 @@ class Launcher:
                             return
 
                         ce_cmd = prepare_ce_command()
+                        if ce_cmd and network_status is not None and not sandboxed:
+                            # Cheat Engine runs in the game's prefix; keep it offline too.
+                            ce_cmd = game_sandbox.build_network_bwrap_argv(
+                                ce_cmd,
+                                cwd=os.path.dirname(ce_cmd[-1]),
+                                bwrap=network_status["path"],
+                                x11_sockets=host_x11_sockets(),
+                            )
                         if ce_cmd and game_still_running():
                             ce_proc = subprocess.Popen(
                                 host_command(ce_cmd, env=env_vars),
@@ -2533,6 +2627,17 @@ class Launcher:
         is_proton = (
             proton_path and "proton" in path_module.basename(proton_path).lower()
         )
+        if (
+            sandboxed
+            and not is_proton
+            and not is_windows()
+            and path_module is os.path
+            and os.path.isabs(proton_path)
+        ):
+            # The sandbox binds only Wine's real folder (runtime_folder resolves
+            # symlinks), so a symlink such as ~/.local/bin/wine does not exist
+            # there. Run the target; Cheat Engine uses the same path.
+            proton_path = os.path.realpath(proton_path)
 
         base_cmd = [proton_path, exe_path]
         command = build_command(base_cmd, args)

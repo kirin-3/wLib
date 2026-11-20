@@ -237,7 +237,9 @@ def test_feed_limits_and_cursor(monkeypatch, mark, last_page, broken, expected_c
         with pytest.raises(lewdcorner.LcUpdateError):
             lewdcorner_updates.read_feed(lambda: False)
     else:
-        assert lewdcorner_updates.read_feed(lambda: False)["21"].version == "1"
+        read = lewdcorner_updates.read_feed(lambda: False)
+        assert read.items["21"].version == "1"
+        lewdcorner_updates.save_feed_cursor(read.cursor)
     assert calls == list(range(1, expected_calls + 1))
     # The page limit stopped a read that never reached the old cursor.
     stopped_early = bool(mark) and expected_calls == 10

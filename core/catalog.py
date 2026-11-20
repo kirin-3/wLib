@@ -45,6 +45,8 @@ DEFAULT_MANIFEST_URL = "https://wlib-db.thekirin.net/" + MANIFEST_KEY
 MANIFEST_URL_ENV = "WLIB_CATALOG_MANIFEST_URL"
 CATALOG_FILE = "catalog.db"
 SIDECAR_FILE = "catalog.json"
+# Sidecar key: SHA-256 of the installed (decompressed) catalog.db.
+SIDECAR_DB_SHA256 = "catalog_sha256"
 CHECK_INTERVAL_SECONDS = 12 * 60 * 60
 # After a failed check (offline, server error) the next start tries again sooner.
 FAILED_CHECK_RETRY_SECONDS = 15 * 60
@@ -125,6 +127,14 @@ def _replace_retrying(source: str, target: str) -> None:
             if not _ON_WINDOWS or time.monotonic() >= deadline:
                 raise
             time.sleep(0.1)
+
+
+def _file_sha256(path: str) -> str:
+    hasher = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while chunk := handle.read(_CHUNK):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def _remove(path: str) -> None:
@@ -380,22 +390,37 @@ class CatalogClient:
             ):
                 # A crash, manual edit or partial replacement can leave a
                 # corrupt file behind while the sidecar still names this hash.
+                # A valid but different file (an older catalog.db restored
+                # by hand) must not pass as this snapshot either.
                 try:
                     self._verify(self.catalog_path)
-                except CatalogError:
+                    on_disk = _file_sha256(self.catalog_path)
+                except (CatalogError, OSError):
                     pass
                 else:
-                    return False
+                    recorded = sidecar.get(SIDECAR_DB_SHA256)
+                    if not isinstance(recorded, str):
+                        # A sidecar from before the fingerprint: keep the
+                        # file and record what is installed now.
+                        sidecar[SIDECAR_DB_SHA256] = on_disk
+                        return False
+                    if recorded == on_disk:
+                        return False
 
         os.makedirs(self.data_dir, exist_ok=True)
         xz_fd, xz_tmp = tempfile.mkstemp(dir=self.data_dir, prefix=".catalog-", suffix=".xz")
-        db_fd, db_tmp = tempfile.mkstemp(dir=self.data_dir, prefix=".catalog-", suffix=".db")
+        try:
+            db_fd, db_tmp = tempfile.mkstemp(dir=self.data_dir, prefix=".catalog-", suffix=".db")
+        except BaseException:
+            os.close(xz_fd)
+            _remove(xz_tmp)
+            raise
         os.close(db_fd)
         try:
             with os.fdopen(xz_fd, "wb") as target:
                 self._download(snapshot_url(url, path), target, size, digest)
             limit = snapshot.get(SNAPSHOT_UNCOMPRESSED_SIZE)
-            self._decompress(
+            db_digest = self._decompress(
                 xz_tmp, db_tmp, limit if isinstance(limit, int) else MAX_UNCOMPRESSED_BYTES
             )
             self._verify(db_tmp)
@@ -412,6 +437,7 @@ class CatalogClient:
             _remove(xz_tmp)
             _remove(db_tmp)
         sidecar["manifest"] = manifest
+        sidecar[SIDECAR_DB_SHA256] = db_digest
         return True
 
     def _download(self, url: str, target: _Writable, size: int, digest: str) -> None:
@@ -429,8 +455,10 @@ class CatalogClient:
         if hasher.hexdigest() != digest:
             raise CatalogError("The catalog snapshot failed its checksum")
 
-    def _decompress(self, source: str, target: str, expected: int) -> None:
+    def _decompress(self, source: str, target: str, expected: int) -> str:
+        """Decompress source into target; return the SHA-256 of target."""
         limit = min(max(expected, 0), MAX_UNCOMPRESSED_BYTES)
+        hasher = hashlib.sha256()
         written = 0
         try:
             with lzma.open(source, "rb") as reader, open(target, "wb") as writer:
@@ -438,11 +466,13 @@ class CatalogClient:
                     written += len(chunk)
                     if written > limit:
                         raise CatalogError("The catalog snapshot is larger than allowed")
+                    hasher.update(chunk)
                     _ = writer.write(chunk)
                 writer.flush()
                 os.fsync(writer.fileno())
         except lzma.LZMAError as exc:
             raise CatalogError("The catalog snapshot could not be decompressed") from exc
+        return hasher.hexdigest()
 
     def _verify(self, path: str) -> None:
         try:

@@ -23,8 +23,20 @@ def _fetch(url: str) -> extension_bridge.BridgeResponse:
         raise lc.LcUpdateError("lc_extract_failed") from exc
 
 
-def read_feed(cancelled: Callable[[], bool]) -> dict[str, lc.LcVersion]:
-    """Read one newest-first pass and keep its cursor on this device."""
+@dataclass(frozen=True)
+class FeedRead:
+    items: dict[str, lc.LcVersion]
+    # The new cursor; empty when the read must not move it.
+    cursor: str = ""
+
+
+def read_feed(cancelled: Callable[[], bool]) -> FeedRead:
+    """Read one newest-first pass and find its new cursor.
+
+    The caller saves `cursor` with `save_feed_cursor` only after a check of
+    every LC game applied `items`; a cursor saved before that would hide the
+    feed items of the games it did not check.
+    """
     mark = database.get_setting(FEED_READ_AT) or ""
     newest = mark
     # Without a cursor the first read is only a baseline.
@@ -33,7 +45,7 @@ def read_feed(cancelled: Callable[[], bool]) -> dict[str, lc.LcVersion]:
     logger.info("Reading LewdCorner update feed through the browser extension")
     for number in range(1, 11):
         if cancelled():
-            return {}
+            return FeedRead({})
         response = _fetch(_FEED_URL.format(number))
         page = lc.parse_feed_page(response.body)
         if response.status != 200:
@@ -46,12 +58,15 @@ def read_feed(cancelled: Callable[[], bool]) -> dict[str, lc.LcVersion]:
             reached = True
             break
     if cancelled():
-        return {}
+        return FeedRead({})
     # A read the page limit stopped early keeps the old cursor, so the
     # unread gap is not marked as read.
-    if reached and newest > mark:
-        database.update_setting(FEED_READ_AT, newest)
-    return items
+    return FeedRead(items, newest if reached and newest > mark else "")
+
+
+def save_feed_cursor(cursor: str) -> None:
+    if cursor:
+        database.update_setting(FEED_READ_AT, cursor)
 
 
 def matching_catalog_time(version: str, entry: Mapping[str, object]) -> str:
@@ -120,6 +135,8 @@ def check_thread(
     catalog_usable = lc.usable_catalog_entry(catalog)
     flags = lc.prefix_details(feed_item.prefixes)[1] if feed_item and feed_item.prefixes else None
     completed = bool(flags and flags.completed)
+    # The catalog's Completed flag is as old as its version.
+    catalog_completed = False
     version = ""
     at = ""
     error: lc.LcUpdateError | None = None
@@ -151,13 +168,13 @@ def check_thread(
                 note = exc
                 version = str(catalog.get("version") or "").strip()
                 at = matching_catalog_time(version, catalog)
-                completed = completed or catalog.get("thread_completed") is True
+                catalog_completed = catalog.get("thread_completed") is True
             else:
                 version, at, error = "", "", exc
     elif catalog_usable:
         version = str(catalog.get("version") or "").strip()
         at = matching_catalog_time(version, catalog)
-        completed = completed or catalog.get("thread_completed") is True
+        catalog_completed = catalog.get("thread_completed") is True
     elif not available:
         error = lc.LcUpdateError("lc_extension_unavailable")
     elif feed_error:
@@ -178,7 +195,7 @@ def check_thread(
     lc_completed = True if completed else (False if flags is not None else None)
     saved = database.store_thread_update(
         game_id, "lc", url, observation, completed=completed, keep_newer=True,
-        states=states, lc_completed=lc_completed,
+        states=states, lc_completed=lc_completed, catalog_completed=catalog_completed,
     )
     if saved is None:
         return CheckResult(error=error or lc.LcUpdateError("lc_extract_failed"))

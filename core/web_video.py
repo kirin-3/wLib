@@ -171,16 +171,21 @@ def _read_moov(handle: BinaryIO, file_size: int) -> bytes | None:
     return None
 
 
-def file_sample_entries(path: str) -> list[tuple[str, int | None]] | None:
-    """The sample entries of an MP4 file, or None when its headers cannot be read."""
-    try:
-        with open(path, "rb") as handle:
-            moov = _read_moov(handle, os.fstat(handle.fileno()).st_size)
-    except OSError:
-        return None
+def _read_sample_entries(path: str) -> list[tuple[str, int | None]] | None:
+    """The sample entries of an MP4 file, or None when it has no `moov`. Raises OSError."""
+    with open(path, "rb") as handle:
+        moov = _read_moov(handle, os.fstat(handle.fileno()).st_size)
     if not moov:
         return None
     return _sample_entries(moov)
+
+
+def file_sample_entries(path: str) -> list[tuple[str, int | None]] | None:
+    """The sample entries of an MP4 file, or None when its headers cannot be read."""
+    try:
+        return _read_sample_entries(path)
+    except OSError:
+        return None
 
 
 def entries_need_conversion(entries: list[tuple[str, int | None]]) -> bool:
@@ -192,10 +197,21 @@ def entries_need_conversion(entries: list[tuple[str, int | None]]) -> bool:
     return False
 
 
+def check_file(path: str) -> bool | None:
+    """Whether the file needs conversion, or None when it could not be read (try again later).
+
+    A file without MP4 headers is False: reading it again gives the same answer.
+    """
+    try:
+        entries = _read_sample_entries(path)
+    except OSError:
+        return None
+    return entries is not None and entries_need_conversion(entries)
+
+
 def file_needs_conversion(path: str) -> bool:
     """True when the file holds H.264/H.265 video or AAC audio. Unreadable files are False."""
-    entries = file_sample_entries(path)
-    return entries is not None and entries_need_conversion(entries)
+    return check_file(path) is True
 
 
 # ── Served-folder walk and device-local cache ──
@@ -241,6 +257,9 @@ class ScanCache(TypedDict):
     root: str
     files: dict[str, CacheEntry]
     play_anyway: str | None
+    # "Play anyway" fingerprints of the other folders checked for this game
+    # (alternate launch targets), so checking one folder keeps the others' choice.
+    other_roots: NotRequired[dict[str, str]]
 
 
 class ScanResult(TypedDict):
@@ -251,6 +270,8 @@ class ScanResult(TypedDict):
 
 
 _cache_lock = threading.Lock()
+# Most folders whose "Play anyway" choice is kept besides the current one.
+MAX_OTHER_ROOTS = 16
 
 
 def scan_cache_dir() -> str:
@@ -264,7 +285,7 @@ def scan_cache_path(game_id: int) -> str:
 
 
 def _empty_cache(root: str) -> ScanCache:
-    return {"version": SCAN_VERSION, "root": root, "files": {}, "play_anyway": None}
+    return {"version": SCAN_VERSION, "root": root, "files": {}, "play_anyway": None, "other_roots": {}}
 
 
 def _load_cache(game_id: int) -> ScanCache | None:
@@ -289,11 +310,18 @@ def _load_cache(game_id: int) -> ScanCache | None:
         if isinstance(size, int) and isinstance(mtime_ns, int) and isinstance(needs, bool):
             files[key] = {"size": size, "mtime_ns": mtime_ns, "needs": needs}
     play_anyway = data.get("play_anyway")
+    other_raw = data.get("other_roots")
+    other_roots: dict[str, str] = {}
+    if isinstance(other_raw, dict):
+        for key, value in cast(dict[object, object], other_raw).items():
+            if isinstance(key, str) and isinstance(value, str) and key != root:
+                other_roots[key] = value
     return {
         "version": SCAN_VERSION,
         "root": root,
         "files": files,
         "play_anyway": play_anyway if isinstance(play_anyway, str) else None,
+        "other_roots": other_roots,
     }
 
 
@@ -335,11 +363,26 @@ def fingerprint(cache: ScanCache) -> str:
     return hashlib.sha256(json.dumps(rows).encode("utf-8")).hexdigest()
 
 
-def _refresh(game_id: int, root: str, reader: Callable[[str], bool]) -> ScanCache:
+def _switch_root(old: ScanCache | None, real_root: str) -> ScanCache:
+    """A cache for another folder that keeps every folder's "Play anyway" choice."""
+    cache = _empty_cache(real_root)
+    if old is None:
+        return cache
+    others = dict(old.get("other_roots", {}))
+    if old["play_anyway"] is not None:
+        _ = others.pop(old["root"], None)
+        others[old["root"]] = old["play_anyway"]
+    cache["play_anyway"] = others.pop(real_root, None)
+    # Keep the newest entries; dicts keep insertion order.
+    cache["other_roots"] = dict(list(others.items())[-MAX_OTHER_ROOTS:])
+    return cache
+
+
+def _refresh(game_id: int, root: str, reader: Callable[[str], bool | None]) -> ScanCache:
     """Bring the cache up to date with the folder; caller holds _cache_lock."""
     real_root = os.path.realpath(root)
     old = _load_cache(game_id)
-    cache = old if old is not None and old["root"] == real_root else _empty_cache(real_root)
+    cache = old if old is not None and old["root"] == real_root else _switch_root(old, real_root)
     files: dict[str, CacheEntry] = {}
     for relative, path in iter_media_files(real_root):
         try:
@@ -350,12 +393,17 @@ def _refresh(game_id: int, root: str, reader: Callable[[str], bool]) -> ScanCach
         if previous and previous["size"] == info.st_size and previous["mtime_ns"] == info.st_mtime_ns:
             files[relative] = previous
         else:
-            files[relative] = {"size": info.st_size, "mtime_ns": info.st_mtime_ns, "needs": reader(path)}
+            needs = reader(path)
+            if needs is None:
+                # A read error is not a result; read the file again at the next check.
+                continue
+            files[relative] = {"size": info.st_size, "mtime_ns": info.st_mtime_ns, "needs": needs}
     updated: ScanCache = {
         "version": SCAN_VERSION,
         "root": real_root,
         "files": files,
         "play_anyway": cache["play_anyway"],
+        "other_roots": cache.get("other_roots", {}),
     }
     if updated != old:
         _write_cache(game_id, updated)
@@ -372,16 +420,16 @@ def _result(cache: ScanCache) -> ScanResult:
     }
 
 
-def scan_game(game_id: int, root: str, reader: Callable[[str], bool] | None = None) -> ScanResult:
+def scan_game(game_id: int, root: str, reader: Callable[[str], bool | None] | None = None) -> ScanResult:
     """Check the served folder, reading only new or changed files."""
     with _cache_lock:
-        return _result(_refresh(game_id, root, reader or file_needs_conversion))
+        return _result(_refresh(game_id, root, reader or check_file))
 
 
 def set_play_anyway(game_id: int, root: str) -> ScanResult:
     """Remember "Play anyway" for the current set of files that need conversion."""
     with _cache_lock:
-        cache = _refresh(game_id, root, lambda path: file_needs_conversion(path))
+        cache = _refresh(game_id, root, check_file)
         cache["play_anyway"] = fingerprint(cache)
         _write_cache(game_id, cache)
         return _result(cache)
@@ -773,6 +821,14 @@ class Converter:
                 error = verify_output(source, self._probe(partial))
             if error is not None:
                 failed["error"] = error
+                return failed
+            # Keep a copy that changed while ffmpeg ran (an update): the
+            # converted file is of the old copy.
+            current_stat = os.stat(path)
+            if (current_stat.st_dev, current_stat.st_ino, current_stat.st_size, current_stat.st_mtime_ns) != (
+                source_stat.st_dev, source_stat.st_ino, source_stat.st_size, source_stat.st_mtime_ns,
+            ):
+                failed["error"] = "the file changed while it was converted"
                 return failed
             os.chmod(partial, stat.S_IMODE(source_stat.st_mode))
             os.replace(partial, path)

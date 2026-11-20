@@ -1888,13 +1888,14 @@ class ApiBase:
                     lc_catalog = lc_thread_entries([
                         lewdcorner.extract_thread_id(url) for url in lc_urls.values()
                     ])
-                    feed: dict[str, lewdcorner.LcVersion] = {}
+                    feed_read = lewdcorner_updates.FeedRead({})
                     feed_error: lewdcorner.LcUpdateError | None = None
                     if extension_bridge.is_available(site="lc"):
                         try:
-                            feed = lewdcorner_updates.read_feed(self._update_cancelled_now)
+                            feed_read = lewdcorner_updates.read_feed(self._update_cancelled_now)
                         except lewdcorner.LcUpdateError as exc:
                             feed_error = exc
+                    feed = feed_read.items
                     for game_id, game in lc_games.items():
                         if self._update_cancelled_now():
                             return
@@ -1925,6 +1926,9 @@ class ApiBase:
                                 ):
                                     self._update_results.append(entry)
                                 self._update_checked += 1
+                    # Only a check of every LC game applied the whole feed.
+                    if game_ids is None:
+                        lewdcorner_updates.save_feed_cursor(feed_read.cursor)
                 if self._update_cancelled_now():
                     return
 

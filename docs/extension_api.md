@@ -26,7 +26,7 @@ An extension `Origin` alone is not trusted: every installed browser extension ha
 - **Gated:** `/api/add`, `/api/wishlist`, `/api/thread-links`, `/api/bridge`, and `/api/open` with a `url` or `id`. These answer HTTP 403 with `error_code` `pairing_required`, `pairing_denied`, or `extension_outdated` (no token, or the old `1` value).
 - **`/api/check`** always answers HTTP 200. For an unpaired caller it returns `exists: false`, the `error` and `error_code` above, and the version fields, without a library lookup. This lets an old Chromium extension see the new `extension_version` and reload itself.
 - **Not gated:** a bare `GET /api/open` (it only shows the window; a second wLib instance sends it), `/covers/`, the OAuth callbacks, and the runner endpoints (they use `X-wLib-Runner`).
-- **Removal:** the Extension page lists allowed extensions. Removing one deletes its hash and closes its bridge sockets.
+- **Removal:** the Extension page lists allowed extensions. Removing one deletes its hash and closes its bridge sockets. At most 16 extensions stay allowed: allowing another drops the oldest, and its bridge sockets close the same way.
 - **Dev mode:** the Vite origin needs no token.
 - **App bridge methods:** `get_extension_pairing()`, `resolve_extension_pairing(request_id, allow)`, `revoke_extension_pairing(pairing_id)`.
 
@@ -126,7 +126,7 @@ Saves the thread or store page directly as a library game with an empty executab
 **`GET /api/bridge` (WebSocket)**
 Lets a running browser retry a challenged or login-gated F95 request with its own cookies, without opening a tab. The app never sees cookies; it only receives the fetched HTML/JSON body.
 
-- **Handshake:** `GET /api/bridge?token=<pairing token>` with `Upgrade: websocket`, `Connection: Upgrade`, `Sec-WebSocket-Key`, and `Sec-WebSocket-Version: 13`. The server answers `101 Switching Protocols` with `Sec-WebSocket-Accept` (base64(SHA-1(key + GUID)), RFC 6455 sample `dGhlIHNhbXBsZSBub25jZQ==` → `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`).
+- **Handshake:** `GET /api/bridge?token=<pairing token>` with `Upgrade: websocket`, `Connection: Upgrade`, `Sec-WebSocket-Key` (base64 of 16 bytes), and `Sec-WebSocket-Version: 13` over HTTP/1.1. Another version gets HTTP 426; other missing or invalid fields get HTTP 400. The server answers `101 Switching Protocols` with `Sec-WebSocket-Accept` (base64(SHA-1(key + GUID)), RFC 6455 sample `dGhlIHNhbXBsZSBub25jZQ==` → `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`).
 - **Origin rules (stricter than the REST endpoints):** `Origin` must start with `chrome-extension://` or `moz-extension://`. Web origins (`https://example.com`), missing origins, missing upgrades (HTTP 400), and bad `Host` values (HTTP 403, same single-Host check as the other endpoints) are rejected before any message is exchanged. A missing or unpaired token receives HTTP 403 (see Extension Pairing).
 - **Socket:** the upgraded socket uses a 60-second timeout (plain endpoints use 10 seconds). One handler thread is held per browser; idle stalled peers drop on timeout.
 - **Protocol (JSON text messages):** the current extension sends protocol 2; the app also accepts protocol 1 for older clients.
@@ -171,7 +171,7 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Firefox lifetime:** Firefox suspends an idle event page after 30 seconds and does not count WebSocket traffic as activity. In Firefox, each 20-second ping also writes `wlibBridgeKeepalive` to `storage.local`; the resulting `storage.onChanged` event keeps the page alive while the bridge is connected.
 - **Handshake:** the 101 reply uses an `HTTP/1.1` status line. Firefox drops WebSocket handshakes answered with `BaseHTTPRequestHandler`'s default `HTTP/1.0`.
 - **CSP:** the manifest sets `extension_pages` to `script-src 'self'; object-src 'self'`. Firefox's MV3 default adds `upgrade-insecure-requests`, which rewrites `ws://localhost:8183` to `wss://` and stops the bridge connecting.
-- **Limits:** wLib waits at most 30 seconds per `fetch` and never waits for an extension to connect (`unavailable` fails immediately). A dropped connection fails its pending requests at once. The extension refuses bodies over 4 MiB (`too_large`); wLib rejects bridge messages over 8 MiB. Only the newest eligible connection receives a request.
+- **Limits:** wLib waits at most 30 seconds per `fetch` and never waits for an extension to connect (`unavailable` fails immediately). A dropped connection fails its pending requests at once. The extension refuses bodies over 4 MiB (`too_large`); wLib rejects bridge messages over 8 MiB, and fragmented messages of more than 1024 frames. Only the newest eligible connection receives a request.
 - **Security notes:** the bridge requires both an extension-scheme origin and an allowed pairing token. Origin alone can be forged by a local process; pairing prevents an unknown caller from using the bridge until allowed. The app treats returned page content as untrusted. Cookies, session tokens, and clearance values are never sent to wLib; the manifest requests no `tabs` or `cookies`. The tab fallback finds F95 tabs through the `f95zone.to` host permission and runs only the allowlisted fetch in them.
 
 ## OAuth Callback Pages

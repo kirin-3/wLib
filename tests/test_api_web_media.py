@@ -41,7 +41,7 @@ def env(tmp_path, monkeypatch):
     game_id = add_game(title="Game", exe_path=str(folder / "index.html"))
     assert game_id is not None
     monkeypatch.setattr(web_video, "ffmpeg_info", lambda refresh=False: AVAILABLE)
-    monkeypatch.setattr(web_video, "file_needs_conversion", lambda path: open(path, "rb").read() == b"h264")
+    monkeypatch.setattr(web_video, "check_file", lambda path: open(path, "rb").read() == b"h264")
     api = Api()
     monkeypatch.setattr(api, "get_running_games", lambda: [])
     return api, game_id, folder

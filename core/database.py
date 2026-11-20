@@ -2020,12 +2020,17 @@ def store_thread_update(
     states: ThreadStates | None = None,
     lc_states: ThreadStates | None = None,
     lc_completed: bool | None = None,
+    catalog_completed: bool = False,
 ) -> tuple[dict[str, object], bool, bool] | None:
     """Write the observation and winner together, if the thread still matches.
 
     `lc_completed` is an LC read's Completed prefix; None means the read had
     no live prefix data. False clears the Completed flag of an LC-only game;
     for a game on both sites the next F95 page read decides.
+
+    `catalog_completed` is the Completed flag of the catalog entry that gave
+    `observation`. It counts as `completed` and `lc_completed` True, except
+    when `keep_newer` rejects the observation as older than the stored one.
 
     `lc_states` is the LC read of a game the F95 step stores; it applies by
     the rule in `site_thread_states` when `states` (F95 data) is None.
@@ -2057,7 +2062,10 @@ def store_thread_update(
             version_key, time_key = f"{site}_latest_version", f"{site}_latest_at"
             stored_at = str(game.get(time_key) or "")
             same = normalize_version(version) == normalize_version(game.get(version_key))
-            if not (keep_newer and at and stored_at > at and not same):
+            if keep_newer and at and stored_at > at and not same:
+                # The catalog's Completed flag came with this older version.
+                catalog_completed = False
+            else:
                 fields[version_key] = version
                 # An undated read of this version takes the first date seen.
                 fields[time_key] = (stored_at or at) if same else at
@@ -2065,6 +2073,8 @@ def store_thread_update(
                 {**game, **fields}, lc_enabled
             )
 
+        if catalog_completed:
+            completed, lc_completed = True, True
         newly_finished = completed and not game.get("thread_completed") and not str(
             game.get("exe_path") or ""
         ).strip()

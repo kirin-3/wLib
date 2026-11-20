@@ -135,7 +135,7 @@ The generated cover copies, player profiles and scan cache, torrent data, and ex
 
 `WLIB_DATA_DIR` overrides the app-data root and `WLIB_CACHE_DIR` overrides the cache root. Linux also respects `XDG_DATA_HOME` and `XDG_CACHE_HOME`; an existing legacy `~/.local/share/wLib` library is retained when the configured XDG data directory does not yet exist. On Windows, a missing `LOCALAPPDATA` falls back to `~/AppData/Local/wLib`.
 
-`game-file-jobs.json` lists each `.wlib-trash-*` folder that an uninstall or a move made outside the library folders, and each `.wlib-move-*` copy folder. At start, wLib deletes the folders that remain and drops the records of the folders that are gone. A record whose parent folder is missing (an offline drive) stays for a later start.
+`game-file-jobs.json` lists each `.wlib-trash-*` folder that an uninstall or a move made outside the library folders, and each `.wlib-move-*` copy folder, with the device of each folder's parent. It also records each same-device move (game ID, old and new folder) from before its rename until its library update is saved. At start, wLib first finishes such a move when only the new folder is there (it points the game's paths at it), then deletes the recorded folders that remain and drops the records of the folders that are gone. A record whose parent folder is missing or is on another device (an offline drive, or the empty mount point of an unmounted one) stays for a later start.
 
 MSI and portable Windows builds share the same user-data location; extracting a portable ZIP does not move the library beside the executable.
 

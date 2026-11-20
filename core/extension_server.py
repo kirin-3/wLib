@@ -397,15 +397,34 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             ("chrome-extension://", "moz-extension://")
         )
 
+    def _header_tokens(self, name: str) -> set[str]:
+        """Lowercase comma-separated tokens of every ``name`` header."""
+        values = self.headers.get_all(name) or []
+        return {
+            token.strip().lower()
+            for value in values
+            for token in str(value).split(",")
+            if token.strip()
+        }
+
+    def _send_bridge_error(self, status: int, error: bytes) -> None:
+        self._discard_request_body()
+        self.send_response(status)
+        if status == 426:
+            self.send_header("Sec-WebSocket-Version", "13")
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        _ = self.wfile.write(b'{"success": false, "error": "' + error + b'"}')
+
     def _handle_bridge_upgrade(self) -> None:
-        upgrade = (self.headers.get("Upgrade") or "").lower()
-        if "websocket" not in upgrade:
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            _ = self.wfile.write(
-                b'{"success": false, "error": "WebSocket upgrade required"}'
-            )
+        # RFC 6455 section 4.2.1: an HTTP/1.1 GET with "Upgrade: websocket"
+        # and "Connection: Upgrade".
+        if (
+            self.request_version != "HTTP/1.1"
+            or "websocket" not in self._header_tokens("Upgrade")
+            or "upgrade" not in self._header_tokens("Connection")
+        ):
+            self._send_bridge_error(400, b"WebSocket upgrade required")
             return
 
         origin = (self.headers.get("Origin") or "").strip()
@@ -419,27 +438,25 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         if not self._require_pairing("", token):
             return
 
+        if (self.headers.get("Sec-WebSocket-Version") or "").strip() != "13":
+            self._send_bridge_error(426, b"Unsupported Sec-WebSocket-Version")
+            return
+
         key = (self.headers.get("Sec-WebSocket-Key") or "").strip()
         if not key:
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            _ = self.wfile.write(
-                b'{"success": false, "error": "Missing Sec-WebSocket-Key"}'
-            )
+            self._send_bridge_error(400, b"Missing Sec-WebSocket-Key")
             return
 
         try:
+            import base64
+
             from core.extension_ws import websocket_accept_key
 
+            if len(base64.b64decode(key, validate=True)) != 16:
+                raise ValueError("key is not 16 bytes")
             accept = websocket_accept_key(key)
-        except Exception:
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            _ = self.wfile.write(
-                b'{"success": false, "error": "Invalid Sec-WebSocket-Key"}'
-            )
+        except ValueError:  # binascii.Error and UnicodeError are ValueErrors
+            self._send_bridge_error(400, b"Invalid Sec-WebSocket-Key")
             return
 
         self._discard_request_body()

@@ -4,7 +4,7 @@
 Only what ``/api/bridge`` needs: handshake accept-key computation, frame
 encoding for server-to-extension messages, and strict frame reading for
 extension-to-app messages (masked client frames, 16- and 64-bit lengths,
-continuation reassembly, ping/pong, close, 8 MiB message limit).
+continuation reassembly, ping/pong, close, 8 MiB and 1024-frame message limits).
 
 Server frames are sent unfragmented and unmasked. Client frames must be
 masked; unmasked client frames are rejected.
@@ -20,6 +20,9 @@ from typing import BinaryIO, final
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
+# Frames one fragmented message may use. Empty or tiny continuation frames
+# cost no message bytes, so the byte limit alone does not bound them.
+MAX_MESSAGE_FRAGMENTS = 1024
 
 OP_CONT = 0x0
 OP_TEXT = 0x1
@@ -156,7 +159,8 @@ def recv_message(
     Returns ``("text", payload)`` for a reassembled text message (continuation
     frames joined), ``("ping", payload)``, ``("pong", payload)``, or
     ``("close", payload)``. Binary frames are rejected. Reassembled text over
-    8 MiB raises :class:`MessageTooLarge`.
+    8 MiB, or in more than ``MAX_MESSAGE_FRAGMENTS`` frames, raises
+    :class:`MessageTooLarge`.
 
     Pass a per-connection :class:`MessageState` to keep a partly reassembled
     message across a control frame (RFC 6455 allows ping/pong between
@@ -172,22 +176,13 @@ def recv_message(
                 if len(payload) > MAX_MESSAGE_BYTES:
                     raise MessageTooLarge("message exceeds 8 MiB")
                 return ("text", payload)
-            message.fragments.append(payload)
-            message.active = True
+            message.start(payload)
         elif opcode == OP_CONT:
             if not message.active:
                 raise WebSocketError("orphan continuation frame")
-            message.fragments.append(payload)
-            total = sum(len(part) for part in message.fragments)
-            if total > MAX_MESSAGE_BYTES:
-                message.fragments.clear()
-                message.active = False
-                raise MessageTooLarge("message exceeds 8 MiB")
+            message.add(payload)
             if fin:
-                data = b"".join(message.fragments)
-                message.fragments.clear()
-                message.active = False
-                return ("text", data)
+                return ("text", message.finish())
         elif opcode == OP_PING:
             return ("ping", payload)
         elif opcode == OP_PONG:
@@ -203,5 +198,32 @@ class MessageState:
     """Partial text message carried across ``recv_message`` calls."""
 
     def __init__(self) -> None:
-        self.fragments: list[bytes] = []
+        self.buffer: bytearray = bytearray()
+        self.frames: int = 0
         self.active: bool = False
+
+    def _reset(self) -> None:
+        self.buffer = bytearray()
+        self.frames = 0
+        self.active = False
+
+    def start(self, payload: bytes) -> None:
+        self._reset()
+        self.active = True
+        self.add(payload)
+
+    def add(self, payload: bytes) -> None:
+        """Append one fragment; raises past the byte or frame limit."""
+        self.frames += 1
+        if len(self.buffer) + len(payload) > MAX_MESSAGE_BYTES:
+            self._reset()
+            raise MessageTooLarge("message exceeds 8 MiB")
+        if self.frames > MAX_MESSAGE_FRAGMENTS:
+            self._reset()
+            raise MessageTooLarge("message has too many fragments")
+        self.buffer += payload
+
+    def finish(self) -> bytes:
+        data = bytes(self.buffer)
+        self._reset()
+        return data

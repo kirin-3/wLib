@@ -1100,6 +1100,8 @@ def extract_zip(
                     try:
                         while chunk:
                             _write_all(fd, chunk)
+                            # A cancel also stops inside one large member.
+                            _check_cancel(cancel)
                             chunk = src.read(_COPY_CHUNK)
                         if not windows:
                             current = stat.S_IMODE(os.fstat(fd).st_mode)
@@ -1195,6 +1197,33 @@ def _tar_codec_error(archive_path: str) -> str:
     return ""
 
 
+def _tar_decompressor(raw: io.RawIOBase, magic: bytes) -> io.BufferedIOBase | None:
+    """A checksum-checking reader for a gzip, bzip2 or xz tar, or None.
+
+    tarfile's stream mode never checks the gzip CRC and stops at the tar end
+    marker, before a bzip2 or xz stream's own check. These readers verify the
+    check when they are read to the end, which extract_tar() does. None means
+    plain tar, or a codec this Python lacks (tarfile then reports it).
+    """
+    # Each BufferedReader is made only when used: dropping one closes `raw`.
+    try:
+        if magic.startswith(b"\x1f\x8b"):
+            import gzip
+
+            return gzip.GzipFile(fileobj=io.BufferedReader(raw, _COPY_CHUNK), mode="rb")
+        if magic.startswith(b"BZh"):
+            import bz2
+
+            return bz2.BZ2File(io.BufferedReader(raw, _COPY_CHUNK), "rb")
+        if magic.startswith(b"\xfd7zXZ\x00"):
+            import lzma
+
+            return lzma.LZMAFile(io.BufferedReader(raw, _COPY_CHUNK), "rb")
+    except ImportError:
+        return None
+    return None
+
+
 def _disk_full(exc: BaseException) -> bool:
     return isinstance(exc, OSError) and exc.errno in (
         errno.ENOSPC,
@@ -1229,6 +1258,18 @@ def extract_tar(
         raise ArchiveInstallError(codec_error)
     os.makedirs(staging_dir, exist_ok=True)
     windows = _is_windows()
+    real_staging = os.path.realpath(staging_dir)
+
+    def _resolved_key(path: str) -> str:
+        # Key by where the member lands after earlier symlinks in staging
+        # are followed (the data filter allows links that stay inside), so
+        # "d/f" and "link-to-d/f" collide. The last part is not followed.
+        target = os.path.join(staging_dir, *path.split("/"))
+        parent = os.path.realpath(os.path.dirname(target))
+        landed = os.path.join(parent, os.path.basename(target))
+        rel = os.path.relpath(landed, real_staging).replace(os.sep, "/")
+        return _windows_name_key(rel) if windows else rel
+
     # Key -> True for a folder, False for anything else.
     seen: dict[str, bool] = {}
     files: set[str] = set()
@@ -1236,8 +1277,13 @@ def extract_tar(
     try:
         size = os.path.getsize(archive_path)
         with open(archive_path, "rb") as raw:
+            magic = raw.read(6)
+            _ = raw.seek(0)
             reader = _TarReader(raw, size, progress, cancel)
-            with tarfile.open(fileobj=reader, mode="r|*") as tf:
+            unpacked = _tar_decompressor(reader, magic)
+            source: io.IOBase = unpacked if unpacked is not None else reader
+            tar_mode = "r|" if unpacked is not None else "r|*"
+            with tarfile.open(fileobj=source, mode=tar_mode) as tf:
                 for member in tf:
                     _check_cancel(cancel)
                     name = member.name
@@ -1250,7 +1296,7 @@ def extract_tar(
                     check_archive_entry_safe(name)
                     _ = _target_inside_staging(staging_dir, name)
                     path = posixpath.normpath(name.replace("\\", "/"))
-                    key = _windows_name_key(path) if windows else path
+                    key = _resolved_key(path)
                     is_dir = member.isdir()
                     earlier = seen.get(key)
                     if earlier is not None and not (earlier and is_dir):
@@ -1266,7 +1312,7 @@ def extract_tar(
                         link = member.linkname
                         check_archive_entry_safe(link)
                         link_path = posixpath.normpath(link.replace("\\", "/"))
-                        link_key = _windows_name_key(link_path) if windows else link_path
+                        link_key = _resolved_key(link_path)
                         if link_key not in files:
                             raise ArchiveSafetyError(
                                 f"Archive hard link does not point to an earlier file in the archive: {name!r}"
@@ -1275,6 +1321,11 @@ def extract_tar(
                         files.add(key)
                     tf.extract(member, staging_dir, filter="data")
                     count += 1
+            if unpacked is not None:
+                # Read to the end so the gzip CRC (or bzip2/xz check) is
+                # verified; a corrupt archive must not install.
+                while unpacked.read(_COPY_CHUNK):
+                    pass
     except tarfile.FilterError as exc:
         raise ArchiveSafetyError(f"Archive entry is unsafe: {exc}") from exc
     except ArchiveInstallError:

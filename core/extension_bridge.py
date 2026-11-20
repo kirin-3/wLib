@@ -23,7 +23,7 @@ from io import BufferedIOBase
 from typing import BinaryIO, cast, final
 from collections.abc import Callable
 
-from core import extension_ws
+from core import extension_pairing, extension_ws
 from core.lewdcorner import Site
 
 logger = logging.getLogger("wlib.bridge")
@@ -320,6 +320,10 @@ def close_paired_connections(pairing_id: str) -> None:
                 conn.shutdown()
             except OSError:
                 pass
+
+
+# Removing or evicting a pairing cuts the sockets it opened.
+extension_pairing.add_removal_listener(close_paired_connections)
 
 
 def _register_connection(conn: BridgeConnection) -> None:
@@ -888,6 +892,10 @@ def serve_bridge_connection(
     _register_connection(conn)
     state = extension_ws.MessageState()
     try:
+        # Checked after registering: a pairing removed before this point fails
+        # here, and one removed after it finds this socket in the registry.
+        if pairing_id and not extension_pairing.store().is_paired_id(pairing_id):
+            return
         while True:
             try:
                 kind, payload = extension_ws.recv_message(rfile, state)

@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 
 from core import extension_bridge
 from core.f95zone import NON_ENGINE_PREFIXES, extract_thread_id, normalize_prefix_label, split_thread_title
+from core.versions import actionable_remote_version
 
 ListName = Literal["watched", "bookmarks"]
 LIST_NAMES: tuple[ListName, ...] = ("watched", "bookmarks")
@@ -289,6 +290,13 @@ def _version_from_list(raw: str) -> str:
     return split_thread_title(f"_ [{text}] [_]")[1]
 
 
+def _first_actionable_version(*versions: str) -> str:
+    """The first usable version; else the first nonempty placeholder ("Unknown")."""
+    return next((value for value in versions if actionable_remote_version(value)), "") or next(
+        (value for value in versions if value), ""
+    )
+
+
 def entry_from_row(row: ListRow, list_name: ListName) -> ListEntry:
     """Title, version and developer from the row title, engine from the prefix labels."""
     title, version, developer = split_thread_title(row.title)
@@ -300,7 +308,7 @@ def entry_from_row(row: ListRow, list_name: ListName) -> ListEntry:
         thread_id=row.thread_id,
         raw_title=row.title,
         title=title or row.title.strip(),
-        version=version or _version_from_list(row.list_version),
+        version=_first_actionable_version(version, _version_from_list(row.list_version)),
         developer=developer,
         engine=engine,
         prefixes=list(row.prefix_names),
@@ -329,7 +337,10 @@ def fetch_page_via_extension(url: str) -> tuple[int, str, str]:
         raise ListReadError(reason)
 
     def transport() -> extension_bridge.BridgeResponse:
-        return extension_bridge.fetch_list_page(url, timeout=30)
+        response = extension_bridge.fetch_list_page(url, timeout=30)
+        # Inside the slot, so the next queued request sees the cooldown.
+        scraper.note_f95_status(response.status)
+        return response
 
     try:
         response = scraper.run_paced_f95_request(transport)
@@ -340,7 +351,6 @@ def fetch_page_via_extension(url: str) -> tuple[int, str, str]:
         raise ListReadError("timeout" if "in time" in text else "fetch_failed") from exc
     except scraper.F95RequestError as exc:
         raise ListReadError(exc.code if exc.code in ERROR_MESSAGES else "fetch_failed", str(exc)) from exc
-    scraper.note_f95_status(response.status)
     return response.status, response.final_url, response.body
 
 
@@ -439,7 +449,7 @@ def _catalog_values(entry: ListEntry, catalog: Mapping[str, object]) -> dict[str
     completed = catalog.get("thread_completed")
     return {
         "title": text("title") or entry.title,
-        "version": text("version") or entry.version,
+        "version": _first_actionable_version(text("version"), entry.version),
         "developer": text("developer") or entry.developer,
         "engine": text("engine") or entry.engine,
         "cover_image": text("coverImage"),

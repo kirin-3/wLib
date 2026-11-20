@@ -532,7 +532,7 @@ function extractGameInfo() {
                         // Same word-bounded patterns as core/scraper.py.
                         new RegExp(String.raw`\b(?:Current\s+)?Version(?![a-z])\s*:?\s*v?(${postVersion})`, 'i'),
                         new RegExp(String.raw`\bVer(?:sion)?(?![a-z])\.?\s*:?\s*v?(${postVersion})`, 'i'),
-                        /\bRelease(?![a-z])\s*:?\s*v?(?!(?:19|20)\d\d(?![\d.]|\.\d))(\d[\d.]*[a-zA-Z]?)/i,
+                        /\bRelease(?![a-z])\s*:?\s*v?(?!(?:19|20)\d\d(?!\d|\.\d))(\d[\d.]*[a-zA-Z]?)/i,
                     ];
                     for (const pattern of textPatterns) {
                         const bodyMatch = postText.match(pattern);
