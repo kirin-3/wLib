@@ -158,7 +158,7 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 
   `<page>` is a whole number from 1 to 200 with no leading zero. The query parameters must be in this order, with no others; "Other threads", bookmarked posts and the other sorts are refused. A redirect that leaves `f95zone.to` fails with `offsite_redirect`.
 - **List fetches:** `can_fetch_lists: true` in `hello` (extension 1.2.12 and later) says the extension accepts the two list URLs. wLib sends list URLs (`extension_bridge.fetch_list_page`) only to the newest connection that is eligible (`can_fetch`) and sends this flag. A connection without it stays eligible for thread pages and batch version requests; the F95 account import then reports `extension_outdated` ("update the extension"), and with no eligible connection `no_extension`.
-- **Login:** Firefox sends no site cookies with background-page fetches, so F95 answers them as a guest. Cloudflare likewise challenges them without the browser's clearance cookie. When a background fetch returns a guest page (`data-logged-in="false"`) or a managed challenge page, the extension repeats it once from an open, non-discarded `f95zone.to` tab via `scripting.executeScript` (Firefox `content.fetch`, page cookies) and, if that works, uses a tab first for later fetches while one is open. Without an F95 tab it keeps the background result.
+- **Login:** Firefox sends no site cookies with background-page fetches, so F95 answers them as a guest. Cloudflare likewise challenges them without the browser's clearance cookie. When a background fetch returns a guest page (`data-logged-in="false"`) or a managed challenge page, the extension repeats it once from an open, non-discarded `f95zone.to` tab via `scripting.executeScript` (Firefox `content.fetch`, page cookies) and, if that works, uses a tab first for later fetches while one is open. Without an F95 tab it keeps the background result. All attempts share one 25-second budget; when it runs out, the tab fetch is aborted, including its body read, so it does not overlap the app's next F95 request.
 - **LewdCorner fetches:** `can_fetch_lc` in `hello` and `status` reports the optional `https://lewdcorner.com/*` permission. A missing flag means LC is unavailable. F95 eligibility still uses `can_fetch`. The app sends `site: "lc"` to the newest LC-capable connection and spaces requests at least two seconds apart. The browser extension uses its own session from its background context and accepts only these URLs:
   - `https://lewdcorner.com/threads/<thread id>/`
   - `https://lewdcorner.com/latest-updates/api?page=<1 to 10>&per_page=90&cat=Games&sort=date`
@@ -269,7 +269,10 @@ Extensions implementing download resolution send `can_resolve: true` in their
 `ok: false` and `error`, and a missing optional site permission is indicated by
 `needs_permission`. Buzzheavier results also include `share_url` for the file request's Referer. The app sends `{ "type": "resolve_cancel", "id": "..." }` to cancel a pending resolve. Addresses retain their fragments. Resolve requests are
 serialized and time out after 30 seconds, extended to five minutes when user
-interaction is needed.
+interaction is needed. Some browsers (Zen, Firefox) load the URL again in another tab: the extension
+closes such a copy, including for 10 seconds after a successful F95 resolve, but
+only when the browser created that tab while the resolve was opening or running.
+A tab the user opens or navigates after that stays open.
 
 The LewdCorner downloads switch requests the optional `webRequest` permission and
 is available while LewdCorner site access is enabled. The extension reports

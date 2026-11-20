@@ -126,11 +126,14 @@ test('Continue waits for the page to load and for F95 to fill its check code', a
 
 test('a tab that loaded the requested URL is claimed even if the window reported another tab', async () => {
     const messages = [], removedTabs = [], removedWindows = [], listeners = [];
+    let tabCreated;
     const chrome = {
         runtime:{onMessage:{addListener(fn){listeners.push(fn);}}},
         permissions:{contains:async()=>false},
-        tabs:{remove:async id=>{removedTabs.push(id);},update:async()=>{},onRemoved:{addListener(){}}},
-        windows:{create:async()=>({id:7,state:'minimized',tabs:[{id:9}]}),update:async()=>{},remove:async id=>{removedWindows.push(id);},onRemoved:{addListener(){}}},
+        tabs:{remove:async id=>{removedTabs.push(id);},update:async()=>{},onRemoved:{addListener(){}},onCreated:{addListener(fn){tabCreated=fn;}}},
+        // Zen opens the URL in extra tabs of the user's window as it creates ours.
+        windows:{create:async()=>{for (const id of [9,21,22,23]) tabCreated?.({id,windowId:id === 9 ? 7 : 3}); return {id:7,state:'minimized',tabs:[{id:9}]};},
+            update:async()=>{},remove:async id=>{removedWindows.push(id);},onRemoved:{addListener(){}}},
     };
     const context = vm.createContext({chrome,console,URL,AbortController,setTimeout,clearTimeout});
     vm.runInContext(source('background.js'),context);
@@ -152,6 +155,12 @@ test('a tab that loaded the requested URL is claimed even if the window reported
     listeners[0]({type:'dl-owned?',url},{tab:{id:23,windowId:3}},value=>reply=value);
     assert.equal(reply.owned,false);
     assert.ok(removedTabs.includes(23), 'a copy that loads after the request ended is closed too');
+    tabCreated?.({id:24,windowId:3});
+    for (const tabId of [24,3]) {
+        listeners[0]({type:'dl-owned?',url},{tab:{id:tabId,windowId:3}},value=>reply=value);
+        assert.equal(reply.owned,false);
+        assert.ok(!removedTabs.includes(tabId), 'a tab the user opens or navigates after the request ended stays open');
+    }
 });
 
 test('LC resolve accepts only masked links with permission and captures a redirect in its own tab', async () => {

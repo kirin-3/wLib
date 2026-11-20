@@ -718,15 +718,9 @@ def test_windows_batch_uses_explicit_command_processor(
     result = Launcher().launch(r"C:\Games\start.cmd", command_line_args="--safe")
 
     assert result["success"] is True
-    assert mock_popen.call_args.args[0] == [
-        r"C:\Windows\System32\cmd.exe",
-        "/d",
-        "/s",
-        "/c",
-        "call",
-        r"C:\Games\start.cmd",
-        "--safe",
-    ]
+    assert mock_popen.call_args.args[0] == (
+        r'C:\Windows\System32\cmd.exe /d /s /c "call "C:\Games\start.cmd" --safe"'
+    )
 
 
 @pytest.mark.parametrize(

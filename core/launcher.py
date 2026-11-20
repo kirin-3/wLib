@@ -225,6 +225,34 @@ class ExitCallback(Protocol):
     def __call__(self, delta: int, is_final: bool = True) -> object: ...
 
 
+class _CmdExeCommand(str):
+    """A `cmd.exe /c` command already quoted for cmd.exe; joined to the command line as is."""
+
+
+# cmd.exe splits or redirects at these characters outside double quotes.
+_CMD_EXE_SPECIAL = frozenset(' \t"&|<>^')
+
+
+def _cmd_exe_quote(argument: str, always: bool = False) -> str:
+    if not always and argument and not _CMD_EXE_SPECIAL.intersection(argument):
+        return argument
+    return '"' + argument.replace('"', '""') + '"'
+
+
+def _batch_command(script: str, arguments: Sequence[str]) -> _CmdExeCommand:
+    """The `/s /c` text that runs `script`: cmd.exe removes the outer quotes."""
+    parts = [_cmd_exe_quote(script, always=True), *map(_cmd_exe_quote, arguments)]
+    return _CmdExeCommand('"call ' + " ".join(parts) + '"')
+
+
+def _windows_command_line(command: Sequence[str]) -> str:
+    """`subprocess.list2cmdline`, but a `_CmdExeCommand` goes in unchanged."""
+    return " ".join(
+        part if isinstance(part, _CmdExeCommand) else subprocess.list2cmdline([part])
+        for part in command
+    )
+
+
 class _ElevatedProcess:
     """Keep the ShellExecuteEx process handle usable by the playtime tracker."""
 
@@ -259,7 +287,7 @@ class _ElevatedProcess:
             fMask=0x40 | 0x100 | 0x400,  # NOCLOSEPROCESS | NOASYNC | FLAG_NO_UI
             lpVerb="runas",
             lpFile=command[0],
-            lpParameters=subprocess.list2cmdline(command[1:]),
+            lpParameters=_windows_command_line(command[1:]),
             lpDirectory=cwd,
             nShow=1,  # SW_SHOWNORMAL
         )
@@ -2007,6 +2035,10 @@ class Launcher:
                         return subprocess.Popen(
                             cmd
                             if flatpak_player
+                            # A list would quote the cmd.exe command again.
+                            else _windows_command_line(cmd)
+                            if is_windows()
+                            and any(isinstance(part, _CmdExeCommand) for part in cmd)
                             else host_command(
                                 cmd, env=popen_env, cwd=effective_cwd, supervise=True
                             ),
@@ -2035,6 +2067,15 @@ class Launcher:
                 except OSError as exc:
                     if not is_windows() or getattr(exc, "winerror", None) != 740:
                         raise
+                    if user_env:
+                        # ShellExecuteEx has no environment parameter.
+                        names = ", ".join(sorted(user_env))
+                        raise OSError(
+                            "This game needs administrator rights, and an elevated "
+                            + f"launch cannot apply the environment settings ({names}) "
+                            + "from the launch options. Remove them, or run wLib "
+                            + "as administrator."
+                        ) from exc
                     # ShellExecuteEx cannot redirect stdout/stderr across elevation.
                     if log_file is not None:
                         _ = log_file.write(
@@ -2565,15 +2606,19 @@ class Launcher:
                 print(note)
             if ext in (".bat", ".cmd"):
                 command_processor = os.environ.get("COMSPEC") or "cmd.exe"
+                # Arguments after %command% go to the batch file; the ones
+                # before it are the user's own wrappers.
+                split = args.index("%command%") if "%command%" in args else -1
                 base_command = [
                     command_processor,
                     "/d",
                     "/s",
                     "/c",
-                    "call",
-                    exe_path,
+                    _batch_command(exe_path, args[split + 1 :]),
                 ]
-                return execute_process(build_command(base_command, args), process_env)
+                return execute_process(
+                    [*args[: max(split, 0)], *base_command], process_env
+                )
             if ext == ".jar":
                 return execute_process(
                     build_command(["java", "-jar", exe_path], args), process_env

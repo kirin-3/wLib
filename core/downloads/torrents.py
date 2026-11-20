@@ -905,14 +905,20 @@ class TorrentSupervisor:
             return True
 
     def apply_limits(self) -> None:
-        """Push the current speed limits to a running helper.
+        """Push the current speed limits and port mapping to a running helper.
 
         The download limit is the queue's share of the shared limit
-        (`set_download_limit`); the upload limit comes from the settings.
+        (`set_download_limit`); the upload limit and port mapping come from the settings.
         """
         _, upload = torrent_settings.limits_kib()
+        port_mapping = torrent_settings.port_mapping()
         with self._lock:
-            _ = self._send({"cmd": "set_limits", "download_kib": self._download_kib, "upload_kib": upload})
+            _ = self._send({
+                "cmd": "set_limits",
+                "download_kib": self._download_kib,
+                "upload_kib": upload,
+                "port_mapping": port_mapping,
+            })
 
     def set_download_limit(self, kib: int) -> None:
         """Set the torrents' download share in KiB/s (0 = unlimited) and push it."""

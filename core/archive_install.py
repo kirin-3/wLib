@@ -2241,6 +2241,7 @@ def copy_infolder_saves(
     *,
     removed_root: str = "",
     skipped: list[str] | None = None,
+    copy_function: Callable[[str, str], object] = shutil.copy2,
 ) -> list[str]:
     """Copy in-folder saves from old_root into new_root, overwriting.
 
@@ -2251,6 +2252,8 @@ def copy_infolder_saves(
     its relative path goes into `skipped` so the caller keeps the old folder.
     A link that leaves `removed_root` is left alone: cleanup removes only the
     link, not its target.
+
+    `copy_function(src, dst)` writes each file (see _SaveCarryUndo).
 
     Returns the copied relative paths. Raises ArchiveInstallError on failure
     so the caller can roll back before touching the library.
@@ -2271,18 +2274,18 @@ def copy_infolder_saves(
                     continue
                 os.makedirs(os.path.dirname(dst) or new_root, exist_ok=True)
                 _ = shutil.copytree(
-                    target_real, dst, dirs_exist_ok=True, copy_function=shutil.copy2
+                    target_real, dst, dirs_exist_ok=True, copy_function=copy_function
                 )
                 copied.append(rel)
             elif os.path.isdir(src):
                 os.makedirs(os.path.dirname(dst) or new_root, exist_ok=True)
                 _ = shutil.copytree(
-                    src, dst, dirs_exist_ok=True, copy_function=shutil.copy2
+                    src, dst, dirs_exist_ok=True, copy_function=copy_function
                 )
                 copied.append(rel)
             elif os.path.isfile(src):
                 os.makedirs(os.path.dirname(dst) or new_root, exist_ok=True)
-                _ = shutil.copy2(src, dst)
+                _ = copy_function(src, dst)
                 copied.append(rel)
         except OSError as exc:
             raise ArchiveInstallError(
@@ -2853,6 +2856,110 @@ def _place_folder(
     return ""
 
 
+class _SaveCarryUndo:
+    """Makes the save copies into a moved download reversible.
+
+    A download that was moved (not copied) into staging is the only copy of
+    its files. Before a carried save replaces one of them, the original is
+    renamed into a hidden folder inside staging; rollback() puts the
+    originals back and removes the files the copies added, so a cancelled or
+    failed install returns the download as it was.
+    """
+
+    def __init__(self, root: str) -> None:
+        self.root: str = os.path.abspath(root)
+        self.name: str = f".wlib-undo-{time.time_ns()}"
+        self._seen: set[str] = set()
+        self._created: list[str] = []
+        self._saved: list[str] = []
+
+    def _rel(self, path: str) -> str | None:
+        rel = os.path.relpath(os.path.normpath(os.path.abspath(path)), self.root)
+        if rel == "." or rel == os.pardir or rel.startswith(os.pardir + os.sep):
+            return None
+        return rel
+
+    def before_write(self, dst: str) -> None:
+        rel = self._rel(dst)
+        if rel is None or rel in self._seen:
+            return
+        path = os.path.join(self.root, rel)
+        if os.path.isdir(path) and not os.path.islink(path):
+            return
+        self._seen.add(rel)
+        if os.path.lexists(path):
+            saved = os.path.join(self.root, self.name, rel)
+            os.makedirs(os.path.dirname(saved), exist_ok=True)
+            os.rename(path, saved)
+            self._saved.append(rel)
+        else:
+            self._created.append(rel)
+
+    def before_tree(self, source: str, destination: str) -> None:
+        """Prepare for copy_folder_contents(source, destination)."""
+        if not os.path.isdir(source):
+            return
+        for current, dirnames, filenames in os.walk(source, followlinks=False):
+            dirnames[:] = [
+                name for name in dirnames if not os.path.islink(os.path.join(current, name))
+            ]
+            rel_dir = os.path.relpath(current, source)
+            for name in filenames:
+                full = os.path.join(current, name)
+                if os.path.islink(full) or not os.path.isfile(full):
+                    continue
+                self.before_write(os.path.join(destination, rel_dir, name))
+
+    def copy(self, src: str, dst: str) -> object:
+        if os.path.isdir(dst) and not os.path.islink(dst):
+            dst = os.path.join(dst, os.path.basename(src))
+        self.before_write(dst)
+        return shutil.copy2(src, dst)
+
+    def rollback(self) -> bool:
+        """Undo the copies; False when something could not be put back."""
+        ok = True
+        for rel in reversed(self._created):
+            path = os.path.join(self.root, rel)
+            try:
+                if os.path.lexists(path) and not (
+                    os.path.isdir(path) and not os.path.islink(path)
+                ):
+                    os.remove(path)
+            except OSError as exc:
+                _log.warning("Could not remove carried save %s: %s", path, exc)
+                ok = False
+                continue
+            # Folders the copies made. A torrent holds no empty folders.
+            parent = os.path.dirname(path)
+            while parent != self.root and self._rel(parent) is not None:
+                try:
+                    os.rmdir(parent)
+                except OSError:
+                    break
+                parent = os.path.dirname(parent)
+        for rel in reversed(self._saved):
+            path = os.path.join(self.root, rel)
+            saved = os.path.join(self.root, self.name, rel)
+            try:
+                if os.path.lexists(path) and not (
+                    os.path.isdir(path) and not os.path.islink(path)
+                ):
+                    os.remove(path)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                os.rename(saved, path)
+            except OSError as exc:
+                _log.warning("Could not put back %s: %s", path, exc)
+                ok = False
+        if ok:
+            shutil.rmtree(os.path.join(self.root, self.name), ignore_errors=True)
+        return ok
+
+    def discard(self, root: str) -> None:
+        """Drop the kept originals once the tree moved to `root` for good."""
+        shutil.rmtree(os.path.join(root, self.name), ignore_errors=True)
+
+
 def install_archive(
     archive_path: str,
     *,
@@ -3104,6 +3211,8 @@ def install_archive(
     # The wrapper folder that flattening removed, put back if a moved
     # download is restored.
     wrapper_name = ""
+    # Set when saves are carried into a moved download, to undo them.
+    save_undo: _SaveCarryUndo | None = None
     try:
         if not folder_source:
             _progress("extracting")
@@ -3272,11 +3381,16 @@ def install_archive(
             # Save folders linked to a target that cleanup would delete but
             # that cannot be copied keep the old folder on disk.
             skipped_saves: list[str] = []
+            save_copy: Callable[[str, str], object] = shutil.copy2
+            if moved_from:
+                save_undo = _SaveCarryUndo(staging)
+                save_copy = save_undo.copy
             _ = copy_infolder_saves(
                 old_root,
                 staging_install_dir,
                 removed_root=old_install or old_root,
                 skipped=skipped_saves,
+                copy_function=save_copy,
             )
             # The executable can sit below the install folder (Game/bin/x.exe);
             # saves kept beside that subfolder are deleted with the old
@@ -3287,17 +3401,25 @@ def install_archive(
                 and os.path.isdir(old_install)
             )
             if wraps_exe:
-                _ = copy_infolder_saves(old_install, staging, skipped=skipped_saves)
+                _ = copy_infolder_saves(
+                    old_install, staging, skipped=skipped_saves, copy_function=save_copy
+                )
             override_rel = override_relpath(old_override, old_root)
             if override_rel is None and wraps_exe:
                 override_rel = override_relpath(old_override, old_install)
                 override_from_install = override_rel is not None
             if override_rel is not None:
-                _ = copy_override_saves(
-                    old_override,
-                    override_rel,
-                    staging if override_from_install else staging_install_dir,
-                )
+                override_into = staging if override_from_install else staging_install_dir
+                if save_undo is not None and override_rel != ".":
+                    try:
+                        save_undo.before_tree(
+                            old_override, os.path.join(override_into, override_rel)
+                        )
+                    except OSError as exc:
+                        raise ArchiveInstallError(
+                            f"Could not carry saves into the new version: {exc}"
+                        ) from exc
+                _ = copy_override_saves(old_override, override_rel, override_into)
             if override_rel == ".":
                 # The saves folder is the game folder itself. Its save files
                 # cannot be told apart from game files, so only the known
@@ -3319,6 +3441,9 @@ def install_archive(
         # Last point to cancel: from here on the library changes.
         _check_cancel(cancel)
         _progress("moving into place")
+        # A cancel that came in before the stage above was published was
+        # accepted, so check again: no later cancel is accepted.
+        _check_cancel(cancel)
         old_backup = ""
         try:
             os.makedirs(os.path.dirname(destination) or destination, exist_ok=True)
@@ -3368,9 +3493,14 @@ def install_archive(
         if moved_from:
             # The download now is the installed game folder.
             remove_moved_record(staging_path)
+            if save_undo is not None:
+                save_undo.discard(destination)
     except Exception as exc:
         if staging:
             if moved_from and os.path.isdir(staging):
+                # Saves carried into the download are taken out again first.
+                if save_undo is not None:
+                    _ = save_undo.rollback()
                 # A moved download must survive a failed install, in its own
                 # layout: a retry's chosen launch file and the torrent's file
                 # list are both relative to it. When it cannot go back now,

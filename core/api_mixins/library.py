@@ -27,6 +27,10 @@ from core.api_mixins.types import (
 if TYPE_CHECKING:
     from core.cover_cards import CoverFolders
 
+# Serializes "attach a thread to a store-only game": the empty-URL check and
+# the write must not interleave with a second extension request.
+_THREAD_ATTACH_LOCK = threading.Lock()
+
 
 class LibraryMixin(ApiBase):
     @staticmethod
@@ -623,14 +627,23 @@ class LibraryMixin(ApiBase):
                 self._refresh_synced_library()
                 return {"success": True, "id": attach_lc_id, "attached": True, "attached_lc": True}
             if attach_id is not None:
-                if normalized_lc:
+                with _THREAD_ATTACH_LOCK:
+                    # Read again: another request can have attached a thread
+                    # since the first check.
                     linked = get_game(attach_id)
-                    if linked and linked.get("lc_url"):
-                        return self._integrity_error_response(sqlite3.IntegrityError(
-                            f"LewdCorner thread already in the library: {normalized_lc}"
-                        ))
-                    attach_fields["lc_url"] = normalized_lc
-                _ = update_game(attach_id, attach_fields)
+                    if not linked or linked.get("f95_url"):
+                        return {
+                            "success": False,
+                            "error": "A game with this URL is already in your library",
+                            "error_code": "duplicate_url",
+                        }
+                    if normalized_lc:
+                        if linked.get("lc_url"):
+                            return self._integrity_error_response(sqlite3.IntegrityError(
+                                f"LewdCorner thread already in the library: {normalized_lc}"
+                            ))
+                        attach_fields["lc_url"] = normalized_lc
+                    _ = update_game(attach_id, attach_fields)
                 game_id = attach_id
             else:
                 game_id = add_game_fn(

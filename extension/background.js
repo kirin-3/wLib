@@ -636,15 +636,24 @@ async function bridgeTabFetch(url, maxBytes, timeoutMs) {
         if (hasPageFetch) {
             try {
                 return await content.fetch(target, init);
-            } catch (_pageError) {
+            } catch (pageError) {
+                if (init.signal.aborted) {
+                    throw pageError;
+                }
                 // Fall back to the content script's own fetch.
             }
         }
         return fetch(target, init);
     };
+    // The abort also stops the body read, so a timed-out request does not
+    // keep running after the app gave up on it and started the next one.
+    const controller = new AbortController();
     let timer = null;
     const timeout = new Promise((resolve) => {
-        timer = setTimeout(() => resolve({ ok: false, error: "timeout" }), timeoutMs);
+        timer = setTimeout(() => {
+            controller.abort();
+            resolve({ ok: false, error: "timeout" });
+        }, timeoutMs);
     });
     const request = (async () => {
         try {
@@ -653,6 +662,7 @@ async function bridgeTabFetch(url, maxBytes, timeoutMs) {
                 credentials: "include",
                 redirect: "follow",
                 cache: "no-store",
+                signal: controller.signal,
             });
             const finalUrl = response.url || url;
             if (new URL(finalUrl).hostname !== "f95zone.to") {
@@ -1154,6 +1164,12 @@ function sameUrl(a, b) {
 // Zen can also load the same URL a second time as a tab in the user's window.
 // Only the first tab to ask does the work; every other copy is closed.
 const resolveFinishedUrls = new Map();
+// Tabs the browser created while a resolve was opening or running. Only these
+// can be a late browser copy; a tab the user opens or navigates is never one.
+const resolveSpawnedTabs = new Set();
+function forgetSpawnedTabsWhenIdle() {
+    if (!resolveOpening.size && !resolveWindows.size) resolveSpawnedTabs.clear();
+}
 function closeTab(tabId) {
     try { const p = chrome.tabs?.remove(tabId); p?.catch?.(()=>{}); } catch (_) {}
 }
@@ -1166,9 +1182,9 @@ function resolveEntryFor(sender, url) {
         return known;
     }
     if (typeof url !== 'string') return null;
-    for (const [finishedUrl, expires] of resolveFinishedUrls) {
-        if (expires < Date.now()) resolveFinishedUrls.delete(finishedUrl);
-        else if (sameUrl(finishedUrl, url)) { closeTab(tabId); return null; }
+    for (const [finishedUrl, finished] of resolveFinishedUrls) {
+        if (finished.expires < Date.now()) resolveFinishedUrls.delete(finishedUrl);
+        else if (finished.tabs.has(tabId) && sameUrl(finishedUrl, url)) { closeTab(tabId); return null; }
     }
     for (const entry of new Set(resolveWindows.values())) {
         if (entry.finished || !sameUrl(entry.url, url)) continue;
@@ -1206,7 +1222,10 @@ function finishResolve(entry, result) {
     // A late copy of this URL (Zen and Firefox can load it twice) is closed
     // on sight, but only briefly and only after a success: after a failure
     // the user's own "Open in browser" loads the same URL and must stay.
-    if (answer.ok && entry.site !== "lc") resolveFinishedUrls.set(entry.url, Date.now() + 10000);
+    if (answer.ok && entry.site !== "lc") {
+        resolveFinishedUrls.set(entry.url, {expires: Date.now() + 10000, tabs: new Set(resolveSpawnedTabs)});
+    }
+    forgetSpawnedTabsWhenIdle();
     for (const tabId of entry.duplicates) closeTab(tabId);
     if (entry.tabWindowId != null && entry.tabWindowId !== entry.windowId) {
         try { const p = chrome.tabs.remove(entry.tabId); p?.catch?.(()=>{}); } catch (_) {}
@@ -1320,12 +1339,17 @@ async function bridgeHandleResolve(message) {
         sendResolveMessage({type:'resolve_result',id,ok:false,error:'could not open resolve window'});
     } finally {
         resolveOpening.delete(id);
+        forgetSpawnedTabsWhenIdle();
     }
 }
 chrome.windows?.onRemoved?.addListener(windowId => {
     for (const entry of [...resolveWindows.values()]) if ((entry.tabWindowId ?? entry.windowId) === windowId) finishResolve(entry,{ok:false,error:'cancelled'});
 });
+chrome.tabs?.onCreated?.addListener(tab => {
+    if (Number.isInteger(tab?.id) && (resolveOpening.size || resolveWindows.size)) resolveSpawnedTabs.add(tab.id);
+});
 chrome.tabs?.onRemoved?.addListener(tabId => {
+    resolveSpawnedTabs.delete(tabId);
     const entry = resolveWindows.get(tabId);
     if (entry?.bound) finishResolve(entry,{ok:false,error:'cancelled'});
 });

@@ -44,15 +44,21 @@ _DOCUMENT_HTML_RE = re.compile(
     re.I,
 )
 # `<Game>-32.exe` is the 32-bit twin of `<Game>.exe` when both exist, but it
-# is the only launcher some builds ship; it loses to a sibling, not to nothing.
-_SKIPPED_32BIT_EXECUTABLE_RE = re.compile(r"^.*-32\.exe$", re.I)
+# is the only launcher some builds ship; it loses only to its `<Game>.exe`.
+_SKIPPED_32BIT_EXECUTABLE_RE = re.compile(r"^(.*)-32\.exe$", re.I)
 _GENERIC_LAUNCHER_STEMS = ("game", "start", "launcher", "main", "run")
 # Archive installs keep their temporary and backup trees next to the game.
 # They are internal state, not games: `.wlib-staging-*` during extraction,
 # `.wlib-trash-*` while a replaced version is deleted in the background,
 # `<destination>.wlib-old-*` when the previous version is kept and
 # `<destination>.wlib-new-*` when a failed in-place update keeps the new tree.
-_INTERNAL_DIR_PREFIXES = (".wlib-staging-", ".wlib-trash-")
+# Game moves and uninstalls add `.wlib-move-*` (an unfinished copy) and
+# `.wlib-uninstall-*` (a folder set aside until the library change is saved).
+# Shared with core/game_files.py, which makes these folders.
+MOVE_PREFIX = ".wlib-move-"
+# A folder that an uninstall set aside until the library change is saved.
+UNINSTALL_PREFIX = ".wlib-uninstall-"
+_INTERNAL_DIR_PREFIXES = (".wlib-staging-", ".wlib-trash-", MOVE_PREFIX, UNINSTALL_PREFIX)
 _INTERNAL_DIR_MARKERS = (".wlib-old-", ".wlib-new-")
 _LAUNCHER_EXTENSIONS = (
     ".exe", ".bat", ".cmd", ".sh", ".x86", ".x86_64", ".html", ".htm", ".jar", ".swf"
@@ -86,7 +92,7 @@ def _names(game_dir: str) -> set[str]:
 
 
 def _is_internal_dir(name: str) -> bool:
-    """True for archive-install staging/backup trees, which are not games."""
+    """True for install, move and uninstall work trees, which are not games."""
     lowered = name.lower()
     return lowered.startswith(_INTERNAL_DIR_PREFIXES) or any(
         marker in lowered for marker in _INTERNAL_DIR_MARKERS
@@ -241,26 +247,38 @@ def find_launcher(
     `preferred_title` is passed to the name heuristic; callers that rename the
     folder (archive installs) keep the guessed-title preference that way.
     """
-    budget = [_MAX_SCANNED_DIRS]
+    budget = _ScanBudget(_MAX_SCANNED_DIRS)
     return _find_launcher(game_dir, depth, preferred_title, budget)
 
 
+class _ScanBudget:
+    """Directories left to read, and whether one was left unread."""
+
+    def __init__(self, remaining: int) -> None:
+        self.remaining: int = remaining
+        self.skipped: bool = False
+
+
 def _find_launcher(
-    game_dir: str, depth: int, preferred_title: str, budget: list[int]
+    game_dir: str, depth: int, preferred_title: str, budget: _ScanBudget
 ) -> str:
-    if budget[0] <= 0:
+    if budget.remaining <= 0:
+        budget.skipped = True
         return ""
-    budget[0] -= 1
+    budget.remaining -= 1
     try:
         entries = sorted(os.scandir(game_dir), key=lambda entry: entry.name.lower())
     except OSError:
         return ""
     candidates = _launcher_names(entries)
-    # Prefer the 64-bit build, but use a lone -32.exe rather than report that
-    # the folder has no launchable file.
-    files = [
-        name for name in candidates if not _SKIPPED_32BIT_EXECUTABLE_RE.match(name)
-    ] or candidates
+    # Prefer the 64-bit build; a -32.exe without its `<Game>.exe` twin stays.
+    lowered = {name.lower() for name in candidates}
+
+    def has_64bit_twin(name: str) -> bool:
+        match = _SKIPPED_32BIT_EXECUTABLE_RE.match(name)
+        return bool(match) and f"{match.group(1)}.exe".lower() in lowered
+
+    files = [name for name in candidates if not has_64bit_twin(name)]
     # Native Ren'Py/NW.js scripts run without Wine on Linux; elsewhere prefer the .exe.
     native = [
         name for name in files
@@ -302,7 +320,8 @@ def _find_launcher(
             launcher = _find_launcher(sub, depth - 1, preferred_title, budget)
             if launcher:
                 found.append((os.path.basename(sub), launcher))
-        if budget[0] <= 0 and len(subdirs) > 1:
+        # An unread folder may hold another launcher, so the pick is unsure.
+        if budget.skipped and len(subdirs) > 1:
             return ""
         if found:
             title = preferred_title or guess_title_and_version(

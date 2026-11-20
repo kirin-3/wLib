@@ -437,7 +437,13 @@ class CoverCacheService:
             game = database.get_game(game_id)
             database.delete_game(game_id)
             if game:
-                delete_cached_cover(game.get("cover_cache"))
+                # The row is gone; a stale cache file must not fail the removal.
+                try:
+                    delete_cached_cover(game.get("cover_cache"))
+                except OSError as exc:
+                    logging.getLogger(__name__).warning(
+                        "Could not delete cached cover of game %s: %s", game_id, exc
+                    )
 
     @staticmethod
     def _lc_copies() -> list[Path]:

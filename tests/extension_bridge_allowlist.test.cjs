@@ -129,3 +129,49 @@ test('bridge hello reports list-fetch support', async () => {
   assert.equal(hello.can_fetch, true);
   assert.equal(hello.extension_version, '1.2.13');
 });
+
+// bridgeTabFetch runs as a content script, so it is tested on its own.
+const tabFetchIn = (globals) => {
+  const { context } = makeContext();
+  const source = vm.runInContext('bridgeTabFetch.toString()', context);
+  const page = vm.createContext({ URL, TextEncoder, AbortController, setTimeout, clearTimeout, ...globals });
+  return vm.runInContext(`(${source})`, page);
+};
+
+// A fetch that stalls until its signal aborts, at the request or the body read.
+const stallingFetch = (stallBody, seen) => async (url, init) => {
+  seen.push(init.signal);
+  const stall = () => new Promise((_, reject) => {
+    init.signal.addEventListener('abort', () => reject(new Error('aborted')));
+  });
+  if (!stallBody) await stall();
+  return { status: 200, url, text: stall };
+};
+
+for (const [name, stallBody] of [['request', false], ['body read', true]]) {
+  for (const firefox of [false, true]) {
+    test(`a timed-out tab fetch aborts its ${name} (${firefox ? 'content.fetch' : 'fetch'})`, async () => {
+      const seen = [];
+      const fake = stallingFetch(stallBody, seen);
+      const globals = firefox
+        ? { content: { fetch: fake }, fetch: async () => { throw new Error('fallback used'); } }
+        : { fetch: fake };
+      const tabFetch = tabFetchIn(globals);
+      const result = await tabFetch('https://f95zone.to/threads/1/', 1000, 20);
+      assert.deepEqual({ ...result }, { ok: false, error: 'timeout' });
+      assert.equal(seen.length, 1, 'no fallback request after the abort');
+      assert.equal(seen[0].aborted, true);
+    });
+  }
+}
+
+test('a tab fetch that answers in time is not aborted', async () => {
+  const seen = [];
+  const tabFetch = tabFetchIn({
+    fetch: async (url, init) => { seen.push(init.signal); return { status: 200, url, text: async () => 'ok' }; },
+  });
+  const result = await tabFetch('https://f95zone.to/threads/1/', 1000, 5000);
+  assert.equal(result.ok, true);
+  assert.equal(result.body, 'ok');
+  assert.equal(seen[0].aborted, false);
+});

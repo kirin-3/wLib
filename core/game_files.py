@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import cast
 
+from core.game_scan import MOVE_PREFIX, UNINSTALL_PREFIX
 from core.archive_install import (
     NETWORK_IO_WORKERS,
     TRASH_PREFIX,
@@ -48,9 +49,6 @@ from core.archive_install import (
 _log = logging.getLogger(__name__)
 
 JOBS_FILE = "game-file-jobs.json"
-MOVE_PREFIX = ".wlib-move-"
-# A folder that an uninstall set aside until the library change is saved.
-UNINSTALL_PREFIX = ".wlib-uninstall-"
 
 UNINSTALL_RUNNING = "Close the game before uninstalling it."
 MOVE_RUNNING = "Close the game before moving it."

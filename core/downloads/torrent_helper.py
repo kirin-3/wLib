@@ -196,10 +196,15 @@ class Engine:
         if name == "add":
             self._add(job_id, str(command.get("dir") or ""), bool(command.get("paused")))
         elif name == "set_limits":
-            self._session.apply_settings({
+            settings: dict[str, object] = {
                 "download_rate_limit": _limit(command.get("download_kib")),
                 "upload_rate_limit": _limit(command.get("upload_kib")),
-            })
+            }
+            # Optional, so a `set_limits` without it leaves port mapping as it is.
+            if "port_mapping" in command:
+                settings["enable_upnp"] = bool(command.get("port_mapping"))
+                settings["enable_natpmp"] = bool(command.get("port_mapping"))
+            self._session.apply_settings(settings)  # pyright: ignore[reportArgumentType]
         elif name in ("pause", "resume", "remove", "stop_seeding"):
             entry = self._entries.get(job_id)
             if entry is None:
