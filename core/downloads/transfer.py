@@ -123,8 +123,15 @@ def open_range(
     `open_request(headers)` sends the host's request with the extra headers.
     A 206 answer whose Content-Range starts at `offset` is the rest of the
     file; anything else (a plain 200) is closed and reported as unsupported.
+    HTTP 429 fails with the same rate-limit message as a full request.
     """
-    stream = open_request({"Range": f"bytes={offset}-"})
+    try:
+        stream = open_request({"Range": f"bytes={offset}-"})
+    except HTTPError as exc:
+        if exc.code == 429:
+            exc.close()
+            raise DownloadError("transfer quota or rate limit reached") from exc
+        raise
     status = cast(object, getattr(stream, "status", None))
     headers = cast(Mapping[str, str] | None, getattr(stream, "headers", None))
     content_range = str(headers.get("Content-Range", "") if headers is not None else "")
@@ -224,14 +231,16 @@ def transfer(
         if offset and info.resume_factory is not None:
             try:
                 stream = info.resume_factory(offset)
+            except DownloadError:
+                keep_part = True
+                raise
             except (OSError, http.client.HTTPException) as exc:
                 # Another 4xx (a 416 for a complete partial file, a 403)
                 # means the range will not work: start over, as before.
                 if isinstance(exc, HTTPError) and exc.code != 429 and exc.code < 500:
                     stream = None
                 else:
-                    # A timeout, a 429 or a 5xx is short: keep the partial
-                    # file so the retry continues it.
+                    # Keep the partial file for a retry after a raw request failure.
                     keep_part = True
                     raise DownloadError("network error") from exc
             if stream is None:

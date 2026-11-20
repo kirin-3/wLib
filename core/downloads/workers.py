@@ -179,7 +179,7 @@ class TorrentWorker:
         adopted: list[QueueJob] = []
         for snapshot in self._supervisor().status():
             job_id = str(snapshot.get("job_id") or "")
-            if not job_id or job_id in claimed:
+            if not job_id or job_id in claimed or snapshot.get("queue_removed"):
                 continue
             stage = snapshot.get("stage")
             error = str(snapshot.get("error") or "")

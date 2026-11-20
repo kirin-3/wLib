@@ -171,6 +171,7 @@ class _Job:
         self.peerless_since: float | None = time.monotonic()
         self.saved_at = 0.0
         self.installed = False
+        self.queue_removed = False
         self.payload: tuple[str, str] | None = None
         self.last_status_at: float | None = None
         self.seed_mode_note = ""
@@ -221,7 +222,7 @@ class _Job:
             "peers": self.peers, "upload_speed": self.upload_speed,
             "ratio": (self.uploaded / self.total) if self.total else 0.0,
             "seed_state": self.seed_state, "paused": self.paused, "payload_kind": payload_kind,
-            "installed": self.installed,
+            "installed": self.installed, "queue_removed": self.queue_removed,
             "ratio_target": torrent_settings.seed_ratio() or 0,
             "hint": self.hint(now), "eta": self.eta(),
             "auto_paused": self.auto_paused, "restarting": self.restarting,
@@ -585,6 +586,7 @@ class TorrentSupervisor:
             "phase": job.phase, "paused": job.paused, "error": job.error,
             "downloaded": job.bytes, "uploaded": job.uploaded,
             "seeding_seconds": job.seeding_seconds, "seed_state": job.seed_state, "installed": job.installed,
+            "queue_removed": job.queue_removed,
             "created": job.created, "updated": time.time(),
         }
         tmp = job.folder / "state.json.tmp"
@@ -837,13 +839,20 @@ class TorrentSupervisor:
         with self._lock:
             resolved = Path(path).resolve()
             self._open.discard(resolved)
-            if not installed:
-                return
-            for job in self._jobs.values():
-                if job.folder is not None and job.folder.resolve() in (resolved, *resolved.parents):
+            matching = [
+                job for job in self._jobs.values()
+                if job.folder is not None and job.folder.resolve() in (resolved, *resolved.parents)
+            ]
+            if installed:
+                for job in matching:
                     job.installed = True
                     self._save_state(job)
                     self._delete_if_unused(job)
+            # A job removed from the queue while the dialog held it goes now,
+            # unless it still seeds.
+            for job in matching:
+                if job.queue_removed and job.id in self._jobs:
+                    _ = self.discard(job.id)
 
     def is_seeding_path(self, path: str) -> bool:
         """Whether `path` belongs to a torrent that is still sharing its files."""
@@ -915,15 +924,18 @@ class TorrentSupervisor:
         self.apply_limits()
 
     def discard(self, job_id: str) -> bool:
-        """Forget a finished job and delete its folder, unless it still seeds."""
+        """Discard a finished torrent or record queue removal if it is still in use."""
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None or job.stage != "done":
                 return False
-            if job.seed_state in ("seeding", "awaiting_answer"):
-                return False
             folder = job.folder.resolve() if job.folder is not None else None
-            if folder is not None and any(p == folder or folder in p.parents for p in self._open):
+            if job.seed_state in ("seeding", "awaiting_answer") or (
+                folder is not None and any(p == folder or folder in p.parents for p in self._open)
+            ):
+                # Keep the torrent available to seeding or the install dialog.
+                job.queue_removed = True
+                self._save_state(job)
                 return False
             if job.added:
                 _ = self._send({"cmd": "remove", "id": job.id})
@@ -977,6 +989,7 @@ class TorrentSupervisor:
             job.seed_state = str(state.get("seed_state") or "")
             job.paused = bool(state.get("paused"))
             job.installed = bool(state.get("installed"))
+            job.queue_removed = bool(state.get("queue_removed"))
             phase = str(state.get("phase") or "")
             job.phase = phase
             if phase in ("downloading", "paused"):

@@ -664,10 +664,10 @@ class DownloadQueue:
         return True
 
     def start_now(self, job_id: str) -> str:
-        """Start a waiting or paused job at once (design: the yield rule).
+        """Give a waiting or paused job priority for a download slot.
 
         Returns "started", "yielded" (a running job gave up its slot),
-        or "first" (no job could give up its slot; this job is next).
+        or "first" (the selected job is next in line).
         """
         with self._lock:
             outcome = self._start_now(job_id)
@@ -695,10 +695,13 @@ class DownloadQueue:
         self._evaluate_holds()
         if self._hold_active():
             return "first"
-        running = sorted(self._running(), key=lambda item: item.started_at, reverse=True)
+        running = self._running()
+        if len(running) > self._max_active:
+            return "first"
         if len(running) < self._max_active:
             self._start(job, now)
             return "started"
+        running.sort(key=lambda item: item.started_at, reverse=True)
         victim = next((item for item in running if item.can_continue), None)
         if victim is None:
             return "first"
