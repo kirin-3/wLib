@@ -45,6 +45,16 @@ test("alias lines keep commas inside one title", () => {
   assert.deepEqual(parseAliasLines(" Hello, World \n\nOther\r\nHello, World"), ["Hello, World", "Other"]);
 });
 
+test("alias text still accepts a pasted JSON list", () => {
+  assert.deepEqual(parseAliasLines('["Hello, World", "Other", null, " Other "]'), ["Hello, World", "Other"]);
+  assert.deepEqual(parseAliasLines("[]"), []);
+});
+
+test("unchanged alias text preserves a saved title with an embedded line break", () => {
+  const savedAliases = ["First\nSecond", "Third"];
+  assert.deepEqual(parseAliasLines(savedAliases.join("\n"), savedAliases), savedAliases);
+});
+
 test("automatic tags come from the developer and the language", () => {
   assert.deepEqual(automaticTags({ developer: " DrPinkCake ", language: "English (MTL), Japanese" }), [
     "Developer: DrPinkCake",

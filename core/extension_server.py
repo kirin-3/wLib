@@ -303,8 +303,10 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 engine, flags = lewdcorner.prefix_details(prefixes)
                 payload["engine"] = engine
                 payload["thread_completed"] = flags.completed
-                payload["thread_onhold"] = flags.onhold
-                payload["thread_abandoned"] = flags.abandoned
+                # An empty list carries no page state to prefer over the catalog.
+                if prefixes:
+                    payload["thread_onhold"] = flags.onhold
+                    payload["thread_abandoned"] = flags.abandoned
             f95_id = extract_thread_id(payload["url"])
             entry = combined_thread_entry(
                 f95_thread_entries([f95_id]).get(f95_id, {}), resolved["catalog_entry"]

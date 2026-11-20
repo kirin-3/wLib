@@ -1296,6 +1296,54 @@ def test_extension_lc_check_open_add_wishlist_and_attach(monkeypatch, tmp_path, 
     assert status == 200 and auto_attach["attached"] and auto_attach["id"] == other
 
 
+@pytest.mark.parametrize(
+    ("prefixes", "expected_states", "from_catalog"),
+    [
+        ([], (0, 1), True),
+        ([None, ""], (0, 1), True),
+        (["On Hold"], (1, 0), False),
+        (["Abandoned"], (0, 1), False),
+        (["Ren'Py"], (0, 0), False),
+    ],
+)
+def test_extension_lc_wishlist_uses_catalog_when_page_has_no_prefixes(
+    monkeypatch, tmp_path, prefixes, expected_states, from_catalog
+):
+    import sqlite3
+
+    from catalog_server.store import CATALOG_SCHEMA
+    from core import database
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "wishlist.db"))
+    api = Api()
+    monkeypatch.setattr(api.cover_cache, "wake", lambda: None)
+    monkeypatch.setattr(server_module, "api_ref", api)
+    monkeypatch.setattr(server_module, "window_ref", None)
+    catalog_seen_at = "2025-01-01T00:00:00Z"
+    with closing(sqlite3.connect(tmp_path / "catalog.db")) as conn, conn:
+        conn.executescript(CATALOG_SCHEMA)
+        conn.execute(
+            "INSERT INTO lc_threads(thread_id,title,url,first_seen,last_seen,prefixes) "
+            "VALUES (98, 'Catalog game', '', ?, ?, ?)",
+            (catalog_seen_at, catalog_seen_at, json.dumps(["Abandoned"])),
+        )
+
+    body = json.dumps({
+        "url": "https://lewdcorner.com/threads/98/", "title": "Page title", "prefixes": prefixes,
+    }).encode()
+    handler = _make_extension_handler("/api/wishlist", headers={
+        "Origin": "chrome-extension://wlib", "Content-Length": str(len(body)),
+    })
+    handler.rfile = BytesIO(body)
+    handler.do_POST()
+
+    handler.send_response.assert_called_once_with(200)
+    game = database.get_game(_handler_reply(handler)["id"])
+    assert (game["thread_onhold"], game["thread_abandoned"]) == expected_states
+    assert game["thread_states_at"]
+    assert (game["thread_states_at"] == catalog_seen_at) is from_catalog
+
+
 class _ImageKeys:
     def __init__(self, urls):
         self.urls = urls

@@ -985,21 +985,26 @@ def _match_imported_game(
     f95_matches = index.by_thread.get(thread_match_key(f95_url), [])
     lc_matches = index.by_lc_thread.get(lc_id, [])
     thread_matches = {int(str(game["id"])) for game in (*f95_matches, *lc_matches)}
-    # The sync identity survives title and thread changes made on another
-    # device, so it decides before any metadata-based match, thread
-    # conflicts included.
+    thread_conflict = bool(f95_matches and lc_matches and len(thread_matches) > 1)
+    # Sync can resolve a thread conflict by UID. Manual imports still report
+    # it as ambiguous and skip the record.
     sync_uid = _sync_uid(imported_game.get("uid"))
-    if sync_uid:
+    if sync_uid and (sync or not thread_conflict):
         # Stored values are already lowercase hex (generated or validated).
         uid_matches = index.by_uid.get(sync_uid, [])
         if len(uid_matches) == 1:
-            return {
+            match: dict[str, object] = {
                 "status": "matched",
                 "game": imported_game,
                 "local_id": int(str(uid_matches[0].get("id", 0))),
                 "match_type": "sync_uid",
             }
-    if f95_matches and lc_matches and len(thread_matches) > 1:
+            if thread_conflict:
+                # A mirror must keep the other local thread owners even
+                # when the UID tells us which row to update.
+                match["candidate_ids"] = sorted(thread_matches)
+            return match
+    if thread_conflict:
         return {
             "status": "ambiguous", "game": imported_game, "title": title,
             "reason": "The F95 and LewdCorner threads match different local games.",

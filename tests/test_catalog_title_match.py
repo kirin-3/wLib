@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Strict LewdCorner↔F95 title matching."""
 
+import sqlite3
+from contextlib import closing
+
+import pytest
+
 from catalog_server.links import rebuild_links
 from catalog_server.store import CatalogStore
 from catalog_server.title_match import devkey, match_lc_f95, norm
@@ -12,22 +17,22 @@ def _catalog(tmp_path):
     return CatalogStore(str(tmp_path / "catalog.sqlite"))
 
 
-def _lc(catalog, thread_id, title, creator, ids=None):
+def _lc(catalog, thread_id, title, creator, ids=None, *, ts=1):
     catalog.upsert("lc_threads", "thread_id", [{
-        "thread_id": thread_id, "title": title, "creator": creator, "ts": 1,
+        "thread_id": thread_id, "title": title, "creator": creator, "ts": ts,
         "url": f"https://lewdcorner.com/threads/{thread_id}/",
     }], NOW)
     if ids is not None:
-        catalog.upsert_lc_details(thread_id, 1, NOW, {"status": "ok", "external_ids": ids})
+        catalog.upsert_lc_details(thread_id, ts, NOW, {"status": "ok", "external_ids": ids})
 
 
-def _f95(catalog, thread_id, title, creator, ids=None):
+def _f95(catalog, thread_id, title, creator, ids=None, *, ts=1):
     catalog.upsert("f95_threads", "thread_id", [{
-        "thread_id": thread_id, "title": title, "creator": creator, "ts": 1,
+        "thread_id": thread_id, "title": title, "creator": creator, "ts": ts,
         "url": f"https://f95zone.to/threads/{thread_id}/",
     }], NOW)
     if ids is not None:
-        catalog.upsert_f95_details(thread_id, 1, NOW, {"status": "ok", "external_ids": ids})
+        catalog.upsert_f95_details(thread_id, ts, NOW, {"status": "ok", "external_ids": ids})
 
 
 def _patreon(value):
@@ -78,6 +83,49 @@ def test_a_shared_patreon_id_links_different_developer_spellings(tmp_path):
     _lc(catalog, 1, "Dark Coven", "Nun Ya and Fallen Angel Productions", _patreon("u:5648613"))
     _f95(catalog, 2, "Dark Coven", "Nun Ya", _patreon("u:5648613"))
     assert match_lc_f95(catalog) == [(1, 2)]
+
+
+@pytest.mark.parametrize("source", ["lc", "f95"])
+@pytest.mark.parametrize("status", ["missing", "unreadable"])
+def test_a_failed_reread_cannot_link_a_renamed_thread_using_old_ids(tmp_path, source, status):
+    catalog = _catalog(tmp_path)
+    ids = _patreon("same")
+    _lc(catalog, 1, "New Title" if source == "f95" else "Old Title", "Dev A", ids)
+    _f95(catalog, 2, "New Title" if source == "lc" else "Old Title", "Dev B", ids)
+    assert rebuild_links(catalog) == 0
+
+    if source == "lc":
+        _lc(catalog, 1, "New Title", "Dev C", ts=2)
+        catalog.upsert_lc_details(1, 2, NOW, {"status": status})
+    else:
+        _f95(catalog, 2, "New Title", "Dev C", ts=2)
+        catalog.upsert_f95_details(2, 2, NOW, {"status": status})
+    assert rebuild_links(catalog) == 0
+
+    if source == "lc":
+        _lc(catalog, 1, "New Title", "Dev C", ids, ts=3)
+    else:
+        _f95(catalog, 2, "New Title", "Dev C", ids, ts=3)
+    assert rebuild_links(catalog) == 1
+
+
+def test_legacy_details_schema_supports_matching_and_migrates_on_open(tmp_path):
+    path = tmp_path / "catalog.sqlite"
+    ids = _patreon("same")
+    catalog = _catalog(tmp_path)
+    _lc(catalog, 1, "Game", "Dev A", ids)
+    _f95(catalog, 2, "Game", "Dev B", ids)
+    with catalog.conn:
+        catalog.conn.execute("ALTER TABLE lc_thread_details DROP COLUMN kept_after_failure")
+        catalog.conn.execute("ALTER TABLE f95_thread_details DROP COLUMN kept_after_failure")
+    catalog.conn.close()
+
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+        assert match_lc_f95(conn) == [(1, 2)]
+    catalog = CatalogStore(str(path))
+    assert match_lc_f95(catalog) == [(1, 2)]
+    catalog.upsert_f95_details(2, 2, NOW, {"status": "missing"})
+    assert match_lc_f95(catalog) == []
 
 
 def test_removed_threads_are_not_matched(tmp_path):

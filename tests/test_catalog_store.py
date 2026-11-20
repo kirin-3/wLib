@@ -368,15 +368,17 @@ def test_imported_or_refused_reads_are_marked_unread(tmp_path):
     catalog.upsert(
         "lc_threads", "thread_id",
         [_lc_row(1, 100, tier="Premium"), _lc_row(2, 100, tier="Premium"),
-         _lc_row(3, 100, tier="Premium")],
+         _lc_row(3, 100, tier="Premium"), _lc_row(4, 100, tier="Premium")],
         now,
     )
     catalog.import_lc_details({1: {"overview": "Atlas"}}, now)
     # Thread 1: imported details kept after a refused read. Thread 2: refused.
-    # Thread 3: read from LC's page.
+    # Thread 3: read from LC's page. Thread 4: a refused re-read.
     catalog.upsert_lc_details(1, 100, now, {"status": "missing"})
     catalog.upsert_lc_details(2, 100, now, {"status": "missing"})
     catalog.upsert_lc_details(3, 100, now, {"status": "ok"})
+    catalog.upsert_lc_details(4, 90, now, {"status": "ok", "overview": "LC text"})
+    catalog.upsert_lc_details(4, 100, now, {"status": "missing"})
     assert catalog.lc_details_queue(0, 10) == []
-    assert catalog.mark_lc_pages_unread([1, 2, 3]) == 2
-    assert catalog.lc_details_queue(10_000, 10) == [(1, 100), (2, 100)]
+    assert catalog.mark_lc_pages_unread([1, 2, 3, 4]) == 3
+    assert catalog.lc_details_queue(10_000, 10) == [(1, 100), (2, 100), (4, 100)]

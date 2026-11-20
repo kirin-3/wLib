@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS f95_prefix_names (
 );
 -- First-post details of F95 threads; `thread_ts` is the feed `ts` when the
 -- page was read, so a newer `ts` in f95_threads means the thread changed.
+-- `kept_after_failure` means this row's details came from an earlier read.
 CREATE TABLE IF NOT EXISTS f95_thread_details (
     thread_id INTEGER PRIMARY KEY,
     thread_ts INTEGER,
@@ -125,7 +126,8 @@ CREATE TABLE IF NOT EXISTS f95_thread_details (
     aliases TEXT NOT NULL DEFAULT '[]',
     language TEXT,
     languages TEXT NOT NULL DEFAULT '[]',
-    external_ids TEXT NOT NULL DEFAULT '{{}}'
+    external_ids TEXT NOT NULL DEFAULT '{{}}',
+    kept_after_failure INTEGER NOT NULL DEFAULT 0
 );
 -- LewdCorner threads from the latest-updates feed (or an Atlas import).
 -- `tier` is 'Premium' for a LewdCorner Plus thread and 'Free' otherwise.
@@ -172,7 +174,8 @@ CREATE TABLE IF NOT EXISTS lc_thread_details (
     languages TEXT NOT NULL DEFAULT '[]',
     os TEXT NOT NULL DEFAULT '[]',
     external_ids TEXT NOT NULL DEFAULT '{{}}',
-    origin TEXT
+    origin TEXT,
+    kept_after_failure INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -294,6 +297,12 @@ class CatalogStore:
         if "origin" not in lc_details:
             with self.conn:
                 _ = self.conn.execute("ALTER TABLE lc_thread_details ADD COLUMN origin TEXT")
+        with self.conn:
+            for table, columns in (("f95_thread_details", details), ("lc_thread_details", lc_details)):
+                if "kept_after_failure" not in columns:
+                    _ = self.conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN kept_after_failure INTEGER NOT NULL DEFAULT 0"
+                    )
         self.set_meta(META_SCHEMA_VERSION, str(SCHEMA_VERSION))
 
     def _add_origin_columns(self) -> None:
@@ -425,7 +434,7 @@ class CatalogStore:
         with self.conn:
             if details["status"] != "ok":
                 kept = self.conn.execute(
-                    "UPDATE f95_thread_details SET thread_ts = ?, fetched_at = ? "
+                    "UPDATE f95_thread_details SET thread_ts = ?, fetched_at = ?, kept_after_failure = 1 "
                     + "WHERE thread_id = ? AND status = 'ok'",
                     (thread_ts, now, thread_id),
                 )
@@ -516,7 +525,7 @@ class CatalogStore:
         if not wanted:
             return 0
         marks = ", ".join(["?"] * len(wanted))
-        condition = "" if any_status else " AND (origin = ? OR status != 'ok')"
+        condition = "" if any_status else " AND (origin = ? OR status != 'ok' OR kept_after_failure = 1)"
         with self.conn:
             return self.conn.execute(
                 f"UPDATE lc_thread_details SET thread_ts = NULL WHERE thread_id IN ({marks})"
@@ -553,7 +562,7 @@ class CatalogStore:
         """The writes of `upsert_lc_details`; the caller holds the transaction."""
         if details["status"] != "ok":
             kept = self.conn.execute(
-                "UPDATE lc_thread_details SET thread_ts = ?, fetched_at = ? "
+                "UPDATE lc_thread_details SET thread_ts = ?, fetched_at = ?, kept_after_failure = 1 "
                 + "WHERE thread_id = ? AND (origin = ? OR status = 'ok')",
                 (thread_ts, now, thread_id, IMPORT_ORIGIN),
             )

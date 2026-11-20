@@ -3922,25 +3922,52 @@ def test_conflicting_lc_and_f95_matches_are_ambiguous():
     assert {game["title"] for game in get_all_games()} == {"LC", "F95"}
 
 
-def test_sync_uid_match_wins_over_thread_conflict():
+def test_manual_backup_with_matching_uid_keeps_thread_conflict_ambiguous(tmp_path):
     lc_url = "https://lewdcorner.com/threads/21/"
     f95_url = "https://f95zone.to/threads/101/"
     lc_id = add_game("LC", "", lc_url=lc_url)
     add_game("F95", "", f95_url=f95_url)
+    before = get_all_games()
+    uid = next(game for game in before if game["id"] == lc_id)["sync_uid"]
+    backup = base_backup([{
+        "uid": uid,
+        "metadata": {"title": "Conflicting", "f95_url": f95_url, "lc_url": lc_url},
+    }])
+    path = write_backup(tmp_path / "conflicting.json", backup)
+
+    api = Api()
+    preview = api.inspect_library_backup(str(path))
+    assert preview["counts"]["ambiguous_games"] == 1
+    assert preview["counts"]["matched_games"] == 0
+    result = api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})
+    assert result["ambiguous"] == result["skipped"] == 1
+    assert get_all_games() == before
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+def test_sync_uid_match_wins_over_thread_conflict(mirror):
+    lc_url = "https://lewdcorner.com/threads/21/"
+    f95_url = "https://f95zone.to/threads/101/"
+    lc_id = add_game("LC", "", lc_url=lc_url)
+    f95_id = add_game("F95", "/games/f95/run.sh", f95_url=f95_url)
     uid = next(game for game in get_all_games() if game["id"] == lc_id)["sync_uid"]
     backup = base_backup([{
         "uid": uid,
         "metadata": {"title": "Synced", "f95_url": f95_url, "lc_url": lc_url},
     }])
-    result = apply_library_backup(backup, {"sections": [SECTION_METADATA]}, sync=True)
+    result = apply_library_backup(
+        backup, {"sections": [SECTION_METADATA]}, mirror=mirror, sync=True
+    )
     assert result["updated"] == 1
-    assert result["ambiguous"] == result["skipped"] == 0
+    assert result["ambiguous"] == result["skipped"] == result["deleted"] == 0
     games = {game["id"]: game for game in get_all_games()}
     assert len(games) == 2
     assert games[lc_id]["title"] == "Synced"
     assert games[lc_id]["lc_url"] == lc_url
     # The F95 thread stays with the game that already owns it.
     assert games[lc_id]["f95_url"] == ""
+    assert games[f95_id]["f95_url"] == f95_url
+    assert games[f95_id]["exe_path"] == "/games/f95/run.sh"
 
 
 def test_legacy_backup_restores_f95_latest_as_an_undated_version():

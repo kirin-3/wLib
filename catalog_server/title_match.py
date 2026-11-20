@@ -13,6 +13,7 @@ and creator, often copied from F95, so matching them would publish Atlas's
 own links. They still make a title non-unique but are never linked; once the
 feed lists such a thread, LC's own values replace Atlas's and it can match.
 For the same reason, developer IDs in details imported from Atlas never count.
+Details kept after a failed re-read also supply no matching evidence.
 """
 
 import json
@@ -87,6 +88,14 @@ def _by_title(rows: Iterable[tuple[object, ...]]) -> dict[str, list[_Row]]:
     return found
 
 
+def _kept_details_filter(conn: sqlite3.Connection, table: str) -> str:
+    # The comparison tool also opens older snapshots read-only.
+    has_flag = conn.execute(
+        "SELECT 1 FROM pragma_table_info(?) WHERE name = 'kept_after_failure'", (table,)
+    ).fetchone() is not None
+    return " AND d.kept_after_failure = 0" if has_flag else ""
+
+
 def match_lc_f95(catalog: CatalogStore | sqlite3.Connection) -> list[tuple[int, int]]:
     """`(lc thread id, f95 thread id)` pairs that pass the strict match."""
     conn = catalog if isinstance(catalog, sqlite3.Connection) else catalog.conn
@@ -94,15 +103,17 @@ def match_lc_f95(catalog: CatalogStore | sqlite3.Connection) -> list[tuple[int, 
         conn.execute(
             "SELECT t.thread_id, t.title, t.creator, d.external_ids, t.origin FROM lc_threads t "
             # Developer IDs imported from Atlas are not LC's own; never match on them.
-            + "LEFT JOIN lc_thread_details d ON d.thread_id = t.thread_id AND d.origin IS NULL "
-            + "WHERE t.removed_at IS NULL"
+            + "LEFT JOIN lc_thread_details d ON d.thread_id = t.thread_id AND d.origin IS NULL"
+            + _kept_details_filter(conn, "lc_thread_details")
+            + " WHERE t.removed_at IS NULL"
         )
     )
     f95 = _by_title(
         conn.execute(
             "SELECT t.thread_id, t.title, t.creator, d.external_ids, NULL FROM f95_threads t "
-            + "LEFT JOIN f95_thread_details d ON d.thread_id = t.thread_id "
-            + "WHERE t.removed_at IS NULL"
+            + "LEFT JOIN f95_thread_details d ON d.thread_id = t.thread_id"
+            + _kept_details_filter(conn, "f95_thread_details")
+            + " WHERE t.removed_at IS NULL"
         )
     )
     pairs: list[tuple[int, int]] = []

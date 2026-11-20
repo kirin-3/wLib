@@ -53,14 +53,29 @@ export const linkLabel = (url: string): string => {
 };
 
 // The Info tab edits aliases as one title per line; a title may hold commas.
-export const parseAliasLines = (text: string): string[] => [
-  ...new Set(
-    text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean),
-  ),
-];
+export const parseAliasLines = (text: string, savedAliases: readonly string[] = []): string[] => {
+  // A saved alias can itself contain a newline. Preserve the list if the field is unchanged.
+  if (text === savedAliases.join("\n")) return [...savedAliases];
+
+  let items: readonly unknown[] = text.split(/\r?\n/);
+  if (text.trimStart().startsWith("[")) {
+    try {
+      // The Info tab previously passed JSON arrays straight to the backend.
+      const decoded: unknown = JSON.parse(text);
+      if (Array.isArray(decoded)) items = decoded;
+    } catch {
+      // A title can also start with a bracket.
+    }
+  }
+  return [
+    ...new Set(
+      items
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
+};
 
 // The Info tab edits links as one URL per line.
 export const parseLinkLines = (text: string): string[] => [

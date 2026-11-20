@@ -1817,7 +1817,7 @@ const save = async () => {
       developer: developer.value.trim(),
       overview: overview.value.trim(),
       original_title: originalTitle.value.trim(),
-      aliases: parseAliasLines(aliasesText.value),
+      aliases: parseAliasLines(aliasesText.value, props.game.aliases),
       language: language.value.trim(),
       external_links: parseLinkLines(linksText.value),
       finished_version: finishedVersion.value,
