@@ -37,3 +37,32 @@ def test_second_launch_exits_when_focus_times_out_during_startup(
     focus.assert_called_once_with()
     bind.assert_called_once_with()
     setup_log.assert_called_once_with(str(tmp_path))
+
+
+@pytest.mark.parametrize("code", ["ENOLCK", "EOPNOTSUPP", "ENOSYS"])
+def test_data_folder_without_lock_support_still_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    import errno
+    import fcntl
+
+    def no_locks(_fd: int, _op: int) -> None:
+        raise OSError(getattr(errno, code), "locks not supported")
+
+    monkeypatch.setattr(fcntl, "flock", no_locks)
+    lock = main.acquire_instance_lock(str(tmp_path))
+    assert lock is not None
+    lock.close()
+
+
+def test_data_folder_held_by_another_copy_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import errno
+    import fcntl
+
+    def held(_fd: int, _op: int) -> None:
+        raise BlockingIOError(errno.EWOULDBLOCK, "held")
+
+    monkeypatch.setattr(fcntl, "flock", held)
+    assert main.acquire_instance_lock(str(tmp_path)) is None

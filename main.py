@@ -1221,6 +1221,11 @@ def acquire_instance_lock(path: str) -> IO[bytes] | None:
 
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BaseException as exc:
+        if isinstance(exc, OSError) and exc.errno in _NO_LOCK_SUPPORT and not is_windows():
+            # Some network and FUSE filesystems refuse file locks. Start
+            # without the lock; the extension port still stops a second copy.
+            print(f"[wLib] Data folder cannot be locked ({exc.strerror or exc}); continuing without the lock.")
+            return lock
         lock.close()
         if isinstance(exc, BlockingIOError) or (
             isinstance(exc, OSError) and exc.errno == errno.EACCES and is_windows()
@@ -1228,6 +1233,10 @@ def acquire_instance_lock(path: str) -> IO[bytes] | None:
             return None
         raise
     return lock
+
+
+# flock() errors that mean "this filesystem has no locks", not "already locked".
+_NO_LOCK_SUPPORT = frozenset({errno.ENOLCK, errno.EOPNOTSUPP, errno.ENOSYS})
 
 
 def main() -> None:
