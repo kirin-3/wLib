@@ -1712,6 +1712,20 @@ def _update_game_row(
     if not safe_fields:
         return
 
+    if "lc_url" in safe_fields:
+        row = cast(
+            sqlite3.Row | None,
+            cursor.execute(
+                "SELECT lc_url FROM games WHERE id = ? AND lc_thread_completed IS NOT NULL",
+                (game_id,),
+            ).fetchone(),
+        )
+        if row is not None:
+            old_thread = lewdcorner.extract_thread_id(cast(object, row["lc_url"]))
+            new_thread = lewdcorner.extract_thread_id(safe_fields["lc_url"])
+            if old_thread != new_thread:
+                safe_fields["lc_thread_completed"] = None
+
     set_clause = ", ".join(f"{key} = ?" for key in safe_fields)
     values = tuple(safe_fields.values()) + (game_id,)
     _ = cursor.execute(f"UPDATE games SET {set_clause} WHERE id = ?", values)

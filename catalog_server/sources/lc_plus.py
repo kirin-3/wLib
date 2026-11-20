@@ -284,15 +284,14 @@ class LcPlusSource:
         listing = self._fetch(ctx, node, page)
         total = listing.last_page
         if total is None:
-            # A forum with one page has no page links; a later page without
-            # them uses the stored total. A page 1 that is full or empty may
-            # only have lost its page links (a markup change, a bad answer):
-            # ending the sweep there would mark every later Premium row removed.
+            # Use the stored total when resuming. Without it, only a short,
+            # nonempty page can end the forum. A full or empty page may have
+            # lost its links, so ending there could mark unread rows removed.
             stored = ctx.state.get(self.name, "sweep_total_pages")
             if page > 1 and isinstance(stored, int) and stored > 0:
                 total = stored
-            elif page == 1 and 0 < len(listing.cards) + listing.skipped < PER_PAGE:
-                total = 1
+            elif 0 < len(listing.cards) + listing.skipped < PER_PAGE:
+                total = page
             else:
                 raise ValueError(f"LC forum {node} returned page {page} without page links")
         total = max(total, page)

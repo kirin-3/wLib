@@ -46,6 +46,7 @@
     let scheduled = false;
     let retryTimer = 0;
     let retryDelay = 5000;
+    const latestCheck = new WeakMap();
     const selector = 'article.lcCard[data-card-id]';
     const badgeSelector = '.wlib-library-badge';
     const addBadge = (tile, id) => {
@@ -66,12 +67,14 @@
     function scan() {
         scheduled = false;
         const tiles = new Map();
+        const check = Symbol();
         for (const tile of document.querySelectorAll(selector)) {
             const id = tile.dataset.cardId;
             if (!/^[1-9][0-9]*$/.test(id || '') || tile.dataset.wlibChecked === id) continue;
             if (!tiles.has(id)) tiles.set(id, []);
             tiles.get(id).push(tile);
             tile.dataset.wlibChecked = id;
+            latestCheck.set(tile, check);
             // A reused card keeps the badge of its old game; drop only that one.
             // The badge of the same game stays until the check answers.
             const badge = tile.querySelector(badgeSelector);
@@ -80,12 +83,16 @@
         if (!tiles.size) return;
         // A failed check unmarks its tiles so a later scan asks again.
         const failed = () => {
+            let shouldRetry = false;
             for (const [id, matchingTiles] of tiles) {
                 for (const tile of matchingTiles) {
-                    if (tile.dataset.wlibChecked === id) delete tile.dataset.wlibChecked;
+                    if (latestCheck.get(tile) === check && tile.dataset.wlibChecked === id) {
+                        delete tile.dataset.wlibChecked;
+                        shouldRetry = true;
+                    }
                 }
             }
-            if (!retryTimer) {
+            if (shouldRetry && !retryTimer) {
                 retryTimer = setTimeout(() => {
                     retryTimer = 0;
                     scan();
@@ -103,16 +110,17 @@
                 for (const [id, matchingTiles] of tiles) {
                     const inLibrary = Object.hasOwn(response.matches, threadUrl(id));
                     for (const tile of matchingTiles) {
-                        if (!tile.isConnected || tile.dataset.cardId !== id) continue;
+                        if (!tile.isConnected || tile.dataset.cardId !== id || latestCheck.get(tile) !== check) continue;
                         const badge = tile.querySelector(badgeSelector);
                         if (!inLibrary) badge?.remove();
                         else if (!badge) addBadge(tile, id);
                     }
                 }
             });
-        } catch {
-            // The extension may have been reloaded while the page was open.
-            failed();
+        } catch (error) {
+            // A reload can invalidate this page's extension context permanently.
+            if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage
+                && !/extension context invalidated/i.test(error?.message)) failed();
         }
     }
 

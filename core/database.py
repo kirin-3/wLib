@@ -2020,13 +2020,15 @@ def store_thread_update(
     states: ThreadStates | None = None,
     lc_states: ThreadStates | None = None,
     lc_completed: bool | None = None,
+    lc_completed_from_feed: bool = False,
     catalog_completed: bool = False,
 ) -> tuple[dict[str, object], bool, bool] | None:
     """Write the observation and winner together, if the thread still matches.
 
     `lc_completed` is an LC read's Completed prefix; None means the read had
     no live prefix data. False clears the Completed flag of an LC-only game;
-    for a game on both sites the next F95 page read decides.
+    for a game on both sites the next F95 page read decides. A negative flag
+    from a dated feed observation is ignored if that observation is too old.
 
     `catalog_completed` is the Completed flag of the catalog entry that gave
     `observation`. It counts as `completed` and `lc_completed` True, except
@@ -2065,6 +2067,8 @@ def store_thread_update(
             if keep_newer and at and stored_at > at and not same:
                 # The catalog's Completed flag came with this older version.
                 catalog_completed = False
+                if lc_completed_from_feed and lc_completed is False:
+                    lc_completed = None
             else:
                 fields[version_key] = version
                 # An undated read of this version takes the first date seen.

@@ -5200,6 +5200,20 @@ def test_lc_only_completion_clears_on_a_live_read_without_the_prefix(monkeypatch
     assert (game["thread_completed"], game["lc_thread_completed"]) == (0, 0)
 
 
+@pytest.mark.parametrize("has_f95", [False, True])
+def test_older_lc_feed_version_does_not_clear_completion(monkeypatch, has_f95):
+    api = Api()
+    f95_url = "https://f95zone.to/threads/9/" if has_f95 else ""
+    add_game("Game", "", f95_url, lc_url="https://lewdcorner.com/threads/1/", lc_mode="on")
+    game = _bulk_check(api, monkeypatch, [_lc_test_item(1, "1.2", 1794355200, "Completed")], f95_url)
+    assert game["thread_completed"] == 1
+
+    game = _bulk_check(api, monkeypatch, [_lc_test_item(1, "1.1", 1794268800, "Ren'Py")], f95_url)
+    assert game["lc_latest_version"] == "1.2"
+    assert game["thread_completed"] == 1
+    assert game["lc_thread_completed"] == 1
+
+
 def test_changing_the_lc_thread_forgets_its_completion(monkeypatch):
     api = Api()
     game_id = add_game("LC only", "", lc_url="https://lewdcorner.com/threads/1/")

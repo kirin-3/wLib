@@ -335,6 +335,21 @@ def test_the_real_budget_is_40_listing_pages_per_hour(tmp_path):
     assert ctx.state.get("lc_plus", "sweep_page") == 41
 
 
+def test_a_short_final_page_can_resume_without_a_saved_total(tmp_path):
+    pages = {(119, 2): _one_page("lc_plus_119_page1.html"),
+             (213, 1): _one_page("lc_plus_213_page1.html")}
+    transport = _listing_transport(pages)
+    ctx, _ = _context(tmp_path, transport)
+    ctx.state.put("lc_plus", "sweep_page", 2)
+
+    result = run_source(LcPlusSource(), ctx)
+
+    assert result.status == "ok", result.detail
+    assert result.sweep_completed
+    assert _requested(transport) == [(119, 2), (213, 1)]
+    assert _stored(ctx.catalog)[24724][4] == 119
+
+
 def test_an_empty_page_inside_the_listing_is_an_error(tmp_path):
     empty = re.sub(r'<div class="lcForumCards">.*</div>\s*</body>',
                    '<div class="lcForumCards"></div></body>',

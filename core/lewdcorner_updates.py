@@ -141,8 +141,10 @@ def check_thread(
     at = ""
     error: lc.LcUpdateError | None = None
     note: lc.LcUpdateError | None = None
+    lc_completed_from_feed = False
     if feed_item and actionable_remote_version(feed_item.version):
         version, at = feed_item.version, feed_item.at or database.utc_now_iso()
+        lc_completed_from_feed = bool(feed_item.at)
     elif (single or not catalog_usable and not stored_version) and available:
         try:
             response = _fetch(url)
@@ -195,7 +197,8 @@ def check_thread(
     lc_completed = True if completed else (False if flags is not None else None)
     saved = database.store_thread_update(
         game_id, "lc", url, observation, completed=completed, keep_newer=True,
-        states=states, lc_completed=lc_completed, catalog_completed=catalog_completed,
+        states=states, lc_completed=lc_completed, lc_completed_from_feed=lc_completed_from_feed,
+        catalog_completed=catalog_completed,
     )
     if saved is None:
         return CheckResult(error=error or lc.LcUpdateError("lc_extract_failed"))

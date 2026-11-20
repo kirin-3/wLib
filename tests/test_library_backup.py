@@ -21,6 +21,7 @@ from core.database import (
     init_db,
     list_game_launch_targets,
     set_game_collections,
+    store_thread_update,
     update_game,
     update_setting,
 )
@@ -1593,6 +1594,27 @@ def test_thread_completion_backup_round_trip_and_missing_field_preserves_local(
         "success"
     ]
     assert get_all_games()[0]["thread_completed"] == 1
+
+
+@pytest.mark.parametrize("sync", [False, True])
+def test_imported_lc_thread_change_forgets_old_completion_read(sync):
+    f95_url = "https://f95zone.to/threads/445/"
+    old_lc_url = "https://lewdcorner.com/threads/1/"
+    new_lc_url = "https://lewdcorner.com/threads/2/"
+    game_id = add_game("Game", "", f95_url, lc_url=old_lc_url, lc_mode="on")
+    assert game_id is not None
+    assert store_thread_update(game_id, "lc", old_lc_url, None, lc_completed=False)
+    backup = build_sync_backup("2026-11-20T00:00:00Z", "test-device")
+    metadata = backup["games"][0]["metadata"]
+    assert "lc_thread_completed" not in metadata
+    metadata.update(lc_url=new_lc_url, thread_completed=1)
+
+    assert apply_library_backup(backup, {"sections": [SECTION_METADATA]}, sync=sync)["updated"] == 1
+    _ = Api()._update_thread_edit_metadata_for_url(f95_url, {"thread_completed": False})
+    game, = get_all_games()
+    assert game["lc_url"] == new_lc_url
+    assert game["thread_completed"] == 1
+    assert game["lc_thread_completed"] is None
 
 
 def test_tags_user_edited_round_trip_and_missing_field_preserves_local(tmp_path):

@@ -31,8 +31,11 @@ export const answerPairingRequests = async (
     if (asked.has(request.id)) continue;
     asked.add(request.id);
     try {
-      const allow = await confirm(pairingQuestion(request));
-      await api.resolveExtensionPairing(request.id, allow);
+      // Another check may have answered this request since the first snapshot.
+      const current = (await api.getExtensionPairing()).pending?.find((entry) => entry.id === request.id);
+      if (!current) continue;
+      const allow = await confirm(pairingQuestion(current));
+      await api.resolveExtensionPairing(current.id, allow);
     } finally {
       // An expired or failed request can come back with the same code; ask again then.
       asked.delete(request.id);
