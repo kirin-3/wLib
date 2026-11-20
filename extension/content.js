@@ -716,11 +716,15 @@ async function injectUI(gameInfo) {
     sideBtn.addEventListener('click', () => updatePlacement({...placement, side: placement.side === 'left' ? 'right' : 'left'}));
     collapseBtn.addEventListener('click', () => updatePlacement({...placement, collapsed: true}));
     collapsedToggle.addEventListener('click', () => updatePlacement({...placement, collapsed: false}));
-    WLibWidgetPlacement.watch(next => {
+    const stopWatchingPlacement = WLibWidgetPlacement.watch(next => {
         if (next.side === placement.side && next.collapsed === placement.collapsed) return;
         placement = next;
         WLibWidgetPlacement.apply(container, placement);
     });
+    const removeWidget = () => {
+        stopWatchingPlacement();
+        container.remove();
+    };
 
     btn.addEventListener('click', () => {
         btn.disabled = true;
@@ -733,7 +737,7 @@ async function injectUI(gameInfo) {
                     btn.disabled = false;
                     return;
                 }
-                container.remove();
+                removeWidget();
                 void initThreadPageExtension();
             });
             return;
@@ -755,7 +759,7 @@ async function injectUI(gameInfo) {
                 statusEl.textContent = 'Brought wLib to front.';
                 setTimeout(() => {
                     container.style.opacity = '0';
-                    setTimeout(() => container.remove(), 300);
+                    setTimeout(removeWidget, 300);
                 }, 2000);
             });
         } else {
@@ -778,7 +782,7 @@ async function injectUI(gameInfo) {
                     statusEl.textContent = 'Game sent to wLib successfully.';
                     setTimeout(() => {
                         container.style.opacity = '0';
-                        setTimeout(() => container.remove(), 300);
+                        setTimeout(removeWidget, 300);
                     }, 3000);
                 } else {
                     statusEl.textContent = wlibResponseError(error, response);
@@ -812,7 +816,7 @@ async function injectUI(gameInfo) {
                     statusEl.textContent = 'Wishlisted';
                     setTimeout(() => {
                         container.style.opacity = '0';
-                        setTimeout(() => container.remove(), 300);
+                        setTimeout(removeWidget, 300);
                     }, 3000);
                 } else if (response?.error_code === 'duplicate_url') {
                     wishlistBtn.textContent = 'Already in wLib';

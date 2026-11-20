@@ -26,6 +26,7 @@ GAME_HOST = "game"
 RUFFLE_HOST = "ruffle"
 FLASH_PAGE = "__wlib_flash__.html"
 EXPORTS_DIR = "exports"
+_EXTERNAL_LINK_SCHEMES = ("http", "https", "mailto")
 USAGE = (
     "Usage: wlib --play-web --root <game dir> --entry <relative path> "
     "--profile <storage dir> --title <title> [--flash] [--offline] "
@@ -313,7 +314,7 @@ def classify_navigation(url: str, links: LinkMode, offline: bool = False) -> Nav
     scheme = parts.scheme.lower()
     if scheme in (SCHEME, "about", "blob", "data", "devtools", "qrc"):
         return "allow"
-    if scheme in ("http", "https", "mailto"):
+    if scheme in _EXTERNAL_LINK_SCHEMES:
         if offline or links == "ignore":
             return "drop"
         return "open"
@@ -341,8 +342,8 @@ def host_open_env(env: dict[str, str]) -> dict[str, str]:
 
 
 def open_url_on_host(url: str) -> bool:
-    """Hand an http(s) URL to the system browser; return whether an opener started."""
-    if urlsplit(url).scheme.lower() not in ("http", "https"):
+    """Hand a web or email URL to its system handler and report whether an opener started."""
+    if urlsplit(url).scheme.lower() not in _EXTERNAL_LINK_SCHEMES:
         return False
     return _open_system_target(url)
 

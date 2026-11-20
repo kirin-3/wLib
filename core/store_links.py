@@ -4,7 +4,7 @@
 import re
 from collections.abc import Mapping, Sequence
 from typing import TypedDict, cast
-from urllib.parse import parse_qs, urlsplit, urlunsplit
+from urllib.parse import parse_qs, parse_qsl, urlsplit, urlunsplit
 
 
 from core import lewdcorner
@@ -99,21 +99,18 @@ def parse_store_link(url: str) -> StoreLink | None:
         # carry a cid query or path segment without identifying a work.
         if not re.search(r"/detail(?:/|$)", path, re.I):
             return None
-        match = re.search(
-            r"(?:^|[/?&])cid=([a-z_0-9]+)(?:/|&|$)",
-            path + ("?" + parts.query if parts.query else ""),
-            re.I,
-        )
+        match = re.search(r"/cid=([a-z_0-9]+)(?:/|$)", path, re.I | re.ASCII)
         if not match:
+            for key, value in parse_qsl(parts.query):
+                if key.lower() == "cid" and re.fullmatch(r"[a-z_0-9]+", value, re.I | re.ASCII):
+                    identity = value.lower()
+                    # Query-form product links need their cid to remain navigable.
+                    clean_url = urlunsplit((scheme, netloc, path, f"cid={identity}", ""))
+                    return {"source": "fanza", "id": identity, "url": clean_url}
             match = re.search(r"/detail/([a-z_0-9]+)(?:/|$)", path, re.I)
         if not match:
             return None
         source, identity = "fanza", match[1].lower()
-        # DMM query-form product links need their cid to remain navigable.
-        if "cid" in parse_qs(parts.query):
-            clean_url = urlunsplit(
-                (parts.scheme.lower(), netloc, path, f"cid={identity}", "")
-            )
     elif host in {"vndb.org", "www.vndb.org"}:
         match = re.fullmatch(r"/(v\d+)/?", path, re.I)
         if not match:

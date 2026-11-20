@@ -15,19 +15,27 @@ const selected = ref(new Set<string>());
 const scanned = ref(false);
 const scanning = ref(false);
 const importing = ref(false);
+let scanToken = 0;
 
 const newGames = computed(() => games.value.filter((game) => !game.in_library));
 const selectedGames = computed(() =>
   games.value.filter((game) => selected.value.has(game.exe_path)),
 );
 
-const resetState = () => {
+const resetScan = () => {
   scanToken++;
   scanning.value = false;
-  folder.value = "";
   games.value = [];
   selected.value = new Set();
   scanned.value = false;
+};
+
+// Invalidate the old scan before Browse or Enter can start one for the new path.
+watch(() => folder.value.trim(), resetScan, { flush: "sync" });
+
+const resetState = () => {
+  folder.value = "";
+  resetScan();
 };
 
 watch(
@@ -48,18 +56,13 @@ const close = () => {
 const modalRef = useTemplateRef<HTMLElement>("modalRef");
 useModalKeyboard(modalRef, () => isOpen.value, close);
 
-// A newer scan (another folder picked mid-scan) replaces the older one.
-let scanToken = 0;
-
 const scan = async () => {
   const path = folder.value.trim();
   if (!path) return;
-  const token = ++scanToken;
+  resetScan();
+  const token = scanToken;
   const current = () => token === scanToken && isOpen.value;
   scanning.value = true;
-  games.value = [];
-  selected.value = new Set();
-  scanned.value = false;
   try {
     const result = await api.scanGamesFolder(path);
     if (!current()) return;

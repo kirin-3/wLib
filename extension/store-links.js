@@ -26,10 +26,19 @@
             source = 'itch'; id = `${creator}/${match[1].toLowerCase()}`;
         } else if (['dmm.co.jp','dmm.com','fanza.com'].some(domain => host === domain || host.endsWith('.' + domain))) {
             if (!/\/detail(?:\/|$)/i.test(path)) return null;
-            match = (path + (query.size ? '?' + query.toString() : '')).match(/(?:^|[/?&])cid=([a-z_0-9]+)(?:\/|&|$)/i) || path.match(/\/detail\/([a-z_0-9]+)(?:\/|$)/i);
+            match = path.match(/\/cid=([a-z_0-9]+)(?:\/|$)/i);
+            if (!match) {
+                for (const [key, value] of query) {
+                    if (key.toLowerCase() === 'cid' && /^[a-z_0-9]+$/i.test(value)) {
+                        id = value.toLowerCase();
+                        url.search = `?cid=${id}`;
+                        return {source:'fanza',id,url:url.href};
+                    }
+                }
+                match = path.match(/\/detail\/([a-z_0-9]+)(?:\/|$)/i);
+            }
             if (!match) return null;
             source = 'fanza'; id = match[1].toLowerCase();
-            if (query.has('cid')) url.search = `?cid=${id}`;
         } else if (['vndb.org','www.vndb.org'].includes(host)) {
             match = path.match(/^\/(v\d+)\/?$/i);
             if (!match) return null;

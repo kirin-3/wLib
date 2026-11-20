@@ -7,6 +7,7 @@ import struct
 
 MAX_CANVAS = 1 << 24  # 24-bit size fields hold width-1 and height-1
 MAX_DURATION = (1 << 24) - 1
+MAX_LOOP_COUNT = (1 << 16) - 1
 
 
 def _chunks(data: bytes) -> list[tuple[bytes, bytes]]:
@@ -67,12 +68,13 @@ def mux_animated_webp(
 ) -> bytes:
     """Build an animated WebP from full-canvas single-frame WebP byte strings.
 
-    loop_count 0 loops forever. Each frame covers the whole canvas."""
+    loop_count counts total plays, with 0 meaning infinite playback.
+    Each frame covers the whole canvas."""
     if not frames or len(frames) != len(delays_ms):
         raise ValueError("Frames and delays must match and not be empty")
     if not (0 < width <= MAX_CANVAS and 0 < height <= MAX_CANVAS):
         raise ValueError("Invalid canvas size")
-    if not 0 <= loop_count <= 0xFFFF:
+    if not 0 <= loop_count <= MAX_LOOP_COUNT:
         raise ValueError("Invalid loop count")
     body = bytearray()
     any_alpha = False

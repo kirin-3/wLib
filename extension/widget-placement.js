@@ -23,11 +23,21 @@
         } catch (error) { console.warn('wLib placement:', error); }
     }
     function watch(callback) {
+        const listener = (changes, area) => {
+            if (area === 'local' && Object.hasOwn(changes, key)) callback(normalize(changes[key].newValue));
+        };
         try {
-            chrome.storage.onChanged.addListener((changes, area) => {
-                if (area === 'local' && Object.hasOwn(changes, key)) callback(normalize(changes[key].newValue));
-            });
-        } catch (_error) { /* Storage may be unavailable. */ }
+            const onChanged = chrome.storage.onChanged;
+            onChanged.addListener(listener);
+            return () => {
+                try {
+                    onChanged.removeListener(listener);
+                } catch (_error) { /* The extension context may have been invalidated. */ }
+            };
+        } catch (_error) {
+            // Storage may be unavailable.
+            return () => {};
+        }
     }
     function apply(container, value, {animate = true} = {}) {
         const state = normalize(value);

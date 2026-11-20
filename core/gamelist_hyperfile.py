@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from struct import unpack_from
+from unicodedata import category
 
 from core.backup_format import BackupValidationError
 
@@ -56,7 +57,11 @@ def _wide_text(data: bytes) -> str:
     # terminator may be stale, including malformed code units.
     end = next((i for i in range(0, len(data), 2) if data[i:i + 2] == b"\0\0"), len(data))
     value = data[:end].decode("utf-16-le")
-    if end == len(data) or any(not char.isprintable() or char == "\ufffd" for char in value):
+    # isprintable() excludes Unicode space separators such as non-breaking spaces.
+    if end == len(data) or any(
+        char == "\ufffd" or (not char.isprintable() and category(char) != "Zs")
+        for char in value
+    ):
         raise ValueError("Invalid Game-List text")
     return value.strip()
 

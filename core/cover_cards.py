@@ -20,7 +20,7 @@ from collections.abc import Callable
 
 from core import database
 from core.game_covers import cache_covers_dir, child_file, child_in_folder, covers_dir
-from core.webp_anim import mux_animated_webp
+from core.webp_anim import MAX_LOOP_COUNT, mux_animated_webp
 
 if TYPE_CHECKING:
     from PyQt6.QtGui import QImage, QImageReader
@@ -263,8 +263,9 @@ def make_card_copies(source_path: str | Path) -> tuple[bool, bool]:
                     total += len(frames[-1])
                     if total > MAX_OUTPUT_BYTES:
                         raise ValueError("animation too large")
-                loops = reader.loopCount()
-                loop_count = 0 if loops < 0 else max(1, loops)
+                repeats = reader.loopCount()
+                # Qt counts repeats after the first play. WebP counts total plays.
+                loop_count = 0 if repeats < 0 else min(repeats + 1, MAX_LOOP_COUNT)
                 animated = mux_animated_webp(frames, delays, target_w, target_h, loop_count)
                 if len(animated) > MAX_OUTPUT_BYTES:
                     animated = None

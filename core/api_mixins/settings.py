@@ -593,6 +593,8 @@ class SettingsMixin(ApiBase):
                 if "custom_play_statuses" in settings_map
                 else None,
             )
+            if "html_builtin_player" in pending:
+                self._schedule_steam_sync()
             if fill_lc or lc_changed:
                 threading.Thread(
                     target=self._apply_lc_setting_change, kwargs={"turned_on": fill_lc}, daemon=True

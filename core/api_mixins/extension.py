@@ -57,6 +57,24 @@ class ExtensionMixin(ApiBase):
                     archive_name = os.path.relpath(file_path, source_dir)
                     xpi.write(file_path, archive_name)
 
+    def _read_firefox_xpi_version(self, path: str) -> str:
+        import json
+        import zipfile
+        import zlib
+
+        try:
+            with zipfile.ZipFile(path) as xpi:
+                manifest = self._coerce_string_key_dict(
+                    cast(object, json.loads(xpi.read("manifest.json")))
+                )
+        except (
+            OSError, ValueError, KeyError, RuntimeError, zipfile.BadZipFile, zlib.error
+        ):
+            return ""
+
+        version = manifest.get("version") if manifest is not None else None
+        return version.strip() if isinstance(version, str) else ""
+
     @staticmethod
     def _make_tree_owner_writable(path: str) -> None:
         # Copies from a read-only install (the Nix store) keep its 0444/0555
@@ -141,6 +159,15 @@ class ExtensionMixin(ApiBase):
                     ):
                         needs_copy = True
                         reason = "signed-firefox-xpi-changed"
+                elif not needs_copy and bundled_version:
+                    # Chromium may already have been swapped when a previous
+                    # sync stopped before replacing the local Firefox XPI.
+                    firefox_version = self._read_firefox_xpi_version(
+                        installed_firefox_xpi
+                    )
+                    if firefox_version and firefox_version != bundled_version:
+                        needs_copy = True
+                        reason = "firefox-version-changed"
 
             if needs_copy and os.path.isdir(bundled_ext_dir):
                 os.makedirs(persistent_ext_dir, exist_ok=True)

@@ -238,7 +238,7 @@ Keep it that way:
 
 ## Import Folder
 
-`LibraryView.vue` opens `components/modals/ImportFolderModal.vue` from **Import folder** in the **Add game** menu, next to **Install from archive**. The modal scans a folder with `api.scanGamesFolder(path)`, lists games already in the library separately and disables their checkboxes, and selects every new game by default. The folder input uses `PathStatus` (`dir`) and Enter starts a scan.
+`LibraryView.vue` opens `components/modals/ImportFolderModal.vue` from **Import folder** in the **Add game** menu, next to **Install from archive**. The modal scans a folder with `api.scanGamesFolder(path)`, lists games already in the library separately and disables their checkboxes, and selects every new game by default. The folder input uses `PathStatus` (`dir`) and Enter starts a scan. Changing the folder path clears the results and invalidates any scan still in progress.
 
 `api.importGames(games)` calls `add_game` once per selected row and dispatches `wlib-refresh-library` after any success, so the library refreshes once instead of per game. Titles, versions, and engines are guesses from `core/game_scan.py`; the modal explains that users should check them after importing. Browser mocks use a small fixed scan result.
 
