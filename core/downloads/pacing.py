@@ -91,6 +91,12 @@ class SpeedLimiter:
                     return True
                 wait = min(-self._tokens / self._rate, MAX_WAIT_SECONDS)
             if self._sleep(wait, interrupt) or interrupt.is_set():
+                # Nothing was read: give the allowance back, so the next
+                # read (this transfer's resume or another) does not pay twice.
+                with self._lock:
+                    self._refill()
+                    if self._rate > 0:
+                        self._tokens = min(self._tokens + amount, self._rate * BURST_SECONDS)
                 return False
 
 
@@ -106,7 +112,10 @@ def split_limit(
     A side alone gets everything. Otherwise the shares follow the number of
     running jobs, and a side that used under 80% of its share (averaged over
     the last two ticks) gives the surplus to the other, keeping a 10% floor.
-    0 means unlimited for both.
+    0 means unlimited for both. When both sides run, each gets at least
+    1 KiB/s, because the torrent helper cannot go lower; at a 1 KiB/s limit
+    torrents get all of it and file hosts get 0 (the host worker then sets
+    the smallest rate the token bucket has).
     """
     if limit_kib <= 0:
         return 0, 0
@@ -117,7 +126,10 @@ def split_limit(
     if not host_running and not torrent_running:
         half = limit_kib // 2
         return limit_kib - half, half
+    if limit_kib == 1:
+        return 0, 1
     host = round(limit_kib * host_running / (host_running + torrent_running))
+    host = min(max(host, 1), limit_kib - 1)
     torrent = limit_kib - host
     floor = max(1, math.ceil(limit_kib * FLOOR))
     host_under = host_used_kib is not None and host_used_kib < UNDERUSE * host

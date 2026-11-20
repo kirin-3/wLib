@@ -1270,6 +1270,9 @@ class ApiBase:
         _ = self._fill_lc_threads_from_catalog()
         _ = self._fill_ratings_from_catalog()
         _ = self._fill_thread_details_from_catalog()
+        # In Auto, an extension that connected before the first catalog held
+        # LC threads found nothing to read; check again now.
+        self._start_lc_plus_detection("connect")
 
     def _start_lc_plus_detection(self, trigger: Literal["settings", "connect", "check_now"]) -> None:
         from core import lewdcorner_plus

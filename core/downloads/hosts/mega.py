@@ -59,6 +59,12 @@ def parse_link(url: str) -> tuple[str, bytes]:
     return file_id, raw
 
 
+def is_folder_link(url: str) -> bool:
+    """A MEGA folder share (/folder/ or legacy #F!); this adapter only downloads files."""
+    parsed = urlsplit(url)
+    return parsed.path.startswith('/folder/') or parsed.fragment.startswith('F!')
+
+
 def matches(url: str) -> bool:
     try:
         _ = parse_link(url)

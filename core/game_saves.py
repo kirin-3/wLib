@@ -11,6 +11,7 @@ import glob
 import os
 import re
 import shutil
+import stat
 import tempfile
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
@@ -762,6 +763,24 @@ def _scan_tree(root: str) -> _Tree:
     return tree
 
 
+def _file_list(folder: str, names: Sequence[str]) -> _Tree:
+    """A tree of the regular files `names` directly in `folder`."""
+    tree = _Tree()
+    for name in names:
+        if not name or os.path.basename(name) != name or name in (".", ".."):
+            continue
+        full = os.path.join(folder, name)
+        st = os.lstat(full) if os.path.lexists(full) else None
+        if st is None:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            tree.skipped_links += 1
+            continue
+        tree.files.append(name)
+        tree.bytes += st.st_size
+    return tree
+
+
 def _copy_tree(
     source: str, destination: str, tree: _Tree, *, touch: bool = False
 ) -> None:
@@ -831,8 +850,12 @@ def backup_saves(
     *,
     protect: Collection[str] = (),
     now: datetime | None = None,
+    files: Sequence[str] | None = None,
 ) -> BackupInfo:
     """Copy `saves_dir` into a new timestamped backup folder, then prune.
+
+    With `files` (names directly in `saves_dir`), only those regular files
+    are copied: loose saves next to a game's executable, without the game.
 
     The copy lands in a `.partial` sibling and is renamed into place, so an
     interrupted or failed backup never looks like a real one.
@@ -851,7 +874,7 @@ def backup_saves(
         )
 
     try:
-        tree = _scan_tree(saves_dir)
+        tree = _scan_tree(saves_dir) if files is None else _file_list(saves_dir, files)
     except OSError as exc:
         raise GameSavesError(
             f"Backup failed: part of the saves folder cannot be read: {exc}"

@@ -3169,16 +3169,16 @@ def test_scratch_copy_honours_cancel(tmp_path, monkeypatch):
 
     real_copy = ai.copy_tree_parallel
 
-    def copy_then_cancel(src, dst, workers, cancel_arg=None, on_bytes=None):
+    def copy_then_cancel(src, dst, workers, cancel_arg=None, on_bytes=None, **kwargs):
         assert cancel_arg is cancel
         cancel.set()
-        return real_copy(src, dst, workers, cancel_arg, on_bytes)
+        return real_copy(src, dst, workers, cancel_arg, on_bytes, **kwargs)
 
     monkeypatch.setattr(ai, "extract_with_tool", fake_extract)
     monkeypatch.setattr(ai, "copy_tree_parallel", copy_then_cancel)
     with pytest.raises(ai.InstallCancelled):
         ai._extract_tool_via_local_scratch(
-            lambda dest: ai.extract_with_tool("7z", str(archive), dest, cancel),
+            lambda dest, _stop: ai.extract_with_tool("7z", str(archive), dest, cancel),
             str(archive),
             str(staging),
             1,

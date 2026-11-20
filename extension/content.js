@@ -446,7 +446,7 @@ function extractGameInfo() {
                 const leadingBracket = fullTitleText.match(/^\[([^\]]+)\]\s*/);
                 if (!leadingBracket) break;
                 const innerBracket = leadingBracket[1].trim();
-                if (/^v?(?:er(?:sion)?\.?\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)$/i.test(innerBracket)) break;
+                if (/^v?(?:er(?:sion)?\.?\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix|hotfix)(?:\s*\d+(?:\.\d+)*)?)?)$/i.test(innerBracket)) break;
                 if (/^(Ch(?:apter|\.)?\s*\d+(?:\.\d+)?(?:\s*v[\d.]+[a-zA-Z]?)?|Ep(?:isode|\.)?\s*\d+(?:\.\d+)?|S\d+\s*E\d+|Part\s*\d+)/i.test(innerBracket)) break;
                 fullTitleText = fullTitleText.slice(leadingBracket[0].length);
             }
@@ -454,7 +454,7 @@ function extractGameInfo() {
             const bracketedVersions = [...fullTitleText.matchAll(/\[([^\]]*)\]/g)];
             for (const m of bracketedVersions) {
                 const inner = m[1].trim();
-                if (/^v?(?:er(?:sion)?\.?\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)$/i.test(inner)) {
+                if (/^v?(?:er(?:sion)?\.?\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix|hotfix)(?:\s*\d+(?:\.\d+)*)?)?)$/i.test(inner)) {
                     info.version = inner.replace(/^v(?:er(?:sion)?\.?\s*)?/i, '').trim();
                     fullTitleText = fullTitleText.replace(m[0], '');
                     break;
@@ -503,7 +503,7 @@ function extractGameInfo() {
                     /<b>\s*Ver(?:\.|sion)?\s*<\/b>\s*:?\s*v?([^<\n]+)/i,
                 ];
                 // Same as _POST_VERSION_RE in core/scraper.py.
-                const postVersion = String.raw`\d[^\s,;<]*(?:\s+(?:beta|alpha|final|fix\d*|hotfix)\b)?`;
+                const postVersion = String.raw`\d[^\s,;<]*(?:\s+(?:beta|alpha|final|fix|hotfix)(?:\s*\d+(?:\.\d+)*)?\b)?`;
                 // Same as _trim_post_version in core/scraper.py.
                 const trimPostVersion = (token) => {
                     let value = token.trim();

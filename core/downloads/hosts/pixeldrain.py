@@ -34,6 +34,11 @@ def _id(url: str) -> str:
     return match.group(1) if match else ""
 
 
+def is_file_link(url: str) -> bool:
+    """A single-file /u/ link, the only kind this adapter downloads."""
+    return bool(_id(url))
+
+
 def matches(url: str) -> bool:
     return bool(re.fullmatch(r"/(?:u|d)/[a-zA-Z0-9_-]+(?:/.*)?", _path(url)))
 

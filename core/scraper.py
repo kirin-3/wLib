@@ -42,7 +42,7 @@ class _F95RequestError(Exception):
 
 
 _BRACKETED_VERSION_RE = re.compile(
-    r"^v?(?:er(?:sion)?\.?\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)$",
+    r"^v?(?:er(?:sion)?\.?\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix|hotfix)(?:\s*\d+(?:\.\d+)*)?)?)$",
     re.I,
 )
 _CHAPTER_VERSION_RE = re.compile(
@@ -84,7 +84,7 @@ def get_request_interval_seconds() -> int:
 # suffixes ("1.0.0-beta", "0.5_public") stay in the token. Mirrored in
 # extension/content.js.
 _POST_VERSION_RE = re.compile(
-    r"\d[^\s,;<]*(?:\s+(?:beta|alpha|final|fix\d*|hotfix)\b)?", re.I
+    r"\d[^\s,;<]*(?:\s+(?:beta|alpha|final|fix|hotfix)(?:\s*\d+(?:\.\d+)*)?\b)?", re.I
 )
 
 
@@ -1220,6 +1220,9 @@ def fetch_thread_download_links(f95_url: str, site: lewdcorner.Site = "f95") -> 
         status, html = _f95_get_via_extension(f"https://f95zone.to/threads/{thread_id}/")
     except (extension_bridge.BridgeFailed, extension_bridge.BridgeUnavailable):
         return {"success": False, "code": "extension_unavailable", "error": "Open a browser with the wLib extension and try again"}
+    except _F95RequestError as exc:
+        # The 429 cooldown refuses the request before the extension sees it.
+        return {"success": False, "code": exc.code, "error": str(exc)}
     scraper = Scraper()
     issue = scraper._classify_page_issue(status, scraper._page_title(html), html)  # pyright: ignore[reportPrivateUsage]
     if issue:

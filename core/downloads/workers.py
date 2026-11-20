@@ -371,7 +371,12 @@ class HostWorker:
         return []
 
     def set_speed_share(self, kib: int, limited: bool) -> None:
-        self._manager.set_rate((max(kib, 1) * 1024) if limited else 0)
+        if not limited:
+            self._manager.set_rate(0)
+            return
+        # 0 means unlimited to the token bucket; a side with no share gets
+        # 1 byte/s, so the shares still add up to the limit.
+        self._manager.set_rate(kib * 1024 if kib > 0 else 1)
 
     def cleanup(self, jobs: list[QueueJob]) -> None:
         keep = [str(job.source.get("part_file") or "") for job in jobs if job.state != READY]

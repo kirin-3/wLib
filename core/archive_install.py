@@ -74,6 +74,8 @@ SCRATCH_RESERVE_BYTES = 1024**3
 # Without a listed size, assume an archive unpacks to at most this many times
 # its own size before trusting local disk with it.
 SCRATCH_UNKNOWN_SIZE_FACTOR = 4
+# How often a scratch extraction checks that local disk still has the reserve.
+SCRATCH_WATCH_SECONDS = 0.25
 BUNDLED_7ZZ = "/app/bin/7zz"
 
 # Network filesystems pay a server round trip (and, with sync exports, a disk
@@ -712,6 +714,8 @@ def copy_tree_parallel(
     workers: int,
     cancel: threading.Event | None = None,
     on_bytes: Callable[[int], None] | None = None,
+    *,
+    hard_links: bool = False,
 ) -> int:
     """Copy an extracted tree into an existing empty folder.
 
@@ -722,9 +726,16 @@ def copy_tree_parallel(
 
     `on_bytes(n)`, when given, is called from the worker threads after each
     chunk is written, with the size of that chunk.
+
+    With `hard_links`, names in the tree that share one file are linked again
+    in the copy, as direct extraction would leave them, so the copy takes no
+    more room than the source. A name that cannot be linked is copied.
     """
     dirs: list[str] = []
     files: list[str] = []
+    # Later names of a hard-linked file -> the first name, which is copied.
+    linked: list[tuple[str, str]] = []
+    first_names: dict[tuple[int, int], str] = {}
 
     def _walk_failed(exc: OSError) -> None:
         # A folder that cannot be listed would arrive empty; a move then
@@ -740,7 +751,16 @@ def copy_tree_parallel(
                 files.append(os.path.join(rel_root, d))
             else:
                 dirs.append(os.path.join(rel_root, d))
-        files.extend(os.path.join(rel_root, f) for f in filenames)
+        for f in filenames:
+            rel = os.path.join(rel_root, f)
+            if hard_links:
+                st = os.lstat(os.path.join(root, f))
+                if stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+                    first = first_names.setdefault((st.st_dev, st.st_ino), rel)
+                    if first != rel:
+                        linked.append((rel, first))
+                        continue
+            files.append(rel)
     for rel in dirs:  # os.walk is top-down, so parents come first
         mode = stat.S_IMODE(os.lstat(os.path.join(src_root, rel)).st_mode)
         os.mkdir(os.path.join(dst_root, rel), mode | stat.S_IRWXU)
@@ -781,6 +801,12 @@ def copy_tree_parallel(
                 pass
 
     _run_parallel(_copy, _interleave_by_folder(files, key=lambda r: r), workers)
+    for rel, first in linked:
+        _check_cancel(cancel)
+        try:
+            os.link(os.path.join(dst_root, first), os.path.join(dst_root, rel))
+        except OSError:
+            _copy(rel)  # the share cannot store hard links
     # Folder times last: creating their entries above bumped them.
     for rel in reversed(dirs):
         st = os.lstat(os.path.join(src_root, rel))
@@ -788,7 +814,7 @@ def copy_tree_parallel(
             os.utime(os.path.join(dst_root, rel), ns=(st.st_atime_ns, st.st_mtime_ns))
         except OSError:
             pass
-    return len(files)
+    return len(files) + len(linked)
 
 
 _trash_lock = threading.Lock()
@@ -898,25 +924,36 @@ def _sweep_stale_scratch(parent: str) -> None:
         except OSError:
             continue
         if stale:
-            shutil.rmtree(old, ignore_errors=True)
+            cleanup_staging_dir(old)
+
+
+def _scratch_free_bytes(parent: str) -> int | None:
+    try:
+        return shutil.disk_usage(parent).free
+    except OSError:
+        return None
 
 
 def _extract_tool_via_local_scratch(
-    extract: Callable[[str], object],
+    extract: Callable[[str, threading.Event], object],
     archive_path: str,
     staging: str,
     workers: int,
     required_bytes: int | None,
     cancel: threading.Event | None = None,
 ) -> bool:
-    """Run `extract(folder)` into local scratch, then copy into staging.
+    """Run `extract(folder, stop)` into local scratch, then copy into staging.
 
     Used for the extractors that write one file at a time (7-Zip, unrar and
-    tarfile), which are slow on a network share.
+    tarfile), which are slow on a network share. `extract` must stop with
+    InstallCancelled when `stop` is set.
 
     Returns False without extracting when local disk can't hold the archive;
     the caller then extracts straight into staging. An archive whose unpacked
-    size is unknown is budgeted at a multiple of its own size.
+    size is unknown is budgeted at a multiple of its own size. That budget
+    is only a guess, so extraction is stopped when local disk falls below
+    the reserve (or fills up); staging is still empty then, and False sends
+    the caller to direct extraction too.
     """
     parent = _scratch_parent()
     try:
@@ -930,14 +967,47 @@ def _extract_tool_via_local_scratch(
         scratch = tempfile.mkdtemp(prefix=SCRATCH_PREFIX, dir=parent)
     except (OSError, ArchiveInstallError):
         return False
+    stop = threading.Event()
+    low_space = threading.Event()
+    done = threading.Event()
+
+    def _watch() -> None:
+        while not done.wait(SCRATCH_WATCH_SECONDS):
+            if cancel is not None and cancel.is_set():
+                stop.set()
+                return
+            free = _scratch_free_bytes(parent)
+            if free is not None and free < SCRATCH_RESERVE_BYTES:
+                low_space.set()
+                stop.set()
+                return
+
+    watcher = threading.Thread(target=_watch, name="wlib-scratch-watch", daemon=True)
     try:
-        _ = extract(scratch)
+        watcher.start()
+        try:
+            _ = extract(scratch, stop)
+        except ArchiveSafetyError:
+            raise
+        except ArchiveInstallError:
+            _check_cancel(cancel)
+            free = _scratch_free_bytes(parent)
+            if not low_space.is_set() and (free is None or free >= SCRATCH_RESERVE_BYTES):
+                raise
+            _log.warning(
+                "Local install scratch ran low on space; extracting %s on the library drive instead",
+                os.path.basename(archive_path),
+            )
+            return False
+        finally:
+            done.set()
+            watcher.join()
         try:
             _ = apply_execute_bits(scratch)
         except OSError:
             pass
         _check_cancel(cancel)
-        _ = copy_tree_parallel(scratch, staging, workers, cancel)
+        _ = copy_tree_parallel(scratch, staging, workers, cancel, hard_links=True)
     finally:
         cleanup_staging_dir(scratch)
     return True
@@ -1902,12 +1972,32 @@ def _windows_long_path_error(exc: BaseException) -> str:
 
 
 def cleanup_staging_dir(path: str) -> None:
+    """Delete a staging or scratch tree, best effort; leftovers are logged.
+
+    An extractor that failed partway can leave folders without owner write
+    or search access (archive modes), and their files cannot be deleted
+    then. Real folders get u+rwx back first; links are not followed.
+    """
     try:
         if path and os.path.isdir(path) and not os.path.islink(path):
             # A tree with paths past 260 characters only goes in extended form.
-            shutil.rmtree(_long_path_safe(path), ignore_errors=True)
-    except OSError:
-        pass
+            safe = _long_path_safe(path)
+            _make_dirs_traversable(safe)
+            errors: list[str] = []
+
+            def _onerror(_func: object, p: str, _exc: object) -> None:
+                errors.append(str(p))
+
+            shutil.rmtree(safe, onexc=_onerror)
+            if errors:
+                _log.warning(
+                    "Could not fully remove %s (%d leftovers, first: %s)",
+                    path,
+                    len(errors),
+                    errors[0],
+                )
+    except OSError as exc:
+        _log.warning("Could not remove %s: %s", path, exc)
 
 
 # Beside a staging folder that holds a moved torrent download: where the
@@ -3060,8 +3150,8 @@ def install_archive(
                     except OSError:
                         pass
             elif fmt == "tar" and network and _extract_tool_via_local_scratch(
-                lambda folder: extract_tar(
-                    archive_path, folder, progress=bytes_cb, cancel=cancel
+                lambda folder, stop: extract_tar(
+                    archive_path, folder, progress=bytes_cb, cancel=stop
                 ),
                 archive_path,
                 staging,
@@ -3079,8 +3169,8 @@ def install_archive(
                 except OSError:
                     pass
             elif network and _extract_tool_via_local_scratch(
-                lambda folder: extract_with_tool(
-                    cast(str, tool), archive_path, folder, cancel
+                lambda folder, stop: extract_with_tool(
+                    cast(str, tool), archive_path, folder, stop
                 ),
                 archive_path,
                 staging,

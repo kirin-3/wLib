@@ -145,7 +145,7 @@ def thread_urls_match(left: object, right: object) -> bool:
 
 # Mirrored in extension/content.js extractGameInfo (h1 title parsing).
 _TITLE_VERSION_RE = re.compile(
-    r"^v?(?:er(?:sion)?\.?\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)$",
+    r"^v?(?:er(?:sion)?\.?\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix|hotfix)(?:\s*\d+(?:\.\d+)*)?)?)$",
     re.IGNORECASE,
 )
 _TITLE_CHAPTER_RE = re.compile(

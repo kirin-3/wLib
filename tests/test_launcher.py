@@ -4212,9 +4212,16 @@ def test_gamescope_wine_wait_script_keeps_exit_status(tmp_path):
     ws = tmp_path / "wineserver"
     ws.write_text(f"#!/bin/sh\n[ \"$1\" = -w ] && touch {marker}\n")
     ws.chmod(0o755)
-    done = subprocess.run(["sh", "-c", GAMESCOPE_WINE_WAIT, "sh", str(ws), "sh", "-c", "exit 7"], check=False)
+    # Its own process group, as under gamescope: the script waits for game
+    # processes in its group, not for wineserver -w.
+    done = subprocess.run(
+        ["sh", "-c", GAMESCOPE_WINE_WAIT, "sh", str(ws), "sh", "-c", "exit 7"],
+        check=False,
+        start_new_session=True,
+        timeout=30,
+    )
     assert done.returncode == 7
-    assert marker.exists()
+    assert marker.exists() is not sys.platform.startswith("linux")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="The bwrap sandbox runs only on Linux hosts")

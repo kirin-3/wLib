@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import shutil
 import stat
+import uuid
 from typing import BinaryIO
 
 from core import database
@@ -78,7 +79,9 @@ def _check_attachment_name(name: object) -> str:
         raise ValueError("Invalid attachment name")
     if text.startswith("."):
         raise ValueError("Invalid attachment name")
-    if "/" in text or "\\" in text:
+    # Same separators that os.path.basename splits on when adding, so a Linux
+    # name with a literal backslash can still be opened and removed.
+    if any(sep and sep in text for sep in (os.sep, os.altsep, "/")):
         raise ValueError("Invalid attachment name")
     return text
 
@@ -98,11 +101,33 @@ def resolve_attachment(game_id: int, name: object) -> str:
 
 
 def remove_attachment(game_id: int, name: object) -> None:
-    resolved = resolve_attachment(game_id, name)
+    """Remove the listed folder entry itself; a symlink loses only the link."""
+    safe_name = _check_attachment_name(name)
+    if os.path.splitext(safe_name)[1].lower() not in ATTACHMENT_TYPES:
+        raise UnsupportedAttachmentError("Only PDF, TXT and MD files can be attached")
+    entry = os.path.join(attachments_dir(game_id), safe_name)
     try:
-        os.remove(resolved)
+        mode = os.lstat(entry).st_mode
+    except FileNotFoundError as exc:
+        raise AttachmentMissingError(f"Attachment not found: {safe_name}") from exc
+    if not (stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
+        raise AttachmentMissingError(f"Attachment not found: {safe_name}")
+    try:
+        os.remove(entry)
     except FileNotFoundError as exc:
         raise AttachmentMissingError(str(exc)) from exc
+
+
+# Most filesystems limit one name component to 255 bytes.
+_NAME_MAX_BYTES = 255
+
+
+def _fit_name(stem: str, suffix: str) -> str:
+    """Return `stem + suffix`, cutting the stem so the name fits in one component."""
+    budget = _NAME_MAX_BYTES - len(os.fsencode(suffix))
+    while stem and len(os.fsencode(stem)) > budget:
+        stem = stem[:-1]
+    return stem + suffix
 
 
 def _free_attachment_name(folder: str, base_name: str) -> str:
@@ -112,7 +137,7 @@ def _free_attachment_name(folder: str, base_name: str) -> str:
     while os.path.lexists(os.path.join(folder, candidate)) or os.path.lexists(
         os.path.join(folder, f".{candidate}.part")
     ):
-        candidate = f"{stem} ({counter}){extension}"
+        candidate = _fit_name(stem, f" ({counter}){extension}")
         counter += 1
     return candidate
 
@@ -160,7 +185,8 @@ def add_attachment(game_id: int, source_path: object) -> dict[str, object]:
         folder = attachments_dir(game_id)
         os.makedirs(folder, exist_ok=True)
         target_name = _free_attachment_name(folder, base_name)
-        tmp_name = f".{target_name}.part"
+        # A short fixed-length temp name, so a long basename still fits.
+        tmp_name = f".{uuid.uuid4().hex}.part"
         tmp_path = os.path.join(folder, tmp_name)
         final_path = os.path.join(folder, target_name)
         try:

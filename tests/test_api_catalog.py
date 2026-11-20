@@ -147,7 +147,8 @@ def test_lc_only_game_gets_catalog_screenshots_as_local_addresses(started, monke
     monkeypatch.setattr(game_lookup, "lc_thread_screenshots", lambda thread_id: lc_shots if thread_id == "21" else None)
     api = Api()
     result = api.get_game_screenshots(game_id)
-    local = [f"{game_covers.LC_IMAGE_ADDRESS}{game_covers.lc_image_key(url)}" for url in lc_shots]
+    local = [shot["full"] for shot in result["screenshots"]]
+    assert all(u.startswith(game_covers.LC_IMAGE_ADDRESS) for u in local)
     assert result == {"success": True, "screenshots": [{"thumb": u, "full": u} for u in local],
                       "source": "catalog", "in_catalog": True}
     assert [api.lc_image_keys.get(u.rsplit("/", 1)[1]) for u in local] == lc_shots
@@ -166,8 +167,11 @@ def test_lc_screenshots_leave_out_images_the_extension_refuses(started, monkeypa
              "https://lewdcorner.com/proxy.php?image=https%3A%2F%2Fexample.org%2Fa.png", full]
     game_id = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/")
     monkeypatch.setattr(game_lookup, "lc_thread_screenshots", lambda _id: shots)
-    local = f"{game_covers.LC_IMAGE_ADDRESS}{game_covers.lc_image_key(full)}"
-    assert Api().get_game_screenshots(game_id)["screenshots"] == [{"thumb": local, "full": local}]
+    api = Api()
+    shots_out = api.get_game_screenshots(game_id)["screenshots"]
+    assert len(shots_out) == 1 and shots_out[0]["thumb"] == shots_out[0]["full"]
+    assert shots_out[0]["full"].startswith(game_covers.LC_IMAGE_ADDRESS)
+    assert api.lc_image_keys.get(shots_out[0]["full"].rsplit("/", 1)[1]) == full
 
 
 BUILT_AT = "2026-11-01T12:00:00Z"

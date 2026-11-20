@@ -903,6 +903,27 @@ class LibraryMixin(ApiBase):
             return str(exc) or "The save backup failed."
         return None
 
+    def _backup_save_files_before_uninstall(
+        self, game_id: int, folder: str, files: Sequence[str]
+    ) -> str | None:
+        from core.database import get_save_backup_keep
+        from core.game_saves import GameSavesError, NothingToBackUpError, backup_saves
+
+        try:
+            with self._save_operation(game_id):
+                _ = backup_saves(
+                    folder,
+                    self._save_backups_root(),
+                    game_id,
+                    get_save_backup_keep(),
+                    files=files,
+                )
+        except NothingToBackUpError:
+            return None
+        except GameSavesError as exc:
+            return str(exc) or "The save backup failed."
+        return None
+
     def _remove_entry_after_uninstall(self, game_id: int) -> None:
         from core.database import get_game
 
@@ -931,6 +952,7 @@ class LibraryMixin(ApiBase):
             reserve=self._reserve_uninstall,
             release=self._release_uninstall,
             backup_saves=self._backup_saves_before_uninstall,
+            backup_save_files=self._backup_save_files_before_uninstall,
             remove_entry=self._remove_entry_after_uninstall,
         )
         results = run_uninstall(

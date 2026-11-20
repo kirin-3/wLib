@@ -48,6 +48,19 @@ def _no_catalog_startup_check(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_desktop_notifications(request, monkeypatch):
+    """Update checks in tests must not show real notifications on the dev desktop.
+
+    test_desktop_notify mocks subprocess itself, so it keeps the real sender.
+    """
+    if request.module.__name__.endswith("test_desktop_notify"):
+        return
+    import core.desktop_notify
+
+    monkeypatch.setattr(core.desktop_notify, "send_notification", lambda title, body: None)
+
+
+@pytest.fixture(autouse=True)
 def _no_f95_rate_limit_cooldown(monkeypatch):
     """A 429 in one test must not hold back F95 requests in the next."""
     import core.scraper

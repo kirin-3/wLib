@@ -780,10 +780,39 @@ _WINE_BACKGROUND_NAMES = frozenset(
     }
 )
 
-# Keeps gamescope open until every Wine process in the prefix has exited,
-# since a launcher stub can exit while the real game still runs.
-# Arguments: <wineserver> <game command...>.
-GAMESCOPE_WINE_WAIT = 'ws=$1; shift; "$@"; s=$?; "$ws" -w; exit $s'
+def _sh_any_case(name: str) -> str:
+    return "".join(f"[{c.lower()}{c.upper()}]" if c.isalpha() else c for c in name)
+
+
+# Keeps gamescope open while a game process remains in this script's process
+# group, since a launcher stub can exit while the real game still runs. Wine
+# background processes do not count (the same rule as _wine_group_pids), so
+# another game on the same prefix does not keep this one open; `wineserver -w`
+# would wait for the whole prefix. It falls back to `wineserver -w` when /proc
+# cannot be read. Arguments: <wineserver> <game command...>.
+GAMESCOPE_WINE_WAIT = (
+    'ws=$1; shift; "$@"; s=$?\n'
+    'me=; read -r me 2>/dev/null < /proc/$$/stat\n'
+    "set -- ${me##*) }; pg=$3\n"
+    'if [ -z "$pg" ]; then "$ws" -w; exit $s; fi\n'
+    "while :; do\n"
+    "  found=\n"
+    "  for f in /proc/[0-9]*/stat; do\n"
+    '    l=; read -r l 2>/dev/null < "$f" || continue\n'
+    "    p=${f#/proc/}; p=${p%/stat}\n"
+    '    [ "$p" = "$$" ] && continue\n'
+    "    set -- ${l##*) }\n"
+    '    [ "$3" = "$pg" ] || continue\n'
+    '    case $1 in Z|X) continue ;; esac\n'
+    "    c=${l#*(}; c=${c%) *}\n"
+    f'    case $c in {"|".join(_sh_any_case(n) for n in sorted(_WINE_BACKGROUND_NAMES))}) continue ;; esac\n'
+    "    found=1; break\n"
+    "  done\n"
+    '  [ -n "$found" ] || break\n'
+    "  sleep 1\n"
+    "done\n"
+    "exit $s"
+)
 
 
 
@@ -1642,7 +1671,13 @@ class Launcher:
                 windows=is_windows(),
                 browser_launch=browser_launch,
                 flatpak_player=flatpak_player,
-                user_args=args,
+                # Only the command that starts the game: the words before
+                # %command%, or a Custom Command line. Game arguments do not count.
+                user_args=(
+                    user_wrappers
+                    if "%command%" in args or launch_mode == "custom"
+                    else []
+                ),
             )
             if not reason:
                 gamescope_path = host_which("gamescope")

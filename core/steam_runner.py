@@ -139,6 +139,54 @@ def _window_request(path: str, payload: dict[str, object] | None = None) -> dict
         return None
 
 
+LAUNCH_CHECK_UNANSWERED = 'wLib is open but did not confirm that this game can start. Try again in a moment.'
+
+
+def launch_check(payload: dict[str, object]) -> str | None:
+    """Ask an open wLib window to check and hold this launch.
+
+    None when the window allows it, or when no wLib listens (connection
+    refused: nothing to clash with). Any other failure, such as a timeout,
+    an error status or a bad answer, refuses the launch: a busy window may
+    be installing a runtime on the same Wine prefix."""
+    from http.client import HTTPResponse
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    try:
+        token = runner_token()
+    except OSError:
+        token = ''
+    request = Request('http://127.0.0.1:8183/api/launch-check', data=json.dumps(payload).encode(),
+                      headers={'X-wLib-Extension': '1', RUNNER_HEADER: token,
+                               'Content-Type': 'application/json'})
+    try:
+        # Longer than other runner requests: the window may wait on its
+        # status lock while an install step finishes.
+        with cast(HTTPResponse, urlopen(request, timeout=10)) as response:
+            answer = cast(object, json.loads(response.read()))
+    except HTTPError as exc:
+        try:
+            answer = cast(object, json.loads(exc.read()))
+        except (OSError, ValueError):
+            answer = None
+        if isinstance(answer, dict) and cast(dict[str, object], answer).get('error'):
+            return str(cast(dict[str, object], answer)['error'])
+        return LAUNCH_CHECK_UNANSWERED
+    except URLError as exc:
+        return None if isinstance(exc.reason, ConnectionRefusedError) else LAUNCH_CHECK_UNANSWERED
+    except ConnectionRefusedError:
+        return None
+    except (OSError, ValueError):
+        return LAUNCH_CHECK_UNANSWERED
+    if not isinstance(answer, dict):
+        return LAUNCH_CHECK_UNANSWERED
+    checked = cast(dict[str, object], answer)
+    if checked.get('success') is True:
+        return None
+    return str(checked.get('error') or 'This game cannot start right now.')
+
+
 def report_error(game_id: int, message: str) -> None:
     import subprocess
 
@@ -206,13 +254,10 @@ def run(game_id: int) -> int:
         from core.launcher import RunningGame
 
         assert isinstance(entry, RunningGame)
-        answer = _window_request('/api/launch-check', {
+        return launch_check({
             'gameId': launch_id, 'prefix': entry.prefix, 'sandboxed': entry.sandboxed,
             'umu': entry.umu, 'blocked': entry.network_blocked, 'title': entry.title,
         })
-        if answer is None or answer.get('success') is not False:
-            return None
-        return str(answer.get('error') or 'This game cannot start right now.')
 
     launcher.external_guard = ask_window
     done = threading.Event()

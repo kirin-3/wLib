@@ -10,6 +10,7 @@ import threading
 import time
 import os
 import re
+import secrets
 import stat
 import tempfile
 from pathlib import Path
@@ -329,21 +330,29 @@ class LcImageKeys:
     """Bounded in-memory ``key -> LC URL`` map for local screenshot addresses.
 
     Only ``get_game_screenshots`` fills it, so another local program cannot
-    make wLib fetch an LC URL of its choice."""
+    make wLib fetch an LC URL of its choice. The keys are random for each
+    app session (one per URL), not ``lc_image_key``: that hash names the disk
+    copy, and a program that knows the URL could work it out and read the
+    image without a pairing token."""
 
     LIMIT: int = 500
 
     def __init__(self) -> None:
         self._lock: threading.Lock = threading.Lock()
         self._urls: OrderedDict[str, str] = OrderedDict()
+        self._keys: dict[str, str] = {}
 
     def add(self, url: str) -> str:
-        key = lc_image_key(url)
         with self._lock:
+            key = self._keys.get(url)
+            if key is None:
+                key = secrets.token_hex(16)
+                self._keys[url] = key
             self._urls[key] = url
             self._urls.move_to_end(key)
             while len(self._urls) > self.LIMIT:
-                _ = self._urls.popitem(last=False)
+                _, old_url = self._urls.popitem(last=False)
+                _ = self._keys.pop(old_url, None)
         return key
 
     def get(self, key: str) -> str | None:

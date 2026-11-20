@@ -99,9 +99,12 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
     # Idle or stalled clients would otherwise hold a server thread forever.
     timeout = 10  # pyright: ignore[reportUnannotatedClassAttribute]
     close_connection: bool
+    _body_discarded: bool = False
 
     @override
     def parse_request(self) -> bool:
+        # One flag per request: a kept-alive connection reads a new body.
+        self._body_discarded = False
         if not super().parse_request():
             return False
 
@@ -122,6 +125,11 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
     def _discard_request_body(self) -> None:
         # Closing with unread request data makes the OS reset the connection
         # (always on Windows), so the client sees an abort instead of our reply.
+        # Only once per request: a second read would wait for bytes that
+        # never come (do_GET drains first, then a rejection helper drains).
+        if self._body_discarded:
+            return
+        self._body_discarded = True
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -494,13 +502,16 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         fetch through the browser extension, kept as a copy. An unknown key
         or a failed fetch is a 404, with no request to anyone."""
         from core.extension_bridge import BridgeFailed, BridgeUnavailable
-        from core.game_covers import COVER_TYPES, LC_KEY_RE, fetch_lc_image, lc_copy_file, validate_image_bytes
+        from core.game_covers import COVER_TYPES, LC_KEY_RE, fetch_lc_image, lc_copy_file, lc_image_key, validate_image_bytes
 
         api = api_ref
         url = api.lc_image_keys.get(key) if api is not None and LC_KEY_RE.fullmatch(key) else None
         if api is None or url is None:
             self.send_error(404)
             return
+        # The address holds a random per-session token; the disk copy is
+        # named by the URL's hash, which another local program can work out.
+        key = lc_image_key(url)
         path = lc_copy_file(key)
         try:
             if path is not None:
@@ -793,7 +804,12 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 launch_id = check.get("gameId")
                 if not isinstance(launch_id, int) or isinstance(launch_id, bool) or launch_id <= 0:
                     raise ValueError("Invalid game ID")
-                if api_ref is not None:
+                if api_ref is None:
+                    # The server answers before Api() exists; the runner must
+                    # not start a game the window has not checked.
+                    check_status = 503
+                    check_result = {"success": False, "error": "wLib is still starting. Try again in a moment."}
+                else:
                     reason = api_ref.reserve_runner_launch(
                         launch_id,
                         str(check.get("prefix") or ""),

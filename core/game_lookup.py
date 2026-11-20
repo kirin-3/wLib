@@ -52,6 +52,23 @@ def _version(value: object) -> str:
     return "" if re.fullmatch(r"(?:RJ|VJ|BJ)\d+", text, re.I) else text
 
 
+_CATALOG_TABLES = {
+    "dlsite": ("dlsite_works", "product_id"),
+    "vndb": ("vndb_vns", "vn_id"),
+    "ryuugames": ("ryuu_posts", "post_id"),
+}
+
+
+def _current(conn: sqlite3.Connection, source: str, identity: str) -> bool:
+    """False only for an ID whose catalog row is marked removed."""
+    if source not in _CATALOG_TABLES:
+        return True
+    table, key = _CATALOG_TABLES[source]
+    return conn.execute(
+        f"SELECT 1 FROM {table} WHERE {key} = ? AND removed_at IS NOT NULL", (identity,)
+    ).fetchone() is None
+
+
 def _catalog_page(
     url: str, page: StoreLink | None, supplied: list[StoreLink]
 ) -> tuple[dict[str, object], list[StoreLink]]:
@@ -63,32 +80,29 @@ def _catalog_page(
     try:
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
             conn.row_factory = sqlite3.Row
-            # WordPress permalinks do not contain the post ID. Resolve them by
-            # their exact stored URL, or use the ID the page read from its DOM.
+            # WordPress permalinks do not contain the post ID. Use the ID the
+            # live page read from its DOM; a permalink can be reused by a newer
+            # post, so its stored URL is only the fallback.
             if page is None and "ryuugames.com" in url:
-                row = cast(
-                    sqlite3.Row | None,
-                    conn.execute(
-                        "SELECT post_id FROM ryuu_posts WHERE rtrim(url, '/') = ? AND removed_at IS NULL",
-                        (url.split("#")[0].split("?")[0].rstrip("/"),),
-                    ).fetchone(),
+                page = next(
+                    (link for link in supplied if link["source"] == "ryuugames"),
+                    None,
                 )
-                if row is not None:
-                    page = link_from_id("ryuugames", str(cast(object, row[0])))
-                else:
-                    page = next(
-                        (link for link in supplied if link["source"] == "ryuugames"),
-                        None,
+                if page is None:
+                    row = cast(
+                        sqlite3.Row | None,
+                        conn.execute(
+                            "SELECT post_id FROM ryuu_posts WHERE rtrim(url, '/') = ? AND removed_at IS NULL",
+                            (url.split("#")[0].split("?")[0].rstrip("/"),),
+                        ).fetchone(),
                     )
+                    if row is not None:
+                        page = link_from_id("ryuugames", str(cast(object, row[0])))
             if page is None:
                 return {}, []
             extra.append(page)
             source, identity = page["source"], page["id"]
-            tables = {
-                "dlsite": ("dlsite_works", "product_id"),
-                "vndb": ("vndb_vns", "vn_id"),
-                "ryuugames": ("ryuu_posts", "post_id"),
-            }
+            tables = _CATALOG_TABLES
             # Removed catalog rows keep their identity for a live page, but
             # their stale links must not resolve games any more.
             expand_links = True
@@ -135,7 +149,8 @@ def _catalog_page(
                     ).fetchall(),
                 )
                 for target, value in rows:
-                    if link := link_from_id(target, value):
+                    # Older snapshots also hold links to removed rows.
+                    if (link := link_from_id(target, value)) and _current(conn, target, value):
                         extra.append(link)
     except (sqlite3.Error, OSError, ValueError):
         return {}, []

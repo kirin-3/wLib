@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping
 
 from core import database, extension_bridge, game_lookup, lewdcorner, scraper
 from core.download_links import Build, masked_download_site
+from core.downloads.hosts import mega, pixeldrain
 from core.downloads.manager import DownloadManager, Resolve
 from core.downloads.queue import DownloadQueue, QueueJob
 from core.downloads.transfer import DownloadError
@@ -82,8 +83,29 @@ def default_download_site(game: Mapping[str, object], sites: list[DownloadSite])
 
 
 def _in_app(host: str, url: str) -> bool:
-    """Buzzheavier needs a masked link so the extension can open the share page."""
-    return host != 'buzzheavier' or masked_download_site(url) is not None
+    """Whether wLib can download this mirror itself.
+
+    Buzzheavier needs a masked link so the extension can open the share page.
+    A direct Pixeldrain or MEGA link must be a single file; the adapters do not
+    download folders. A masked link stays eligible until the browser resolves it.
+    """
+    if masked_download_site(url) is not None:
+        return True
+    if host == 'buzzheavier':
+        return False
+    if host == 'pixeldrain':
+        return pixeldrain.is_file_link(url)
+    if host == 'mega':
+        return not mega.is_folder_link(url)
+    return True
+
+
+def _not_in_app_error(host: str) -> str:
+    if host == 'pixeldrain':
+        return 'Pixeldrain folder links are not supported; open in browser'
+    if host == 'mega':
+        return 'unsupported MEGA link: folders cannot be downloaded in-app; open in browser'
+    return 'This Buzzheavier link cannot be downloaded in-app; open in browser'
 
 
 @final
@@ -262,7 +284,7 @@ class UpdateDownloads:
             raise DownloadError('Split archives are not supported yet; open in browser')
         url, host = link.url, link.key.host
         if not _in_app(host, url):
-            raise DownloadError('This Buzzheavier link cannot be downloaded in-app; open in browser')
+            raise DownloadError(_not_in_app_error(host))
         game = database.get_game(game_id) or {}
         source: dict[str, object] = dict(zip(KEY_FIELDS, link.key, strict=True))
         return self.queue.add(

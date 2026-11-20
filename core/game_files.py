@@ -349,6 +349,9 @@ def _plan_entry(
         "reason": "",
         "saves_folder": "",
         "saves_inside_root": False,
+        # Loose save files (names) in `saves_folder` when that folder is the
+        # executable's own folder; only these are backed up.
+        "save_files": [],
         "blocked_reason": "",
     }
     game = get_game(game_id)
@@ -376,10 +379,29 @@ def _plan_entry(
     )
     entry["removable"] = bool(guard["removable"])
     entry["reason"] = str(guard["reason"] or "")
+    if entry["removable"] and os.path.islink(root.rstrip(os.sep)):
+        # A rename or delete would act on the link, not on the game files
+        # it points at. The real folder can be chosen as the root instead.
+        entry["removable"] = False
+        entry["reason"] = (
+            f"This folder is a link to {real_path(root)}. Choose that folder instead."
+        )
     saves = hooks.saves_folder(game_id)
     if saves and os.path.isdir(saves):
         entry["saves_folder"] = saves
         entry["saves_inside_root"] = is_within_real(real_path(saves), real_path(root))
+    elif not saves:
+        # Loose save files next to the executable (RPG Maker XP/VX/VX Ace,
+        # 2000/2003) are never the automatic saves folder: the folder is the
+        # game. Only those files are backed up.
+        from core.game_saves import loose_save_files
+
+        exe_dir = os.path.dirname(exe)
+        loose = loose_save_files(exe_dir)
+        if loose:
+            entry["saves_folder"] = exe_dir
+            entry["saves_inside_root"] = is_within_real(real_path(exe_dir), real_path(root))
+            entry["save_files"] = [os.path.basename(path) for path in loose]
     if hooks.running(game_id):
         entry["blocked_reason"] = running_reason
     else:
@@ -568,13 +590,14 @@ def trash_root(root: str, library_folders: Sequence[str]) -> str:
 class StagedRemoval:
     """A game folder set aside for an uninstall, still possible to put back.
 
-    `staged` is "" when no rename worked; the folder then stays at `root`
-    until finish_removal() deletes it in place.
+    `staged` is "" when no rename worked; `error` then says why, and the
+    folder stays at `root`.
     """
 
     root: str
     staged: str = ""
     library_trash: str = ""
+    error: str = ""
 
 
 def stage_removal(root: str, library_folders: Sequence[str]) -> StagedRemoval:
@@ -586,19 +609,21 @@ def stage_removal(root: str, library_folders: Sequence[str]) -> StagedRemoval:
     """
     library_trash = trash_root_for(root, library_folders)
     parent = os.path.dirname(os.path.abspath(root).rstrip(os.sep))
+    error = ""
     for folder in (library_trash, parent):
         if not folder:
             continue
         staged = os.path.join(folder, f"{UNINSTALL_PREFIX}{time.time_ns()}")
         try:
             os.rename(root, staged)
-        except OSError:
+        except OSError as exc:
+            error = exc.strerror or str(exc)
             continue
         _log.info("Uninstall set %s aside as %s", root, staged)
         return StagedRemoval(
             root, staged, library_trash if folder == library_trash else ""
         )
-    return StagedRemoval(root)
+    return StagedRemoval(root, error=error or "the folder could not be renamed")
 
 
 def undo_removal(staged: StagedRemoval) -> str:
@@ -713,6 +738,10 @@ class UninstallHooks(GameHooks):
     release: Callable[[int], None] = lambda _game_id: None
     # Back up the saves; returns an error, or None (nothing to back up is None).
     backup_saves: Callable[[int], str | None] = lambda _game_id: None
+    # Back up only these loose save files (names in the folder); same result.
+    backup_save_files: Callable[[int, str, Sequence[str]], str | None] = (
+        lambda _game_id, _folder, _files: "Loose save files cannot be backed up here."
+    )
     # The "Remove from library" body, without its running/busy checks.
     remove_entry: Callable[[int], None] = lambda _game_id: None
 
@@ -749,13 +778,27 @@ def run_uninstall(
                 continue
             reserved = True
             if backup and entry["saves_folder"]:
-                error = hooks.backup_saves(game_id)
+                save_files = cast(list[str], entry["save_files"])
+                if save_files:
+                    error = hooks.backup_save_files(
+                        game_id, str(entry["saves_folder"]), save_files
+                    )
+                else:
+                    error = hooks.backup_saves(game_id)
                 if error:
                     result["error"] = f"Save backup failed, so nothing was deleted: {error}"
                     continue
             # Nothing is deleted until the library change is saved: a failed
             # save puts the folder back.
             staged = stage_removal(str(entry["root"]), context.library_folders)
+            if not staged.staged:
+                # Deleting in place could fail halfway (a read-only folder, a
+                # file in use) after the library already forgot the game.
+                result["error"] = (
+                    "The game folder could not be moved to the trash, so nothing"
+                    f" was deleted: {staged.error}"
+                )
+                continue
             try:
                 if remove_from_library:
                     hooks.remove_entry(game_id)
