@@ -229,10 +229,8 @@ _UNITS = {"b": 1, "kb": 1024, "mb": 1024**2, "gb": 1024**3, "tb": 1024**4,
 
 def parse_size(value: object) -> int:
     """Bytes from a number (bytes) or text such as '1.5 GB'."""
-    if isinstance(value, bool):
-        return 0
     if isinstance(value, (int, float)):
-        return max(0, int(value)) if math.isfinite(value) else 0
+        return _int(value)
     if isinstance(value, str):
         text = value.strip().replace(",", "")
         match = re.fullmatch(r"([0-9]*\.?[0-9]+)\s*([a-zA-Z]*)", text)
@@ -246,10 +244,8 @@ def parse_size(value: object) -> int:
 
 def parse_date(value: object) -> int:
     """Unix time from a number or from text (digits or an ISO date)."""
-    if isinstance(value, bool):
-        return 0
     if isinstance(value, (int, float)):
-        return max(0, int(value)) if math.isfinite(value) else 0
+        return _int(value)
     if isinstance(value, str):
         text = value.strip()
         if text.isdigit():
@@ -267,8 +263,8 @@ def parse_date(value: object) -> int:
 def _int(value: object) -> int:
     if isinstance(value, bool):
         return 0
-    if isinstance(value, (int, float)):
-        return max(0, int(value)) if math.isfinite(value) else 0
+    if isinstance(value, int) or (isinstance(value, float) and math.isfinite(value)):
+        return max(0, int(value))
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return 0
@@ -337,7 +333,11 @@ def search(title: str, *, refresh: bool = False) -> list[dict[str, object]]:
     if not refresh and isinstance(entry, dict):
         stamp = entry.get("at")
         results = entry.get("results")
-        if _num(stamp) and now - _num(stamp) < CACHE_TTL and isinstance(results, list):
+        if (
+            (isinstance(stamp, int) or (isinstance(stamp, float) and math.isfinite(stamp)))
+            and now - stamp < CACHE_TTL
+            and isinstance(results, list)
+        ):
             return cast(list[dict[str, object]], results)
     # The parameter set RPDL's own site and other clients send; `uploaded_DESC` is newest first.
     params = urlencode({

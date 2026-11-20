@@ -302,15 +302,18 @@ class UpdateDownloads:
         fields: dict[str, str] = {'site': site, **{
             name: str(source.get(name) or '') for name in ('label', 'section', 'platform', 'host', 'part')
         }}
-        copy = source.get('copy')
+        saved_copy = source.get('copy')
+        copy = (
+            saved_copy if isinstance(saved_copy, int) and not isinstance(saved_copy, bool) and 'mirror' in source else None
+        )
         same: Callable[[_LinkKey], bool]
-        if isinstance(copy, int) and not isinstance(copy, bool) and 'mirror' in source and 'kind' in source:
+        if copy is not None and 'kind' in source:
             same = _full_match(_LinkKey(
                 site, fields['label'], fields['section'], fields['platform'], str(source.get('kind') or ''),
                 fields['host'], fields['part'], str(source.get('mirror') or ''), copy,
             ))
         else:
-            # A job saved before mirrors or build kinds were in the identity: only a single match is safe.
+            # Older job identities omit the build kind, and may omit the mirror.
             if 'mirror' in source:
                 fields['mirror'] = str(source.get('mirror') or '')
             same = lambda key: all(getattr(key, name) == value for name, value in fields.items())  # noqa: E731
@@ -325,7 +328,12 @@ class UpdateDownloads:
         if not links:
             raise DownloadError(_gone(job.version))
         if len({link.key for link in links}) > 1:
-            raise DownloadError('Mirror no longer available: the thread has more than one such mirror; choose another mirror')
+            if copy is None or 'kind' in source or len({link.key.kind for link in links}) > 1:
+                raise DownloadError('Mirror no longer available: the thread has more than one such mirror; choose another mirror')
+            # Within a single kind, legacy copy numbers use the same order.
+            links = [link for link in links if link.key.copy == copy]
+            if not links:
+                raise DownloadError(_gone(job.version))
         return self._resolver(links[0].url, links[0].key.host)
 
     def browser_link(self, game_id: int, link_id: str) -> str:

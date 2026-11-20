@@ -68,7 +68,7 @@ class TorrentWorker:
         self._fetch_for = fetch_for
 
     def _snapshot(self, job_id: str) -> dict[str, object] | None:
-        return next((item for item in self._supervisor().status() if item.get("job_id") == job_id), None)
+        return self._supervisor().status_for(job_id)
 
     def _rpdl_id(self, job: QueueJob) -> int:
         return _int(job.source.get("rpdl_id"))

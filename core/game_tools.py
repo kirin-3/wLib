@@ -41,11 +41,9 @@ def create_temp_file(path: str, suffix: str = PARTIAL_SUFFIX) -> tuple[int, str]
     file or symlink at a fixed `<name><suffix>` path is never opened,
     truncated or removed. The caller owns the file and removes it.
     """
-    folder, name = os.path.split(path)
+    folder = os.path.dirname(path)
     for _ in range(100):
-        temporary = os.path.join(
-            folder, f".{name[:100]}.{secrets.token_hex(4)}{suffix}"
-        )
+        temporary = os.path.join(folder, f".wlib-{secrets.token_hex(4)}{suffix}")
         try:
             return os.open(temporary, _TEMP_FLAGS, 0o666), temporary
         except FileExistsError:

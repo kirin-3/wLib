@@ -26,3 +26,14 @@ def test_real_version_equal_to_sequel_number_still_matches(title):
 def test_without_game_title_behavior_is_unchanged():
     assert m.versions_in_title("Game-2-1.4-pc") == ["2", "1.4"]
     assert m.listing_has_version("Game-0.8-pc", "0.8", "Game")
+
+
+def test_arabic_game_number_does_not_hide_explicit_version_after_roman_listing_name():
+    out = m.rank([{"id": 1, "title": "GameII-v2-pc", "seeders": 5}], "Game 2", "2")
+    assert out["preselected_id"] == 1
+
+
+@pytest.mark.parametrize("title", ["The-Long-GameII-2-pc", "The-Long-Game-II-2-pc"])
+def test_arabic_game_number_does_not_hide_bare_version_after_roman_listing_name(title):
+    out = m.rank([{"id": 1, "title": title, "seeders": 5}], "The Long Game 2", "2")
+    assert out["results"][0]["version_match"] is True

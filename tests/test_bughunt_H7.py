@@ -5,6 +5,8 @@ Game B lives outside Game A's folder, but B's save-folder override or custom
 Wine prefix (or the shared Wine prefix) is inside it.
 """
 
+import os
+
 import pytest
 
 import core.game_files as gf
@@ -97,3 +99,18 @@ def test_own_save_override_does_not_block(lib, tmp_path):
     assert str(inside) not in other_game_paths(a_id)
     entry = gf.plan_uninstall([a_id], {a_id: str(a_root)}, _hooks(), ctx)[0]
     assert entry["removable"] is True, entry["reason"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows trims trailing spaces in filenames")
+def test_uninstall_protects_executable_reached_through_link_with_trailing_space(lib, tmp_path):
+    ctx, a_id, b_id, a_root, inside = _setup(lib, tmp_path)
+    exe = inside / "GameB.exe"
+    exe.write_bytes(b"MZ")
+    link = tmp_path / "GameB.exe "
+    link.symlink_to(exe)
+    _ = update_game(b_id, {"exe_path": str(link)})
+
+    entry = gf.plan_uninstall([a_id], {a_id: str(a_root)}, _hooks(), ctx)[0]
+
+    assert entry["removable"] is False
+    assert entry["reason"] == "The folder contains another library game."

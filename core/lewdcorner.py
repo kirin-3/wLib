@@ -96,7 +96,9 @@ def extract_thread_id(url: object) -> str:
         return ""
     match = _THREAD_PATH.fullmatch(parts.path)
     thread_id = match[1].lstrip("0") if match else ""
-    return thread_id if thread_id and int(thread_id) <= MAX_THREAD_ID else ""
+    if not thread_id or len(thread_id) > len(str(MAX_THREAD_ID)):
+        return ""
+    return thread_id if int(thread_id) <= MAX_THREAD_ID else ""
 
 
 def normalize_thread_url(url: object) -> str:

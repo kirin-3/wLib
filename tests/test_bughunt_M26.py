@@ -59,3 +59,14 @@ def test_job_saved_without_a_kind_refuses_an_ambiguous_mirror(monkeypatch):
     reads[0] = {'success': True, 'version': 'v2', 'builds': [_build('full', 'https://pixeldrain.com/u/v2')]}
     service.clear(1)
     assert _url(service, job) == 'https://pixeldrain.com/u/v2'
+
+
+def test_job_saved_before_build_kinds_relinks_a_second_mirror_in_the_same_kind(monkeypatch):
+    first = _build('full', 'https://pixeldrain.com/u/first')
+    second = _build('full', 'https://pixeldrain.com/u/second')
+    first['mirrors'].extend(second['mirrors'])
+    service = _service(monkeypatch, [{'success': True, 'version': 'v2', 'builds': [first]}])
+    job = QueueJob(id='saved', kind='host', game_id=1, state='queued', version='v2', source={
+        'site': 'f95', 'label': 'Win', 'section': '', 'platform': 'windows', 'host': 'pixeldrain',
+        'part': '', 'mirror': 'PIXELDRAIN', 'copy': 1})
+    assert _url(service, job) == 'https://pixeldrain.com/u/second'

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import errno
 import hashlib
 import sqlite3
 import shlex
@@ -11,7 +12,7 @@ import time
 import os
 import json
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import closing
+from contextlib import closing, suppress
 from datetime import UTC, datetime
 from typing import NamedTuple, Protocol, TypedDict, cast
 from urllib.parse import urlsplit
@@ -917,6 +918,28 @@ def _check_database(conn: sqlite3.Connection) -> None:
     )
 
 
+def _publish_db_backup(partial: str, target: str) -> None:
+    """Publish the finished copy atomically without replacing another copy."""
+    if is_windows():
+        os.rename(partial, target)  # Windows rename fails if the destination exists.
+        return
+    try:
+        os.link(partial, target)
+    except OSError as exc:
+        if exc.errno not in (errno.EOPNOTSUPP, errno.ENOSYS, errno.EPERM):
+            raise
+        # Filesystems such as exFAT can rename a file but cannot hard-link it.
+        import ctypes
+
+        rename = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+        if rename is None:
+            raise
+        at_fdcwd, rename_noreplace = -100, 1
+        if rename(at_fdcwd, os.fsencode(partial), at_fdcwd, os.fsencode(target), rename_noreplace) != 0:
+            code = ctypes.get_errno()
+            raise OSError(code, os.strerror(code), target) from exc
+
+
 def _backup_before_migration() -> str | None:
     """Copy the database to `db-backups/` and keep the newest few copies.
 
@@ -945,13 +968,12 @@ def _backup_before_migration() -> str | None:
         ) as copy:
             source.backup(copy)
         try:
-            # Unlike os.replace, a link never overwrites a copy that another
-            # process published after the check above.
-            os.link(partial, target)
+            _publish_db_backup(partial, target)
         except FileExistsError:
             pass
         finally:
-            os.remove(partial)
+            with suppress(FileNotFoundError):
+                os.remove(partial)
     except (OSError, sqlite3.Error) as exc:
         print(f"[wLib] Could not copy the database before its update: {exc}")
         try:
@@ -2334,11 +2356,17 @@ def normalize_note_links(value: object) -> list[dict[str, str]]:
     return result
 
 
-def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]:
+def update_game(
+    game_id: int,
+    fields: Mapping[str, object],
+    *,
+    f95_post_links: Sequence[Mapping[str, object]] = (),
+) -> dict[str, object]:
     """Update arbitrary fields on a game row. `fields` is a dict of column->value.
 
     Returns the fields actually applied, including a `finished_version` the
-    caller never sent when a move to `Completed` auto-filled it.
+    caller never sent when a move to `Completed` auto-filled it. When setting
+    an F95 URL, any supplied first-post links belong to the new thread.
     """
     if not fields:
         return {}
@@ -2589,6 +2617,8 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         set_clause = ", ".join([f"{k} = ?" for k in safe_fields.keys()])
         values: tuple[object, ...] = tuple(safe_fields.values()) + (game_id,)
         _ = cursor.execute(f"UPDATE games SET {set_clause} WHERE id = ?", values)
+        if cursor.rowcount and safe_fields.get("f95_url") and f95_post_links:
+            replace_game_links(game_id, "f95_post", f95_post_links, connection=conn)
         conn.commit()
     # Callers see the same shapes as get_all_games: lists, no merge state.
     _ = safe_fields.pop(BASELINE_COLUMN, None)
@@ -2760,10 +2790,11 @@ _NEW_SYNC_UID_SQL = "lower(hex(randomblob(16)))"
 
 def _read_folder_settings(conn: sqlite3.Connection) -> tuple[str | None, str | None]:
     """The stored `library_folders` and `library_folder` values, read together."""
-    rows = dict(cast(list[tuple[str, str]], conn.execute(
+    rows = cast(list[tuple[str, object]], conn.execute(
         "SELECT key, value FROM settings WHERE key IN ('library_folders', 'library_folder')"
-    ).fetchall()))
-    return rows.get("library_folders"), rows.get("library_folder")
+    ).fetchall())
+    settings = {key: str(value) for key, value in rows}
+    return settings.get("library_folders"), settings.get("library_folder")
 
 
 def _normalized_library_folders(
@@ -2873,16 +2904,14 @@ def update_settings(
         if removed:
             # SQLite's NOCASE folds ASCII only; match with casefold() like above.
             folded = {status.casefold() for status in removed}
-            stored = cast(list[tuple[str]], conn.execute(
-                "SELECT DISTINCT play_status FROM games WHERE play_status IS NOT NULL"
-            ).fetchall())
-            _ = conn.executemany(
-                "UPDATE games SET play_status = ? WHERE play_status = ?",
-                [
-                    (DEFAULT_PLAY_STATUS, status)
-                    for (status,) in stored
-                    if str(status).casefold() in folded
-                ],
+
+            def status_removed(status: object) -> bool:
+                return isinstance(status, str) and status.casefold() in folded
+
+            conn.create_function("wlib_status_removed", 1, status_removed)
+            _ = conn.execute(
+                "UPDATE games SET play_status = ? WHERE wlib_status_removed(play_status)",
+                (DEFAULT_PLAY_STATUS,),
             )
         _ = conn.executemany(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",

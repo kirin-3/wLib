@@ -5,6 +5,8 @@ import threading
 import time
 from threading import Event
 
+import pytest
+
 from core.downloads import transfer as transfer_module
 from core.downloads.transfer import FileInfo, _resume_part, transfer
 
@@ -86,3 +88,35 @@ def test_removing_a_job_keeps_the_partial_a_queued_job_continues_from(tmp_path, 
     assert part.is_file()
     worker.remove(other)
     assert not part.exists()
+
+
+def test_failed_part_unlink_does_not_prevent_the_next_job_from_resuming(tmp_path, monkeypatch):
+    data = b"PK\x03\x04" + b"a" * 200
+    offsets = []
+
+    def resume(offset):
+        offsets.append(offset)
+        return io.BytesIO(data[offset:])
+
+    gate = Event()
+    gate.set()
+    info = FileInfo("game.zip", len(data), lambda: _Held(data, gate),
+                    resume_factory=resume, resume_key="pixeldrain:file")
+    part = _resume_part(tmp_path, info)
+    assert part is not None
+    unlink = type(part).unlink
+
+    def deny_part_unlink(path, *args, **kwargs):
+        if path == part:
+            raise PermissionError("partial file is temporarily locked")
+        return unlink(path, *args, **kwargs)
+
+    cancel = Event()
+    with monkeypatch.context() as patch:
+        patch.setattr(type(part), "unlink", deny_part_unlink)
+        with pytest.raises(PermissionError, match="temporarily locked"):
+            transfer(info, "jobA", cancel, lambda *_: cancel.set(), directory=tmp_path)
+    assert part.read_bytes() == data[:16]
+    path = transfer(info, "jobB", Event(), lambda *_: None, directory=tmp_path)
+    assert offsets == [16]
+    assert path.read_bytes() == data

@@ -2650,7 +2650,9 @@ def other_game_paths(exclude_id: int | None = None) -> list[str]:
             continue
         ids.append(gid)
         for field in ("exe_path", "save_path_override", "custom_prefix"):
-            value = str(game.get(field) or "").strip()
+            value = str(game.get(field) or "")
+            if field != "exe_path":
+                value = value.strip()
             if value:
                 paths.append(value)
     try:

@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
+import errno
 import json
 import sqlite3
 import threading
@@ -31,6 +32,8 @@ from core.database import (
     get_collections,
     get_custom_play_statuses,
     get_library_filter_presets,
+    get_library_folders,
+    read_library_folders,
     get_save_backup_keep,
     get_setting,
     update_setting,
@@ -598,6 +601,43 @@ def test_custom_status_case_only_rename_keeps_games():
     assert get_all_games()[0]["play_status"] == "backlog"
     update_custom_play_statuses([])
     assert get_all_games()[0]["play_status"] == DEFAULT_PLAY_STATUS
+
+
+def test_removing_status_resets_game_changed_just_before_the_write(monkeypatch):
+    from core import database
+
+    game_id = add_game("Game", "")
+    update_custom_play_statuses(["Backlog"])
+    changed = False
+
+    def change_status_before_write(statement):
+        nonlocal changed
+        if not changed and statement.startswith("BEGIN"):
+            changed = True
+            update_game(game_id, {"play_status": "backlog"})
+
+    def traced_connection():
+        conn = get_connection()
+        conn.set_trace_callback(change_status_before_write)
+        return conn
+
+    monkeypatch.setattr(database, "get_connection", traced_connection)
+    update_custom_play_statuses([])
+    assert changed
+    assert get_all_games()[0]["play_status"] == DEFAULT_PLAY_STATUS
+
+
+def test_library_folder_read_and_repair_keep_legacy_text_coercion():
+    with closing(get_connection()) as conn:
+        conn.execute("UPDATE settings SET value = ? WHERE key = 'library_folder'", (b"/old",))
+        conn.execute("UPDATE settings SET value = ? WHERE key = 'library_folders'", (b'["/other"]',))
+        conn.commit()
+
+    # The old setting reads stringified SQLite values before normalization.
+    default = str(b"/old")
+    assert read_library_folders() == ([default], default)
+    assert get_library_folders() == ([default], default)
+    assert get_setting("library_folders") == json.dumps([default])
 
 
 def test_init_db_normalizes_legacy_f95_urls_without_merging_duplicates():
@@ -2301,6 +2341,43 @@ def test_init_db_copies_the_database_before_a_migration(monkeypatch):
         "wlib-20260105-120000.db",
     ]
     assert "wlib-20260101-120000.db" not in database.list_db_backups()
+
+
+@pytest.mark.schema_fingerprint
+@pytest.mark.skipif(os.name == "nt", reason="Exercises the Linux hard-link fallback")
+@pytest.mark.parametrize("existing_copy", [False, True])
+def test_migration_backup_works_without_hard_links(monkeypatch, existing_copy):
+    from datetime import datetime as real_datetime
+
+    from core import database
+
+    class FixedClock(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 1, 1, 12, 0, 0)
+
+    name = "wlib-20260101-120000.db"
+    target = os.path.join(database.db_backup_dir(), name)
+
+    def no_hard_links(_source, _target):
+        if existing_copy:
+            with closing(sqlite3.connect(target)) as conn:
+                conn.execute("CREATE TABLE games (id INTEGER, title TEXT)")
+                conn.execute("INSERT INTO games VALUES (1, 'Earlier copy')")
+                conn.commit()
+        raise OSError(errno.EOPNOTSUPP, "Hard links are not supported")
+
+    monkeypatch.setattr(database, "datetime", FixedClock)
+    monkeypatch.setattr(database.os, "link", no_hard_links)
+    monkeypatch.setattr(database, "schema_fingerprint", lambda: 12345)
+    _ = add_game("Live library", "")
+    init_db()
+
+    assert database.list_db_backups() == [name]
+    with closing(sqlite3.connect(target)) as conn:
+        expected = "Earlier copy" if existing_copy else "Live library"
+        assert conn.execute("SELECT title FROM games").fetchall() == [(expected,)]
+    assert os.listdir(database.db_backup_dir()) == [name]
 
 
 @pytest.mark.schema_fingerprint

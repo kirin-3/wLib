@@ -737,6 +737,11 @@ class TorrentSupervisor:
         with self._lock:
             return [job.snapshot(now) for job in self._jobs.values()]
 
+    def status_for(self, job_id: str) -> dict[str, object] | None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            return job.snapshot(self._clock()) if job is not None else None
+
     def _set_paused(self, job: _Job, paused: bool) -> None:
         job.paused = paused
         job.stage = "paused" if paused else "downloading"

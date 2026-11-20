@@ -26,6 +26,14 @@ def game(title="Eternum", developer="Caribdis"):
     return add_game(title=title, exe_path="x.exe", developer=developer)
 
 
+class _EmptySupervisor:
+    def status(self):
+        return []
+
+    def status_for(self, job_id):
+        return None
+
+
 def test_connect_and_disconnect(api, store, monkeypatch):
     monkeypatch.setattr(rpdl, "login", lambda u, p: ("tok", "Kim"))
     assert api.connect_rpdl_account("kim", "pw") == {"success": True, "username": "Kim"}
@@ -102,10 +110,7 @@ def test_start_runs_a_torrent_job(api, store, monkeypatch, exe, expected):
     store[credentials.RPDL_TOKEN] = "tok"
     started = {}
 
-    class FakeSupervisor:
-        def status(self):
-            return []
-
+    class FakeSupervisor(_EmptySupervisor):
         def start(self, game_id, title, version, rpdl_id, fetch, *, paused=False, job_id=""):
             started.update(game_id=game_id, title=title, version=version, rpdl_id=rpdl_id,
                            paused=paused, job_id=job_id)
@@ -127,10 +132,7 @@ def test_start_reports_a_job_already_running(api, store, monkeypatch):
     gid = game()
     store[credentials.RPDL_TOKEN] = "tok"
 
-    class FakeSupervisor:
-        def status(self):
-            return []
-
+    class FakeSupervisor(_EmptySupervisor):
         def start(self, *args, **kwargs):
             return kwargs["job_id"]
 
@@ -149,10 +151,7 @@ def test_fetch_checks_the_info_hash(api, store, monkeypatch):
     data = torrent_bytes()
     captured = {}
 
-    class FakeSupervisor:
-        def status(self):
-            return []
-
+    class FakeSupervisor(_EmptySupervisor):
         def start(self, game_id, title, version, rpdl_id, fetch, **kwargs):
             captured["fetch"] = fetch
             return kwargs["job_id"]

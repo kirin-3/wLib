@@ -986,12 +986,10 @@ class DownloadsMixin(ApiBase):
         # An installed download leaves "Ready to install".
         _ = self._download_queue.installed(archive_path)
         installed_id = result.get("game_id")
-        if incoming_links and isinstance(installed_id, int):
+        if incoming_links and not f95_url and isinstance(installed_id, int):
             from core.database import replace_game_links
 
-            replace_game_links(
-                installed_id, "f95_post" if f95_url else "page", incoming_links
-            )
+            replace_game_links(installed_id, "page", incoming_links)
 
         if game_id is None and lc_url and isinstance(installed_id, int):
             from core.database import update_game as update_game_row
@@ -1017,28 +1015,24 @@ class DownloadsMixin(ApiBase):
             _ = self._fill_thread_details_from_catalog([installed_id])
 
         # New installs with a thread URL get the same metadata fetch as add_game.
-        if game_id is None and f95_url and isinstance(installed_id, int):
+        if f95_url and isinstance(installed_id, int):
             from core.database import update_game
 
             try:
-                _ = update_game(installed_id, {"f95_url": f95_url})
+                _ = update_game(
+                    installed_id, {"f95_url": f95_url}, f95_post_links=incoming_links
+                )
             except sqlite3.IntegrityError:
                 pass
             else:
-                with self._metadata_lock:
-                    self._metadata_pending.add(installed_id)
-                threading.Thread(
-                    target=self._fetch_added_game_metadata,
-                    args=(installed_id, f95_url, True),
-                    daemon=True,
-                ).start()
-        elif f95_url and game_id is not None:
-            from core.database import update_game as update_game_row
-
-            try:
-                _ = update_game_row(game_id, {"f95_url": f95_url})
-            except sqlite3.IntegrityError:
-                pass
+                if game_id is None:
+                    with self._metadata_lock:
+                        self._metadata_pending.add(installed_id)
+                    threading.Thread(
+                        target=self._fetch_added_game_metadata,
+                        args=(installed_id, f95_url, True),
+                        daemon=True,
+                    ).start()
 
         self._refresh_synced_library()
         return {"success": True, **result}

@@ -380,7 +380,7 @@ def parse_download_links(
     glue = False
     # Builds inside a spoiler that names an older version are kind "old".
     old = False
-    saved: list[tuple[str, str, bool, str, bool, bool, bool, bool]] = []
+    saved: list[tuple[str, str, bool, str, bool, bool, bool]] = []
     builds: list[Build] = []
 
     def hold_part(line: str) -> None:
@@ -392,7 +392,7 @@ def parse_download_links(
             return {"version": "Unknown", "signed_in": False, "builds": []}
         if typ == "spoiler_open":
             # A spoiler is its own scope: what it sets ends where it ends.
-            saved.append((section, label, divider, pending_part, glue, old, active, started))
+            saved.append((section, label, divider, pending_part, glue, old, active))
             glue = False
             spoiler_kind = spoiler_kinds[index]
             if spoiler_kind == "download":
@@ -404,7 +404,9 @@ def parse_download_links(
                 section, label, divider, pending_part, old = value.strip().rstrip(" :"), "", False, "", True
         elif typ == "spoiler_close":
             if saved:
-                section, label, divider, pending_part, glue, old, active, started = saved.pop()
+                # In a headingless post, a known mirror can start the fallback
+                # download list even when that mirror was inside a spoiler.
+                section, label, divider, pending_part, glue, old, active = saved.pop()
         elif typ == "break":
             glue = False
         elif typ == "text":

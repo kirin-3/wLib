@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M17: a torrent that finishes after a pause or a stop becomes ready to install."""
-from core.downloads.queue import PAUSED, QUEUED, READY, RUNNING
-from core.downloads.workers import TorrentContext
+from core.database import init_db, insert_download_job
+from core.downloads import torrent_settings
+from core.downloads.queue import PAUSED, QUEUED, READY, RUNNING, DownloadQueue, QueueJob
+from core.downloads.torrents import TorrentSupervisor, _Job  # pyright: ignore[reportPrivateUsage]
+from core.downloads.workers import TorrentContext, TorrentWorker
 from tests.test_bughunt_M07 import FakeSupervisor, _queue, _running_job
 from tests.test_download_queue import Clock
 
@@ -95,3 +98,22 @@ def test_status_shows_a_paused_torrent_that_finished_as_ready():
     jobs = queue.status()["jobs"]
     assert isinstance(jobs, list)
     assert [job["state"] for job in jobs if isinstance(job, dict) and job.get("job_id") == job_id] == [READY]
+
+
+def test_paused_torrents_do_not_read_the_entire_supervisor_for_each_row(monkeypatch):
+    init_db()
+    supervisor = TorrentSupervisor()
+    for game_id in range(1, 6):
+        torrent = _Job(game_id, "Game", "1", game_id)
+        torrent.stage = "paused"
+        supervisor._jobs[torrent.id] = torrent  # pyright: ignore[reportPrivateUsage]
+        job = QueueJob(id=torrent.id, kind="torrent", game_id=game_id, state=PAUSED)
+        insert_download_job(job.row())
+    queue = DownloadQueue([TorrentWorker(lambda: supervisor)], run_thread=False, clock=Clock())
+    queue.load()
+    assert len(queue.jobs()) == 5
+
+    reads = []
+    monkeypatch.setattr(torrent_settings, "seed_ratio", lambda: reads.append("read"))
+    queue.refresh()
+    assert len(reads) <= 5

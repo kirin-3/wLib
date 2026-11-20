@@ -49,6 +49,17 @@ def test_catalog_reads_skip_ids_beyond_sqlite_range(catalog):
     assert game_lookup.f95_thread_cover("5") == "https://example.org/c.webp"
 
 
+def test_f95_catalog_cover_accepts_decimal_digits_in_thread_id(catalog):
+    assert game_lookup.f95_thread_cover("٥") == "https://example.org/c.webp"
+
+
+def test_very_long_thread_ids_are_ignored(catalog):
+    digits = "9" * 5000
+    assert lewdcorner.extract_thread_id(f"https://lewdcorner.com/threads/{digits}/") == ""
+    assert game_lookup.f95_thread_cover(digits) == ""
+    assert game_lookup.lc_thread_tiers(["21", digits]) == {"21": "Free"}
+
+
 def test_library_loads_with_a_stored_oversized_lc_url(catalog):
     from core.api import Api
 

@@ -63,6 +63,8 @@ class FakeDrive:
             return reply({"files": [{"id": "f", "md5Checksum": md5(self.content)}]})
         if url.path == "/drive/v3/files/f" and url.query == "alt=media":
             return reply(self.content)
+        if url.path == "/drive/v3/files/f" and url.query == "fields=headRevisionId":
+            return reply({"headRevisionId": self.revisions[-1][0]})
         if url.path == "/drive/v3/files/f/revisions":
             return reply(
                 {
@@ -138,6 +140,23 @@ def test_no_restore_over_a_later_upload(monkeypatch):
     drive.upload = racing_uploads
     with pytest.raises(SyncConflict):
         location.write(b"mine", md5(b"base"))
+    assert drive.content == b"after" and drive.uploads == 3
+
+
+def test_no_restore_over_upload_during_revision_download(monkeypatch):
+    drive = FakeDrive(monkeypatch, b"base")
+    drive.before_upload = lambda: drive.upload(b"before")
+    urlopen = drive.urlopen
+
+    def upload_during_download(request, **kwargs):
+        if urlparse(request.full_url).path == "/drive/v3/files/f/revisions/r1":
+            drive.upload(b"after")
+        return urlopen(request, **kwargs)
+
+    monkeypatch.setattr("urllib.request.urlopen", upload_during_download)
+    with pytest.raises(SyncConflict):
+        GoogleDriveLocation("refresh").write(b"mine", md5(b"base"))
+
     assert drive.content == b"after" and drive.uploads == 3
 
 

@@ -351,15 +351,17 @@ def transfer(
         # Delete the partial file before it is released, so a job that takes
         # the same file next never has it deleted under it.
         with _active_parts_lock:
-            if keep_part and part.is_file():
-                # Touch it: its download's last attempt.
-                try:
-                    os.utime(part)
-                except OSError:
-                    pass
-            else:
-                part.unlink(missing_ok=True)
-            if resume_part is not None:
-                _active_parts.discard(resume_part)
+            try:
+                if keep_part and part.is_file():
+                    # Touch it: its download's last attempt.
+                    try:
+                        os.utime(part)
+                    except OSError:
+                        pass
+                else:
+                    part.unlink(missing_ok=True)
+            finally:
+                if resume_part is not None:
+                    _active_parts.discard(resume_part)
         if info.close:
             info.close()

@@ -93,6 +93,19 @@ def test_search_reads_text_fields(calls):
     assert result["date"] == 1767312000
 
 
+@pytest.mark.parametrize(
+    ("field", "normalized"),
+    [("file_size", "size"), ("seeders", "seeders"), ("upload_date", "date")],
+)
+def test_search_clamps_large_negative_integers(calls, field, normalized):
+    _, queue = calls
+    queue.append(_json({"data": {"results": [
+        {"torrent_id": 7, "title": "Game", field: -(10**400)},
+    ]}}))
+    (result,) = rpdl.search("Game")
+    assert result[normalized] == 0
+
+
 def test_search_too_short_makes_no_request(calls):
     seen, _ = calls
     assert rpdl.search("a!") == []
@@ -108,6 +121,17 @@ def test_search_cache_and_refresh(calls):
     assert len(seen) == 1
     rpdl.search("Game One", refresh=True)
     assert len(seen) == 2
+
+
+def test_search_reuses_cache_written_at_unix_epoch(calls, monkeypatch):
+    seen, queue = calls
+    queue.append(_json({"data": {"results": [{"torrent_id": 1, "title": "Game One"}]}}))
+    monkeypatch.setattr(rpdl.time, "time", lambda: 0.0)
+    results = rpdl.search("Game One")
+
+    monkeypatch.setattr(rpdl.time, "time", lambda: 60.0)
+    assert rpdl.search("game one") == results
+    assert len(seen) == 1
 
 
 def test_search_cache_expires(calls, monkeypatch):

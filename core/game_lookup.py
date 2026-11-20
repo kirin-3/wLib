@@ -28,9 +28,18 @@ _MAX_SQLITE_INT = 2**63 - 1
 
 
 def _sqlite_ids(values: Sequence[str]) -> list[int]:
-    """The ASCII-digit IDs that SQLite can bind, sorted; others are skipped."""
-    ids = {int(value) for value in values if value.isascii() and value.isdigit()}
-    return sorted(value for value in ids if value <= _MAX_SQLITE_INT)
+    """The decimal IDs that SQLite can bind, sorted; others are skipped."""
+    ids: set[int] = set()
+    for value in values:
+        if not value.isdecimal():
+            continue
+        try:
+            number = int(value)
+        except ValueError:
+            continue
+        if number <= _MAX_SQLITE_INT:
+            ids.add(number)
+    return sorted(ids)
 
 
 def _strings(value: object) -> list[str]:
@@ -377,7 +386,7 @@ def lc_thread_entries(thread_ids: Sequence[str]) -> dict[str, dict[str, object]]
 
 def lc_thread_tiers(thread_ids: Sequence[str]) -> dict[str, str]:
     """The catalog tier of each LC thread that has one (a small read for library loads)."""
-    ids = _sqlite_ids(thread_ids)
+    ids = _sqlite_ids([value for value in thread_ids if value.isascii()])
     if not ids or database.get_setting("catalog_enabled") == "0":
         return {}
     path = Path(database.DB_PATH).parent / CATALOG_FILE

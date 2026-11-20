@@ -867,6 +867,16 @@ class GoogleDriveLocation(_OAuthLocation):
             + "?alt=media",
             file_request=True,
         )
+        # Another upload can land while the previous revision downloads.
+        head = _json_object(
+            self._request(
+                "GET",
+                GDRIVE_API + "files/" + urllib.parse.quote(file_id) + "?fields=headRevisionId",
+                file_request=True,
+            )
+        )
+        if head.get("headRevisionId") != own_revision:
+            raise SyncConflict()
         _ = self._update_content(file_id, replaced)
         raise SyncConflict()
 

@@ -26,7 +26,9 @@ from core.database import (
     add_game_launch_target,
     get_all_games,
     get_connection,
+    get_game_links,
     get_setting,
+    replace_game_links,
     update_game,
     update_setting,
 )
@@ -3706,6 +3708,37 @@ def test_api_install_archive_update_changes_exe_and_version(tmp_path):
     assert game["version"] == "2.0"
     assert str(game["exe_path"]).endswith(os.path.join("2.0", "Game.exe"))
     assert not old_dir.exists()
+
+
+def test_api_install_archive_update_keeps_links_for_the_new_thread(tmp_path):
+    api = Api()
+    library = tmp_path / "lib"
+    old_dir = library / "Game" / "1.0"
+    old_dir.mkdir(parents=True)
+    old_exe = old_dir / "Game.exe"
+    old_exe.write_text("old")
+    update_setting("library_folder", str(library))
+    old_url = "https://f95zone.to/threads/old.111/"
+    new_url = "https://f95zone.to/threads/new.222/"
+    game_id = add_game("Game", str(old_exe), old_url, version="1.0")
+    old_link = {"url": "https://vndb.org/v123"}
+    new_link = {"url": "https://vndb.org/v456"}
+    replace_game_links(game_id, "f95_post", [old_link])
+
+    archive = tmp_path / "Game-2.0.zip"
+    _write_archive(archive, {"Game.exe": b"new"})
+    result = api.install_archive({
+        "archive_path": str(archive),
+        "game_id": game_id,
+        "title": "Game",
+        "version": "2.0",
+        "f95_url": new_url,
+        "links": [new_link],
+    })
+
+    assert result["success"] is True, result
+    assert get_all_games()[0]["f95_url"] == new_url
+    assert [link["url"] for link in get_game_links(game_id)] == [new_link["url"]]
 
 
 def test_api_install_archive_update_keeps_finished_version(tmp_path):

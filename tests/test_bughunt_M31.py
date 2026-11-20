@@ -34,3 +34,12 @@ def test_bold_heading_before_downloads_spoiler_stays_active():
     )
     builds = parse_download_links(html)["builds"]
     assert [(b["label"], b["platform"]) for b in builds] == [("Win", "windows"), ("Linux", "linux")]
+
+
+def test_known_mirror_in_plain_spoiler_starts_headingless_downloads():
+    html = _post(
+        _spoiler("Mirrors", '<a href="https://mega.nz/file/a#b">MEGA</a>')
+        + '<a href="https://files.example/game.zip">Alternative mirror</a>'
+    )
+    builds = parse_download_links(html)["builds"]
+    assert [mirror["host"] for build in builds for mirror in build["mirrors"]] == ["mega", "files.example"]

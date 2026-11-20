@@ -37,6 +37,7 @@ _ROMAN = {
     "xi": "11", "xii": "12", "xiii": "13", "xiv": "14", "xv": "15", "xvi": "16",
     "xvii": "17", "xviii": "18", "xix": "19", "xx": "20",
 }
+_ROMAN_FOR_NUMBER = {number: roman for roman, number in _ROMAN.items()}
 _VERSION_TOKEN = re.compile(r"^v?\d+(?:\.\d+)+[a-z]*$|^v\d+[a-z]*$")
 _CHAPTER_TOKEN = re.compile(r"^(?:ch|chap|chapter|ep|part|pt)\d+$")
 _FIX_TOKEN = re.compile(r"^fix(?:ed)?\d*$|^hotfix\d*$")
@@ -157,7 +158,11 @@ def _name_number_spans(title: str, game_title: str) -> set[tuple[int, int]]:
     spans: set[tuple[int, int]] = set()
     start = 0
     for number in numbers:
-        hit = re.compile(rf"(?<![\d.]){number}(?![\d.])").search(title, start)
+        pattern = rf"(?i:(?<!\bv)(?<![\d.]){number}(?![\d.]))"
+        if roman := _ROMAN_FOR_NUMBER.get(number):
+            # The listing may spell the name as "Game II" or "GameII".
+            pattern += rf"|(?:(?<![a-zA-Z0-9])(?i:{roman})|(?<=[a-z]){roman.upper()})(?![a-zA-Z0-9])"
+        hit = re.compile(pattern).search(title, start)
         if hit:
             spans.add(hit.span())
             start = hit.end()

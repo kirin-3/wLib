@@ -16,6 +16,10 @@ class FakeSupervisor:
     def status(self) -> list[dict[str, object]]:
         return [dict(job) for job in self.jobs.values()]
 
+    def status_for(self, job_id: str) -> dict[str, object] | None:
+        job = self.jobs.get(job_id)
+        return dict(job) if job is not None else None
+
     def start(self, game_id, title, version, rpdl_id, fetch, *, paused=False, job_id=""):
         del fetch
         self.jobs[job_id] = {
