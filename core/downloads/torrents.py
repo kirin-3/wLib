@@ -493,6 +493,12 @@ class TorrentSupervisor:
                 _ = self._send({"cmd": "pause", "id": job.id})
         elif decision == seeding.SEED:
             job.seed_state, job.phase = "seeding", "seeding"
+            # A pause or hold was for the download; a paused torrent uploads nothing.
+            job.auto_paused = False
+            if job.paused:
+                job.paused = False
+                if job.added:
+                    _ = self._send({"cmd": "resume", "id": job.id})
         else:
             self._end_seeding(job)
             return
