@@ -153,11 +153,19 @@ def staging_dir() -> Path:
     return path
 
 
+_NAME_BYTES = 200
+
+
 def _safe_name(name: str) -> str:
     # Backslashes are separators on Windows, even when running on Linux.
     name = name.replace("\\", "/").rsplit("/", 1)[-1]
     name = re.sub(r'[\x00-\x1f<>:"|?*]', "_", name).strip(" .")
-    return name[:200] or "download"
+    # Keep the archive suffix and leave room in the 255-byte filename limit
+    # for the `-<job id>` that a name clash adds.
+    stem, suffix = split_archive_name(name)
+    limit = _NAME_BYTES - len(suffix.encode())
+    stem = stem.encode()[:limit].decode(errors="ignore")
+    return stem + suffix or "download"
 
 
 def transfer(

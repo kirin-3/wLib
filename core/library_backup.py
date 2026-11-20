@@ -32,7 +32,7 @@ from core.database import (
     RPGMAKER_LINUX_RUNNER_SETTING,
     get_all_games,
     get_connection,
-    get_all_play_sessions,
+    get_play_history,
     get_setting,
     replace_game_links,
     normalize_launch_mode,
@@ -466,8 +466,8 @@ def build_library_backup(
     sections = _select_sections(options, default_sections=DEFAULT_EXPORT_SECTIONS)
     games: list[dict[str, object]] = []
 
-    sessions_by_game = (
-        get_all_play_sessions() if SECTION_USER_STATE in sections else {}
+    play_totals, sessions_by_game = (
+        get_play_history() if SECTION_USER_STATE in sections else ({}, {})
     )
     for game in get_all_games():
         exported_game: dict[str, object] = {
@@ -477,7 +477,9 @@ def build_library_backup(
         if sync_uid:
             exported_game["uid"] = sync_uid
         if SECTION_USER_STATE in sections:
-            user_state = _zone_times(_pick_fields(game, USER_STATE_FIELDS))
+            # Totals from the same read as the sessions, so the two agree.
+            played = {**game, **play_totals.get(int(str(game["id"])), {})}
+            user_state = _zone_times(_pick_fields(played, USER_STATE_FIELDS))
             user_state["play_sessions"] = [
                 _zone_times(_pick_fields(session, PLAY_SESSION_FIELDS))
                 for session in sessions_by_game.get(int(str(game["id"])), [])
@@ -621,11 +623,12 @@ def _snapshot_name(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H-%M-%S-%fZ") + ".json"
 
 
-def write_sync_snapshot(*, prune: bool = True) -> str | None:
+def write_sync_snapshot(*, prune: bool = True, keep_empty: bool = False) -> str | None:
     """Save the whole local library before sync changes it; keep the last five.
 
     Returns the snapshot's name, or None when the library has no games (there
-    is nothing to undo). With prune=False the caller prunes after its change
+    is nothing to undo), unless keep_empty is set: a snapshot restore saves an
+    empty library too, so the restore can be undone. With prune=False the caller prunes after its change
     commits, so a change that fails cannot push older snapshots out. The copy older wLib versions kept in
     `sync/last-local.json` moves into the list the first time.
     """
@@ -638,7 +641,7 @@ def write_sync_snapshot(*, prune: bool = True) -> str | None:
             os.replace(legacy, os.path.join(folder, _snapshot_name(moment)))
         except OSError:
             pass
-    if not database.get_all_games():
+    if not keep_empty and not database.get_all_games():
         return None
     name = _snapshot_name(datetime.now(UTC))
     _ = write_library_backup(os.path.join(folder, name), {"sections": SUPPORTED_SECTIONS})
@@ -2317,6 +2320,7 @@ def apply_library_backup(
     expected_local_modified_at: str | None = None,
     merge_mode: str = "overwrite",
     source_covers: bool = False,
+    snapshot_empty: bool = False,
 ) -> dict[str, object]:
     backup = validate_library_backup(backup)
     merge_mode = _resolve_merge_mode(options, merge_mode)
@@ -2375,7 +2379,7 @@ def apply_library_backup(
             if mirror or sync:
                 # A mirror can delete games and a sync merge overwrites values;
                 # either can be undone from these copies.
-                snapshot = write_sync_snapshot(prune=False)
+                snapshot = write_sync_snapshot(prune=False, keep_empty=snapshot_empty)
 
             if SECTION_SETTINGS_PATHS in sections:
                 tools_updated, tools_skipped = _import_companion_tools(

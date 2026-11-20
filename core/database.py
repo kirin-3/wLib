@@ -2692,20 +2692,45 @@ def get_play_sessions(game_id: int) -> list[dict[str, object]]:
         return [dict(row) for row in rows]
 
 
-def get_all_play_sessions() -> dict[int, list[dict[str, object]]]:
-    """Every game's sessions in one query, newest first, keyed by game id."""
+PLAY_TOTAL_FIELDS = ("playtime_seconds", "last_played", "last_played_version")
+
+
+def get_play_history() -> tuple[
+    dict[int, dict[str, object]], dict[int, list[dict[str, object]]]
+]:
+    """Each game's play totals and sessions (newest first), read together.
+
+    One read transaction: a play tick commits the totals and the session's
+    duration together, so a backup never pairs a new total with an old session.
+    """
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
-        rows = cast(
-            list[sqlite3.Row],
-            conn.execute(
-                "SELECT * FROM play_sessions ORDER BY game_id, started_at DESC, id DESC"
-            ).fetchall(),
-        )
+        _ = conn.execute("BEGIN")
+        try:
+            total_rows = cast(
+                list[sqlite3.Row],
+                conn.execute(
+                    f"SELECT id, {', '.join(PLAY_TOTAL_FIELDS)} FROM games"
+                ).fetchall(),
+            )
+            rows = cast(
+                list[sqlite3.Row],
+                conn.execute(
+                    "SELECT * FROM play_sessions ORDER BY game_id, started_at DESC, id DESC"
+                ).fetchall(),
+            )
+        finally:
+            conn.rollback()
+    totals = {
+        int(str(cast(object, row["id"]))): {
+            field: cast(object, row[field]) for field in PLAY_TOTAL_FIELDS
+        }
+        for row in total_rows
+    }
     sessions: dict[int, list[dict[str, object]]] = {}
     for row in rows:
         sessions.setdefault(int(str(cast(object, row["game_id"]))), []).append(dict(row))
-    return sessions
+    return totals, sessions
 
 
 # Settings Operations

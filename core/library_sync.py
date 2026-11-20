@@ -1869,7 +1869,11 @@ class SyncManager:
                 # comes back ready to launch. Path settings (library folders)
                 # are never touched by sync and stay as they are now.
                 result = apply_library_backup(
-                    backup, {"sections": RESTORE_SECTIONS}, mirror=True, sync=True
+                    backup,
+                    {"sections": RESTORE_SECTIONS},
+                    mirror=True,
+                    sync=True,
+                    snapshot_empty=True,
                 )
             except BackupValidationError as error:
                 return {"success": False, "error": str(error), "error_code": error.error_code}

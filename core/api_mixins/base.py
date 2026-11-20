@@ -32,7 +32,7 @@ from core.host_platform import (
 )
 from core.game_tools import game_tool_folder
 from core.bridge_exposure import hide_from_js
-from core.launcher import Launcher, proton_compat_data_path
+from core.launcher import Launcher, launch_env_overrides, proton_compat_data_path
 from core.scraper import Scraper
 from core.versions import actionable_remote_version, normalize_version
 from core.app_version import APP_VERSION
@@ -323,11 +323,18 @@ class ApiBase:
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
         coerced_id = self._coerce_db_id(game_id) if game_id is not None else None
-        if coerced_id is not None and not is_windows():
+        launch_prefix = ""
+        if coerced_id is not None:
             from core.database import get_game
 
             row = get_game(coerced_id)
-            if row is not None and bool(row.get("sandbox_enabled")):
+            if row is not None:
+                # Like the launcher, a WINEPREFIX= in the saved launch arguments
+                # wins over the prefix fields.
+                launch_prefix = launch_env_overrides(
+                    row.get("command_line_args"), row.get("launch_mode")
+                ).get("WINEPREFIX", "").strip()
+            if row is not None and not is_windows() and bool(row.get("sandbox_enabled")):
                 # The sandbox mounts the game's prefix read-write, so the game
                 # can plant DLLs or registry entries there. Prefix tools and
                 # installers run on the host without the sandbox and would run
@@ -338,8 +345,10 @@ class ApiBase:
 
         # Like the launcher, an empty per-game value (what the UI sends when no
         # override is set) means "use the global setting", not "use nothing".
-        prefix_source = (prefix_path or "").strip() or get_setting_fn(
-            "wine_prefix_path"
+        prefix_source = (
+            launch_prefix
+            or (prefix_path or "").strip()
+            or get_setting_fn("wine_prefix_path")
         )
         proton_source = (proton_path or "").strip() or get_setting_fn("proton_path")
 

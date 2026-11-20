@@ -154,6 +154,37 @@ def ensure_executable(path: str) -> bool:
     return os.access(path, os.X_OK)
 
 
+def pop_launch_env(args: list[str], launch_mode: str) -> dict[str, str]:
+    """Remove and return the leading VAR=value words of a launch command.
+
+    Only a %command% line or the Custom Command mode can set variables this way.
+    """
+    user_env: dict[str, str] = {}
+    if "%command%" in args or launch_mode == "custom":
+        while args and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", args[0]):
+            key, value = args.pop(0).split("=", 1)
+            user_env[key] = value
+    return user_env
+
+
+def launch_env_overrides(command_line_args: object, launch_mode: object) -> dict[str, str]:
+    """The VAR=value overrides a launch with these saved settings applies.
+
+    Prefix tools and installers use this so they change the same prefix as
+    the launch (a WINEPREFIX= in the arguments wins over the prefix fields).
+    """
+    text = "" if command_line_args is None else str(command_line_args)
+    try:
+        args = (
+            _split_windows_command_line(text)
+            if is_windows()
+            else shlex.split(text, posix=True)
+        )
+    except ValueError:
+        return {}
+    return pop_launch_env(args, normalize_launch_mode(launch_mode))
+
+
 def _split_windows_command_line(command_line: str) -> list[str]:
     """Split arguments using the quoting rules used by Windows applications."""
     arguments: list[str] = []
@@ -1631,11 +1662,7 @@ class Launcher:
             return {"success": False, "error": f"Invalid command line arguments: {exc}"}
 
         # Explicit VAR=value prefixes; host-env cleanup must never strip these.
-        user_env: dict[str, str] = {}
-        if "%command%" in args or launch_mode == "custom":
-            while args and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", args[0]):
-                key, value = args.pop(0).split("=", 1)
-                user_env[key] = value
+        user_env = pop_launch_env(args, launch_mode)
         env.update(user_env)
 
         ext = path_module.splitext(exe_path)[1].lower()

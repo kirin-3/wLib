@@ -95,5 +95,26 @@ def looks_like_archive(head: bytes, suffix: str) -> bool:
     if suffix in TAR_SUFFIXES:
         if head.startswith(_TAR_COMPRESSED):
             return True
-        return head[_TAR_MAGIC_OFFSET : _TAR_MAGIC_OFFSET + 5] == b"ustar"
+        if head[_TAR_MAGIC_OFFSET : _TAR_MAGIC_OFFSET + 5] == b"ustar":
+            return True
+        return _tar_checksum_ok(head)
     return False
+
+
+def _tar_checksum_ok(head: bytes) -> bool:
+    """True when `head` starts with a tar header whose checksum is correct.
+
+    Old (V7) tar headers have no `ustar` magic; like `tarfile`, accept them
+    when the octal checksum matches the header bytes (unsigned or signed sum,
+    with the checksum field counted as spaces).
+    """
+    if len(head) < 512 or not head[0]:
+        return False
+    field = head[148:156].split(b"\0", 1)[0].strip(b" ")
+    if not field or any(c not in b"01234567" for c in field):
+        return False
+    stored = int(field, 8)
+    block = head[:148] + b" " * 8 + head[156:512]
+    unsigned = sum(block)
+    signed = sum(c - 256 if c > 127 else c for c in block)
+    return stored in (unsigned, signed)

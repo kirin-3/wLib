@@ -498,6 +498,7 @@ class DownloadsMixin(ApiBase):
 
         archive_path = os.path.expanduser((path or "").strip())
         folder_source = bool(archive_path) and os.path.isdir(archive_path)
+        entry_path = archive_path
         if folder_source:
             if not in_torrent_area(archive_path):
                 return {
@@ -510,16 +511,19 @@ class DownloadsMixin(ApiBase):
         else:
             if not archive_path or not os.path.isfile(archive_path):
                 return {"success": False, "error": "Archive file was not found."}
-            if archive_format(archive_path) not in ("zip", "7z", "rar", "tar"):
-                return {"success": False, "error": UNSUPPORTED_FORMAT_MESSAGE}
             from core.archive_install import ArchiveInstallError, check_volume_set, volume_set
 
+            # Any part may be chosen; like the install, check the format of
+            # the part that extraction opens.
             volumes = volume_set(archive_path)
             if volumes is not None:
                 try:
                     check_volume_set(volumes)
                 except ArchiveInstallError as exc:
                     return {"success": False, "error": str(exc), "error_code": "parts_missing"}
+                entry_path = volumes.first
+            if archive_format(entry_path) not in ("zip", "7z", "rar", "tar"):
+                return {"success": False, "error": UNSUPPORTED_FORMAT_MESSAGE}
 
             guessed_title, guessed_version = guess_title_and_version(
                 archive_stem(archive_path)
@@ -619,7 +623,7 @@ class DownloadsMixin(ApiBase):
         tool_error: str | None = None
         if not folder_source:
             _tool, tool_error = detect_archive_tool(
-                archive_path, library_folder=os.path.expanduser(library_folder)
+                entry_path, library_folder=os.path.expanduser(library_folder)
             )
         destination = ""
         if library_folder.strip() and title.strip():

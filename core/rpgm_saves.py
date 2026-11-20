@@ -192,15 +192,47 @@ def _name_list(rows: object) -> list[str]:
     ]
 
 
+def _table_max_level(params: object) -> int | None:
+    """Highest level the class stat tables cover (`params[i][level]`)."""
+    if not isinstance(params, list) or not params:
+        return None
+    lengths: list[int] = []
+    for row in cast(list[object], params):
+        if not isinstance(row, list):
+            return None
+        lengths.append(len(cast(list[object], row)))
+    shortest = min(lengths)
+    return shortest - 1 if shortest >= 2 else None
+
+
+def _learnings(rows: object) -> list[list[int]]:
+    """`[level, skillId]` pairs from a class's `learnings` list."""
+    if not isinstance(rows, list):
+        return []
+    result: list[list[int]] = []
+    for row in cast(list[object], rows):
+        if not isinstance(row, dict):
+            continue
+        level = cast(JsonDict, row).get("level")
+        skill = cast(JsonDict, row).get("skillId")
+        if _plain_int(level) and _plain_int(skill) and int(cast(int, skill)) > 0:
+            result.append([int(cast(int, level)), int(cast(int, skill))])
+    return result
+
+
 def load_names(data_root: str) -> JsonDict:
     """Names and class curves from `<data root>/data/`; empty parts on failure."""
     data_dir = os.path.join(data_root, "data")
     actors: dict[str, str] = {}
+    actor_max_levels: dict[str, int] = {}
     for index, row in enumerate(_read_json_list(data_dir, "Actors")):
         if index and isinstance(row, dict):
             actors[str(index)] = strip_escapes(
                 str(cast(JsonDict, row).get("name") or "")
             )
+            max_level = cast(JsonDict, row).get("maxLevel")
+            if _plain_int(max_level) and int(cast(int, max_level)) >= 1:
+                actor_max_levels[str(index)] = int(cast(int, max_level))
     classes: dict[str, JsonDict] = {}
     for index, row in enumerate(_read_json_list(data_dir, "Classes")):
         if not index or not isinstance(row, dict):
@@ -220,6 +252,8 @@ def load_names(data_root: str) -> JsonDict:
         classes[str(index)] = {
             "name": strip_escapes(str(record.get("name") or "")),
             "expParams": curve,
+            "maxLevel": _table_max_level(record.get("params")),
+            "learnings": _learnings(record.get("learnings")),
         }
     system = _read_json_dict(data_dir, "System")
     terms = system.get("terms")
@@ -237,6 +271,7 @@ def load_names(data_root: str) -> JsonDict:
         "weapons": _entries(_read_json_list(data_dir, "Weapons"), "weapon"),
         "armors": _entries(_read_json_list(data_dir, "Armors"), "armor"),
         "actors": actors,
+        "actorMaxLevels": actor_max_levels,
         "classes": classes,
         "switches": _name_list(system.get("switches")),
         "variables": _name_list(system.get("variables")),
@@ -596,6 +631,47 @@ def _apply_set_variable(tree: JsonDict, patch: Mapping[str, object]) -> None:
     values[ident] = value
 
 
+def _apply_level(record: JsonDict, level: int, names: Mapping[str, object]) -> None:
+    """Set the level like the game's own level-up: experience and skills too."""
+    class_id = record.get("_classId")
+    classes = cast(dict[str, JsonDict], names.get("classes") or {})
+    klass = classes.get(str(class_id)) or {}
+    old = record.get("_level")
+    old_level = int(cast(int, old)) if _plain_int(old) else None
+    # Base stats are `params[i][level]`, so a level past the table is NaN in
+    # the game. The actor's own cap applies too. An actor already past the cap
+    # means a plugin raised it, so the cap is not used then.
+    caps: list[int] = []
+    table_max = klass.get("maxLevel")
+    if isinstance(table_max, int):
+        caps.append(table_max)
+    actor_caps = cast(dict[str, int], names.get("actorMaxLevels") or {})
+    actor_max = actor_caps.get(str(record.get("_actorId")))
+    if isinstance(actor_max, int):
+        caps.append(actor_max)
+    if caps:
+        cap = min(caps)
+        if (old_level is None or old_level <= cap) and level > cap:
+            raise InvalidPatch(f"Level must be from 1 to {cap} for this actor")
+    record["_level"] = level
+    curve = cast("list[float] | None", klass.get("expParams"))
+    exp_map = record.get("_exp")
+    if curve is not None and isinstance(exp_map, dict):
+        cast(JsonDict, exp_map)[str(class_id)] = exp_for_level(curve, level)
+    # The game learns each class skill whose level it passes (learnSkill keeps
+    # `_skills` sorted). Lowering a level forgets nothing, as in the game.
+    skills = _array(record.get("_skills"))
+    if old_level is None or level <= old_level or skills is None:
+        return
+    known = {int(cast(int, s)) for s in skills if _plain_int(s)}
+    for learn_level, skill in cast(list[list[int]], klass.get("learnings") or []):
+        if old_level < learn_level <= level and skill not in known:
+            skills.append(skill)
+            known.add(skill)
+    if all(_is_number(s) for s in skills):
+        skills.sort(key=lambda s: float(cast(float, s)))
+
+
 def _apply_set_actor(
     tree: JsonDict, patch: Mapping[str, object], names: Mapping[str, object]
 ) -> None:
@@ -613,15 +689,7 @@ def _apply_set_actor(
             raise InvalidPatch("The name must be text of 1 to 200 characters")
         record["_name"] = value
     elif field == "level":
-        level = _check_int(value, 1, MAX_LEVEL, "Level")
-        record["_level"] = level
-        classes = cast(dict[str, JsonDict], names.get("classes") or {})
-        curve = cast(
-            "list[float] | None", (classes.get(str(class_id)) or {}).get("expParams")
-        )
-        exp_map = record.get("_exp")
-        if curve is not None and isinstance(exp_map, dict):
-            cast(JsonDict, exp_map)[str(class_id)] = exp_for_level(curve, level)
+        _apply_level(record, _check_int(value, 1, MAX_LEVEL, "Level"), names)
     elif field == "exp":
         exp = _check_int(value, 0, MAX_EXP, "Experience")
         exp_map = record.get("_exp")
@@ -846,6 +914,13 @@ def write_save(
     that write. A check-then-replace is not fully atomic, but the window is
     only the time between the last read and `os.replace`.
     """
+    if os.path.islink(path):
+        # The backup skips links and the replace would turn the link into a
+        # plain file, so the edit would have no backup of the real slot.
+        raise RpgmSaveError(
+            "This save file is a link to another file. Linked saves cannot be edited.",
+            "write_failed",
+        )
     data, fingerprint = _read_fingerprint(path)
     if fingerprint[0] != size or fingerprint[1] != mtime_ns:
         raise SaveChanged(_CHANGED)

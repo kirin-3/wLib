@@ -335,17 +335,22 @@ def archive_format(archive_path: str) -> str:
     """'zip' | '7z' | 'rar' | 'tar' | '' based on the file extension.
 
     Split archives (`.7z.001`, `.zip.001`) and spanned zips (`.zip` with
-    `.z01`...) need 7-Zip, so they report '7z'.
+    `.z01`...) need 7-Zip, so they report '7z'. Any part of a spanned zip
+    or an old-style `.rar` + `.r00` set reports the format of its set, found
+    the same letter-case-blind way as `volume_set`.
     """
     lower = (archive_path or "").lower()
-    split = _SPLIT_RE.match(os.path.basename(lower))
+    name = os.path.basename(lower)
+    split = _SPLIT_RE.match(name)
     if split:
         return "rar" if split.group("base").endswith(".rar") else "7z"
     family = _archive_family(lower)
-    if family == "zip":
-        stem = lower[: -len(".zip")]
-        if os.path.exists(stem + ".z01") or os.path.exists(archive_path[: -len(".zip")] + ".z01"):
+    if family == "zip" or (not family and (_ZIP_SPAN_RE.match(name) or _RAR_OLD_RE.match(name))):
+        volumes = volume_set(archive_path)
+        if volumes is not None and volumes.kind == "zip_span":
             return "7z"
+        if volumes is not None and volumes.kind == "rar_old":
+            return "rar"
     return family
 
 

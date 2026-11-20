@@ -52,6 +52,9 @@ JOBS_FILE = "game-file-jobs.json"
 
 UNINSTALL_RUNNING = "Close the game before uninstalling it."
 MOVE_RUNNING = "Close the game before moving it."
+FOLDER_IN_USE = (
+    "A running program uses this folder. Close the game (or the program) first."
+)
 MOVING_BUSY = "This game is being moved. Wait for the move to finish."
 UNINSTALLING_BUSY = "This game is being uninstalled."
 NOT_INSTALLED = "This game is not installed."
@@ -283,6 +286,55 @@ class GameHooks:
     saves_folder: Callable[[int], str] = lambda _game_id: ""
 
 
+def _proc_arg_path(arg: str) -> str:
+    """The Linux path in one command-line word, or "" (Wine shows Z:\\ paths)."""
+    if len(arg) > 2 and arg[0] in "zZ" and arg[1] == ":" and arg[2] in "\\/":
+        return "/" + arg[3:].replace("\\", "/")
+    return arg if arg.startswith("/") else ""
+
+
+def folder_in_use(root: str, proc_dir: str = "/proc") -> bool:
+    """True when a process has its executable, working folder or a path argument in root.
+
+    Linux only. It finds a game that a previous wLib window started (wLib
+    forgets its running games when it closes, and the game keeps running).
+    Processes of other users and processes in other PID namespaces (for
+    example the host when wLib runs as a Flatpak) are not visible.
+    """
+    from core.host_platform import is_linux
+
+    if not root or not is_linux():
+        return False
+    root_real = real_path(root)
+    try:
+        pids = [name for name in os.listdir(proc_dir) if name.isdigit()]
+    except OSError:
+        return False
+    own = str(os.getpid())
+    for pid in pids:
+        if pid == own:
+            continue
+        base = os.path.join(proc_dir, pid)
+        for link in ("exe", "cwd"):
+            try:
+                target = os.readlink(os.path.join(base, link))
+            except OSError:
+                continue
+            target = target.removesuffix(" (deleted)")
+            if target.startswith("/") and is_within_real(os.path.normpath(target), root_real):
+                return True
+        try:
+            with open(os.path.join(base, "cmdline"), "rb") as handle:
+                words = handle.read(65536).split(b"\0")
+        except OSError:
+            continue
+        for word in words:
+            path = _proc_arg_path(os.fsdecode(word))
+            if path and is_within_real(os.path.normpath(path), root_real):
+                return True
+    return False
+
+
 def _game_id(game: Mapping[str, object]) -> int | None:
     try:
         return int(str(game.get("id")))
@@ -406,6 +458,8 @@ def _plan_entry(
         busy = hooks.busy(game_id)
         if busy:
             entry["blocked_reason"] = busy
+        elif os.path.isdir(root) and folder_in_use(root):
+            entry["blocked_reason"] = FOLDER_IN_USE
     return entry
 
 
