@@ -19,7 +19,7 @@ const emit = defineEmits<{ activate: [] }>();
 <template>
   <button
     type="button"
-    class="filter-pill px-2.5 py-1 rounded-full text-[0.6875rem] font-medium"
+    class="filter-pill relative px-2.5 py-1 rounded-full text-[0.6875rem] font-medium"
     :class="`filter-pill--${props.state}`"
     :data-tag-color="props.color || undefined"
     :data-filter-state="props.state"
@@ -38,6 +38,8 @@ const emit = defineEmits<{ activate: [] }>();
     />
     <span class="filter-pill-label">{{ props.label }}</span>
     <span v-if="props.count !== undefined" class="ml-1 opacity-70">{{ props.count }}</span>
+    <!-- The pill is relative so this absolute span stays inside the filter
+         pane's scroll area; otherwise it can stretch <main> past the window. -->
     <span v-if="props.state !== 'neutral'" class="sr-only">
       {{ props.state === "include" ? ", included" : ", excluded" }}
     </span>

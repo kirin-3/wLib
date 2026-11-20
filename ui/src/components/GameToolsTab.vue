@@ -493,7 +493,8 @@ const useDecryptedChecked = computed({
             </li>
           </ul>
 
-          <fieldset class="space-y-2" :disabled="isBusy">
+          <!-- Relative keeps the absolute sr-only legend inside the dialog's scroll body. -->
+          <fieldset class="relative space-y-2" :disabled="isBusy">
             <legend class="sr-only">Where to extract</legend>
             <label class="flex items-center gap-2 text-xs" style="color: var(--text-secondary)">
               <input v-model="extractMode" type="radio" value="folder" name="extract-mode" />

@@ -3293,7 +3293,10 @@ onUnmounted(() => {
   padding: 0;
   border: 0;
 }
+/* Relative: the absolute sr-only text in the rows must anchor to this scroll
+   area, or it stretches the outer library scroller past the list. */
 .library-table-wrap {
+  position: relative;
   overflow-x: auto;
   container-type: inline-size;
 }
