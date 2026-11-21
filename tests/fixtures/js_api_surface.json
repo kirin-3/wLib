@@ -181,6 +181,13 @@
   "get_app_version": [],
   "get_archive_install_status": [],
   "get_auto_check_setting": [],
+  "get_auto_launch_runtime": [
+    "exe_path",
+    "auto_inject_ce",
+    "custom_prefix",
+    "proton_version",
+    "sandboxed"
+  ],
   "get_available_runners": [],
   "get_catalog_status": [],
   "get_collections": [],
@@ -244,6 +251,7 @@
   "get_rpdl_magnet": [
     "torrent_id"
   ],
+  "get_rpgmaker_runner_install_status": [],
   "get_running_games": [],
   "get_sandbox_install_info": [],
   "get_sandbox_install_status": [],
@@ -317,6 +325,8 @@
     "prefix_path",
     "proton_path"
   ],
+  "install_rpgmaker_linux_runner": [],
+  "install_rpgmaker_mkxpz": [],
   "install_rpgmaker_rtp": [
     "prefix_path",
     "proton_path",

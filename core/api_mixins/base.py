@@ -243,6 +243,14 @@ class ApiBase:
             "current": "",
             "error": "",
         }
+        self._rpgm_runner_install_status: dict[str, object] = {
+            "running": False,
+            "target": "",
+            "stage": "",
+            "done": 0,
+            "total": 0,
+            "error": "",
+        }
         # Polled by the install-from-archive dialog while install_archive runs.
         self._archive_install_status: dict[str, object] = {
             "running": False,

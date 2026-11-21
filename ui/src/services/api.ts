@@ -1342,12 +1342,41 @@ export interface PlaytimeTickDetail {
   sessionId: number;
 }
 
+export interface MkxpzStatus {
+  installed: boolean;
+  path: string;
+}
+
+export interface RunnerInstallability {
+  supported: boolean;
+  can_install: boolean;
+  missing_tools: string[];
+  reason: string;
+}
+
 export interface RpgmakerLinuxRunnerStatus {
   available: boolean;
   path: string;
   source: string;
   configured_path: string;
   error: string;
+  mkxpz?: MkxpzStatus;
+  installable?: RunnerInstallability;
+}
+
+export interface RpgmakerRunnerInstallStatus extends ApiBasicResponse {
+  running: boolean;
+  target: "runner" | "mkxpz" | "";
+  stage: string;
+  done: number;
+  total: number;
+  error: string;
+}
+
+export interface AutoLaunchRuntime {
+  runtime: "rpgmaker_linux" | "default";
+  engine: "mv" | "mz" | "mkxpz" | "";
+  reason: string;
 }
 
 export type HostPlatform = "linux" | "windows" | "unsupported";
@@ -2653,6 +2682,35 @@ class ApiService {
     game_id: number | null = null,
   ): Promise<ApiBasicResponse> {
     return this.invoke<ApiBasicResponse>("install_rpgmaker_rtp", prefix_path, proton_path, game_id);
+  }
+
+  async installRpgmakerLinuxRunner(): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("install_rpgmaker_linux_runner");
+  }
+
+  async installRpgmakerMkxpz(): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("install_rpgmaker_mkxpz");
+  }
+
+  async getRpgmakerRunnerInstallStatus(): Promise<RpgmakerRunnerInstallStatus> {
+    return this.invoke<RpgmakerRunnerInstallStatus>("get_rpgmaker_runner_install_status");
+  }
+
+  async getAutoLaunchRuntime(
+    exePath: string,
+    autoInjectCe = false,
+    customPrefix = "",
+    protonVersion = "",
+    sandboxed = false,
+  ): Promise<AutoLaunchRuntime> {
+    return this.invoke<AutoLaunchRuntime>(
+      "get_auto_launch_runtime",
+      exePath,
+      autoInjectCe,
+      customPrefix,
+      protonVersion,
+      sandboxed,
+    );
   }
 
   async downloadProtonGe(): Promise<DownloadProtonResponse> {

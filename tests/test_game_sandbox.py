@@ -1522,3 +1522,100 @@ def test_bwrap_runner_root_pins_nwjs_folder_only_in_fallback(
     pinned = ["--setenv", "NWJSPATH", str(root / "nwjs" / "new")]
     triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
     assert (pinned in triples) is not overlay
+
+
+def test_bwrap_runner_root_binds_install_path_file_and_mkxpz_overlay(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    home = tmp_path / "home"
+    custom_dir = tmp_path / "custom-rpgm"
+    mkxpz_folder = custom_dir / "mkxp-z"
+    mkxpz_folder.mkdir(parents=True)
+    runner_root = custom_dir / "nwjs" / "nwjs"
+    runner_root.mkdir(parents=True)
+    cfg = home / ".config" / "defrpgmakerlinuxpath.txt"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(f"{custom_dir}/\n", encoding="utf-8")
+
+    monkeypatch.setattr(sandbox, "runner_overlay_supported", lambda _b, _r: True)
+    argv = sandbox.build_bwrap_argv(
+        ["runner", "--gamepath", "/games"],
+        game_dir="/games",
+        home=str(home),
+        sandbox_home=str(tmp_path / "sandbox"),
+        cwd="/games",
+        runner_root=str(runner_root),
+    )
+
+    triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
+    quads = [argv[i : i + 4] for i in range(len(argv) - 3)]
+    home_bind_idx = triples.index(["--bind", str(tmp_path / "sandbox"), str(home)])
+    cfg_bind_idx = triples.index(["--ro-bind", str(cfg), str(cfg)])
+    assert home_bind_idx < cfg_bind_idx
+    assert [
+        "--overlay-src",
+        str(mkxpz_folder),
+        "--tmp-overlay",
+        str(mkxpz_folder),
+    ] in quads
+
+
+def test_bwrap_runner_root_skips_mkxpz_when_overlay_unsupported_or_missing(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    home = tmp_path / "home"
+    runner_root = home / "desktopapps" / "nwjs" / "nwjs"
+    runner_root.mkdir(parents=True)
+
+    # Folder missing: no mkxp-z overlay mount.
+    monkeypatch.setattr(sandbox, "runner_overlay_supported", lambda _b, _r: True)
+    argv_missing = sandbox.build_bwrap_argv(
+        ["runner"],
+        game_dir="/games",
+        home=str(home),
+        sandbox_home=str(tmp_path / "sandbox"),
+        cwd="/games",
+        runner_root=str(runner_root),
+    )
+    mkxpz_folder = home / "desktopapps" / "mkxp-z"
+    assert str(mkxpz_folder) not in argv_missing
+
+    # Folder present, overlay unsupported: no mkxp-z mount at all.
+    mkxpz_folder.mkdir(parents=True)
+    monkeypatch.setattr(
+        sandbox,
+        "runner_overlay_supported",
+        lambda _b, root: root != str(mkxpz_folder),
+    )
+    argv_no_overlay = sandbox.build_bwrap_argv(
+        ["runner"],
+        game_dir="/games",
+        home=str(home),
+        sandbox_home=str(tmp_path / "sandbox"),
+        cwd="/games",
+        runner_root=str(runner_root),
+    )
+    assert str(mkxpz_folder) not in argv_no_overlay
+
+
+def test_bwrap_runner_root_refuses_install_dir_equal_to_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    home = tmp_path / "home"
+    runner_root = home / "nwjs" / "nwjs"
+    runner_root.mkdir(parents=True)
+    cfg = home / ".config" / "defrpgmakerlinuxpath.txt"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(f"{home}\n", encoding="utf-8")
+
+    monkeypatch.setattr(sandbox, "runner_overlay_supported", lambda _b, _r: True)
+    with pytest.raises(ValueError, match="whole home folder"):
+        _ = sandbox.build_bwrap_argv(
+            ["runner"],
+            game_dir="/games",
+            home=str(home),
+            sandbox_home=str(tmp_path / "sandbox"),
+            cwd="/games",
+            runner_root=str(runner_root),
+        )

@@ -46,6 +46,7 @@ test('sandbox launch errors link to settings and prefix conflicts keep their exp
   for (const code of ['sandbox_missing','sandbox_unusable','network_block_unavailable','network_block_needs_sandbox','proton_missing_offline']) assert.equal(sandboxLaunchError(code,'Unavailable')?.openSettings, true);
   assert.deepEqual(sandboxLaunchError('prefix_in_use','Story is already running.'), {message:'Story is already running.',openSettings:false});
   assert.deepEqual(sandboxLaunchError('rpgmaker_cicpoffs_sandbox','cicpoffs does not work in the sandbox.'), {message:'cicpoffs does not work in the sandbox.',openSettings:false});
+  assert.deepEqual(sandboxLaunchError('rpgmaker_mkxpz_sandbox','mkxp-z needs overlay support in the sandbox.'), {message:'mkxp-z needs overlay support in the sandbox.',openSettings:false});
   assert.equal(sandboxLaunchError('other','Failure'), null);
 });
 

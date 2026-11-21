@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 
 import {
   LAUNCH_MODE_OPTIONS,
+  getAutoWineControlsVisibility,
   getLaunchModeOptions,
   isClearlyNativeTarget,
   normalizeLaunchMode,
@@ -113,4 +114,46 @@ test("unsupported hosts preserve stored Wine and Proton overrides", () => {
     custom_prefix: "/old/prefix",
     proton_version: "/old/proton",
   });
+});
+
+test("Auto Detect resolved to RPGMaker Linux hides only the RTP installer and labels the option", () => {
+  const resolved = getAutoWineControlsVisibility({
+    wineProtonSupported: true,
+    launchMode: "auto",
+    targets: ["/games/mv/Game.exe"],
+    resolvedToRpgmakerLinux: true,
+  });
+  assert.deepEqual(resolved, { showWineControls: true, showRtpInstaller: false });
+
+  const wineDefault = getAutoWineControlsVisibility({
+    wineProtonSupported: true,
+    launchMode: "auto",
+    targets: ["/games/mv/Game.exe"],
+    resolvedToRpgmakerLinux: false,
+  });
+  assert.deepEqual(wineDefault, { showWineControls: true, showRtpInstaller: true });
+
+  const explicitWine = getAutoWineControlsVisibility({
+    wineProtonSupported: true,
+    launchMode: "wine_proton",
+    targets: ["/games/mv/Game.exe"],
+    resolvedToRpgmakerLinux: true,
+  });
+  assert.deepEqual(explicitWine, { showWineControls: true, showRtpInstaller: true });
+
+  const nativeAuto = getAutoWineControlsVisibility({
+    wineProtonSupported: true,
+    launchMode: "auto",
+    targets: ["/games/renpy/game.sh"],
+    resolvedToRpgmakerLinux: false,
+  });
+  assert.deepEqual(nativeAuto, { showWineControls: false, showRtpInstaller: false });
+
+  const options = getLaunchModeOptions(
+    { launch_modes: ["auto", "native", "wine_proton", "rpgmaker_linux"], rpgmaker_linux: true },
+    true,
+    "auto",
+    true,
+  );
+  assert.equal(options[0]?.label, "Auto Detect → RPGMaker Linux");
 });

@@ -60,6 +60,7 @@ import type {
   ProtonDownloadStatus,
   PlatformCapabilities,
   RpgmakerLinuxRunnerStatus,
+  RpgmakerRunnerInstallStatus,
   SaveBackupKeep,
   SettingsResponse,
   SystemDepsCommandResponse,
@@ -67,6 +68,7 @@ import type {
 } from "../services/api";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../services/api";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
+import { getRpgmakerRunnerUiState } from "../utils/rpgmakerRunner";
 import { validateCustomPlayStatuses } from "../utils/playStatus";
 import PathStatus from "../components/PathStatus.vue";
 import CompanionToolsSettings from "../components/CompanionToolsSettings.vue";
@@ -320,10 +322,124 @@ const defaultRpgmakerLinuxRunnerStatus: RpgmakerLinuxRunnerStatus = {
   source: "",
   configured_path: "",
   error: "RPGMaker Linux runner is not installed or configured.",
+  mkxpz: { installed: false, path: "" },
+  installable: {
+    supported: false,
+    can_install: false,
+    missing_tools: [],
+    reason: "",
+  },
 };
 const rpgmakerLinuxRunnerStatus = ref<RpgmakerLinuxRunnerStatus>({
   ...defaultRpgmakerLinuxRunnerStatus,
 });
+const rpgmakerRunnerInstallStatus = ref<RpgmakerRunnerInstallStatus>({
+  success: true,
+  running: false,
+  target: "",
+  stage: "",
+  done: 0,
+  total: 0,
+  error: "",
+});
+const rpgmakerRunnerUi = computed(() =>
+  getRpgmakerRunnerUiState(
+    rpgmakerLinuxRunnerStatus.value,
+    rpgmakerRunnerInstallStatus.value,
+  ),
+);
+let rpgmakerRunnerPollTimer: ReturnType<typeof setTimeout> | null = null;
+const stopRpgmakerRunnerPolling = () => {
+  if (rpgmakerRunnerPollTimer) {
+    clearTimeout(rpgmakerRunnerPollTimer);
+    rpgmakerRunnerPollTimer = null;
+  }
+};
+const refreshRpgmakerRunnerStatus = async () => {
+  try {
+    const data = await api.getSettings();
+    if (!pageDisposed && data?.rpgmaker_linux_runner_status) {
+      rpgmakerLinuxRunnerStatus.value = data.rpgmaker_linux_runner_status;
+    }
+  } catch (e) {
+    console.error("Failed to refresh RPGMaker Linux runner status", e);
+  }
+};
+const pollRpgmakerRunnerInstallStatus = async (wasRunning = false) => {
+  if (pageDisposed) return;
+  try {
+    const status = await api.getRpgmakerRunnerInstallStatus();
+    if (pageDisposed) return;
+    if (status && status.success !== false) {
+      rpgmakerRunnerInstallStatus.value = status;
+      if (status.running) {
+        stopRpgmakerRunnerPolling();
+        rpgmakerRunnerPollTimer = setTimeout(() => {
+          rpgmakerRunnerPollTimer = null;
+          void pollRpgmakerRunnerInstallStatus(true);
+        }, 1000);
+        return;
+      }
+      if (wasRunning) {
+        await refreshRpgmakerRunnerStatus();
+      }
+    }
+  } catch (e) {
+    if (!pageDisposed) {
+      rpgmakerRunnerInstallStatus.value = {
+        ...rpgmakerRunnerInstallStatus.value,
+        running: false,
+        stage: "",
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+};
+const startRpgmakerRunnerInstall = async (target: "runner" | "mkxpz") => {
+  if (rpgmakerRunnerInstallStatus.value.running) return;
+  const initialStage =
+    target === "runner"
+      ? "Starting RPGMaker Linux runner installation"
+      : "Starting mkxp-z installation";
+  rpgmakerRunnerInstallStatus.value = {
+    success: true,
+    running: true,
+    target,
+    stage: initialStage,
+    done: 0,
+    total: 0,
+    error: "",
+  };
+  try {
+    const res =
+      target === "runner"
+        ? await api.installRpgmakerLinuxRunner()
+        : await api.installRpgmakerMkxpz();
+    if (!res || !res.success) {
+      rpgmakerRunnerInstallStatus.value = {
+        success: true,
+        running: false,
+        target,
+        stage: "",
+        done: 0,
+        total: 0,
+        error: res?.error || "Installation failed.",
+      };
+      return;
+    }
+    await pollRpgmakerRunnerInstallStatus(true);
+  } catch (e) {
+    rpgmakerRunnerInstallStatus.value = {
+      success: true,
+      running: false,
+      target,
+      stage: "",
+      done: 0,
+      total: 0,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+};
 const rpgmakerLinuxRunnerAvailable = computed(
   () => rpgmakerLinuxRunnerStatus.value.available,
 );
@@ -585,6 +701,9 @@ const loadSettings = async () => {
 
       const sysDeps = await api.getSystemDepsCommand();
       if (sysDeps) systemDeps.value = sysDeps;
+    }
+    if (platformCapabilities.value.rpgmaker_linux && !pageDisposed) {
+      await pollRpgmakerRunnerInstallStatus(false);
     }
   } catch (e) {
     console.error("Failed to load settings", e);
@@ -927,6 +1046,7 @@ onMounted(() => {
 onUnmounted(() => {
   pageDisposed = true;
   stopProtonDownloadPolling();
+  stopRpgmakerRunnerPolling();
   if (pollTimer) {
     clearTimeout(pollTimer);
     pollTimer = null;
@@ -2213,9 +2333,9 @@ const browseUrm = async () => {
                   RPGMaker Linux Runner
                 </h4>
                 <p id="settings-rpgm-help" class="text-xs mt-1" style="color: var(--text-muted)">
-                  Optional native-port runner for RPG Maker, TyranoBuilder,
-                  Godot, Construct, and Nscripter games. Install it manually
-                  from the upstream project.
+                  Native Linux runner for RPG Maker XP, VX, VX Ace, MV, and MZ games.
+                  When installed, Auto Detect uses it automatically unless Wine/Proton
+                  overrides are set on a game.
                 </p>
               </div>
               <button
@@ -2250,14 +2370,108 @@ const browseUrm = async () => {
 
             <p
               class="copyable-feedback text-xs"
-              :class="rpgmakerLinuxRunnerAvailable ? 'text-green-400' : 'text-yellow-400'"
+              :style="{ color: rpgmakerLinuxRunnerAvailable ? 'var(--success-text)' : 'var(--warning-text)' }"
             >
               {{ rpgmakerLinuxRunnerStatusText }}
             </p>
+
+            <div
+              v-if="rpgmakerRunnerUi.showRunnerInstall"
+              data-rpgm-runner-install
+              class="rounded-lg p-3 space-y-2 border"
+              style="background: var(--bg-surface); border-color: var(--border)"
+            >
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p class="text-xs" style="color: var(--text-secondary)">
+                  Downloads the pinned v1.1.9 archive, verifies its SHA-256 hash, and runs upstream
+                  <code>install.sh</code>. It writes to <code>~/desktopapps/nwjs</code> (or your
+                  custom install folder), adds <code>~/.local/bin/rpgmaker-linux</code> and desktop
+                  entries, and can add a Steam compatibility tool and a PATH line to
+                  <code>~/.bash_profile</code>.
+                </p>
+                <button
+                  type="button"
+                  class="ui-card-btn ui-card-btn--primary shrink-0"
+                  :disabled="rpgmakerRunnerUi.installDisabled || !!settingsLoadError || settingsLoading"
+                  @click="startRpgmakerRunnerInstall('runner')"
+                >
+                  <IconLoader2
+                    v-if="rpgmakerRunnerUi.installing && rpgmakerRunnerUi.installTarget === 'runner'"
+                    class="w-3.5 h-3.5 animate-spin"
+                  />
+                  {{ rpgmakerRunnerUi.installing && rpgmakerRunnerUi.installTarget === 'runner' ? 'Installing…' : 'Install Runner' }}
+                </button>
+              </div>
+            </div>
+
+            <p
+              v-else-if="rpgmakerRunnerUi.showRunnerMissingToolsNote"
+              class="text-xs"
+              style="color: var(--warning-text)"
+            >
+              {{ rpgmakerRunnerUi.runnerMissingToolsReason }} Install manually from GitHub or install the missing command first.
+            </p>
+
+            <div
+              data-rpgm-mkxpz-row
+              class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pt-2 border-t"
+              style="border-color: var(--border)"
+            >
+              <div class="min-w-0">
+                <p class="text-xs font-medium" style="color: var(--text-primary)">
+                  mkxp-z module (RPG Maker XP, VX, VX Ace)
+                </p>
+                <p
+                  class="copyable-feedback text-xs mt-0.5 break-all"
+                  :style="{ color: rpgmakerRunnerUi.mkxpzInstalled ? 'var(--success-text)' : 'var(--warning-text)' }"
+                >
+                  {{ rpgmakerRunnerUi.mkxpzStatusText }}
+                </p>
+              </div>
+              <button
+                v-if="rpgmakerRunnerUi.showMkxpzInstall"
+                type="button"
+                class="ui-card-btn ui-card-btn--primary shrink-0"
+                :disabled="rpgmakerRunnerUi.installDisabled || !!settingsLoadError || settingsLoading"
+                @click="startRpgmakerRunnerInstall('mkxpz')"
+              >
+                <IconLoader2
+                  v-if="rpgmakerRunnerUi.installing && rpgmakerRunnerUi.installTarget === 'mkxpz'"
+                  class="w-3.5 h-3.5 animate-spin"
+                />
+                {{ rpgmakerRunnerUi.installing && rpgmakerRunnerUi.installTarget === 'mkxpz' ? 'Installing…' : 'Install mkxp-z' }}
+              </button>
+            </div>
+
+            <p
+              v-if="rpgmakerRunnerUi.installing"
+              data-rpgm-install-stage
+              class="ui-callout"
+              role="status"
+            >
+              <IconLoader2 class="w-4 h-4 shrink-0 animate-spin" style="color: var(--brand)" />
+              {{ rpgmakerRunnerUi.stageText }}
+            </p>
+
+            <div
+              v-if="rpgmakerRunnerUi.errorText"
+              data-rpgm-install-error
+              class="ui-callout ui-callout--danger flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+              role="alert"
+            >
+              <span class="break-words">{{ rpgmakerRunnerUi.errorText }}</span>
+              <button
+                type="button"
+                @click="openRpgmakerLinuxRepo"
+                class="ui-card-btn shrink-0"
+              >
+                Open GitHub
+              </button>
+            </div>
+
             <p class="text-xs" style="color: var(--text-muted)">
-              wLib only launches the external tool. It does not run the
-              upstream installer, updater, exporter, bug reporter, or patch
-              commands.
+              Installs run only when you click Install. wLib never runs the runner's
+              update, export, bug-report, patching, or plugin-install commands.
             </p>
           </div>
         </div>

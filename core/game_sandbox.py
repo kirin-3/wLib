@@ -643,9 +643,21 @@ def build_bwrap_argv(
     `GAMESCOPE_BIND_SHIM` adds gamescope's own display when bwrap starts.
     """
     env = environment or {}
-    check_readonly_mounts(
-        (*readonly_paths, runner_root) if runner_root else readonly_paths, home
-    )
+    runner_config_file = ""
+    mkxpz_folder = ""
+    readonly_to_check: tuple[str, ...] = readonly_paths
+    if runner_root:
+        from core.host_platform import (
+            mkxpz_dir,
+            runner_install_config_path,
+            runner_install_dir,
+        )
+
+        install_dir = runner_install_dir(home=home)
+        runner_config_file = runner_install_config_path(home=home)
+        mkxpz_folder = mkxpz_dir(install_dir)
+        readonly_to_check = (*readonly_paths, runner_root, install_dir, mkxpz_folder)
+    check_readonly_mounts(readonly_to_check, home)
     check_writable_mounts(writable_paths, home)
     argv = [bwrap, *BWRAP_NAMESPACE_OPTIONS]
     if network:
@@ -743,6 +755,14 @@ def build_bwrap_argv(
         )
         if nwjs_path:
             argv += ["--setenv", "NWJSPATH", nwjs_path]
+        if runner_config_file and os.path.isfile(runner_config_file):
+            argv += ["--ro-bind", runner_config_file, runner_config_file]
+        if (
+            mkxpz_folder
+            and os.path.isdir(mkxpz_folder)
+            and runner_overlay_supported(bwrap, mkxpz_folder)
+        ):
+            argv += ["--overlay-src", mkxpz_folder, "--tmp-overlay", mkxpz_folder]
     # After the sandbox-home bind, so the configuration folder lands in the
     # game's own ~/.config. Every pair is optional on the host.
     for source, destination in mangohud or ():

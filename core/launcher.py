@@ -28,7 +28,7 @@ from .database import (
     split_companion_arguments,
     web_player_devtools_enabled,
 )
-from . import display_info, game_sandbox, locale_emulator
+from . import display_info, game_sandbox, locale_emulator, rpgmaker_runner
 from . import gamescope as gamescope_mod
 from .gamescope import GamescopeOptions
 from .host_platform import (
@@ -271,6 +271,8 @@ class RpgmakerLinuxRunnerStatus(TypedDict):
     source: str
     configured_path: str
     error: str
+    mkxpz: rpgmaker_runner.MkxpzStatus
+    installable: rpgmaker_runner.RunnerInstallability
 
 
 class ExitCallback(Protocol):
@@ -1508,19 +1510,10 @@ class Launcher:
 
     def _read_upstream_custom_runner_path(self) -> str:
         path_module = _host_path_module()
-        config_path = path_module.expanduser("~/.config/defrpgmakerlinuxpath.txt")
-        try:
-            with open(config_path, encoding="utf-8") as config_file:
-                configured_base = config_file.readline().strip()
-        except OSError:
+        base_path = rpgmaker_runner.runner_install_dir()
+        default_dir = path_module.abspath(path_module.expanduser("~/desktopapps"))
+        if base_path == default_dir:
             return ""
-
-        if not configured_base:
-            return ""
-
-        base_path = path_module.abspath(
-            path_module.expanduser(configured_base.rstrip(path_module.sep))
-        )
         return path_module.join(
             base_path,
             "nwjs",
@@ -1539,7 +1532,19 @@ class Launcher:
                 "source": "",
                 "configured_path": str(configured_path or "").strip(),
                 "error": "RPGMaker Linux runner is only available on Linux.",
+                "mkxpz": {"installed": False, "path": ""},
+                "installable": {
+                    "supported": False,
+                    "can_install": False,
+                    "missing_tools": [],
+                    "reason": "RPGMaker Linux runner is only available on Linux.",
+                },
             }
+
+        mkxpz = rpgmaker_runner.mkxpz_status()
+        # The host tool lookups matter only while the runner is missing; skip
+        # them (a host shell each in Flatpak) for the detected-runner results.
+        detected_installable = rpgmaker_runner.runner_installability(check_tools=False)
 
         if configured_path is None:
             configured_path = get_setting(RPGMAKER_LINUX_RUNNER_SETTING)
@@ -1557,6 +1562,8 @@ class Launcher:
                     "source": "configured",
                     "configured_path": configured_runner_path,
                     "error": "",
+                    "mkxpz": mkxpz,
+                    "installable": detected_installable,
                 }
 
         # A stale configured path must not hide a runner on PATH or in a known
@@ -1595,6 +1602,8 @@ class Launcher:
                         if configured_error
                         else ""
                     ),
+                    "mkxpz": mkxpz,
+                    "installable": detected_installable,
                 }
 
         if configured_error:
@@ -1604,6 +1613,8 @@ class Launcher:
                 "source": "configured",
                 "configured_path": configured_runner_path,
                 "error": configured_error,
+                "mkxpz": mkxpz,
+                "installable": rpgmaker_runner.runner_installability(),
             }
         return {
             "available": False,
@@ -1611,6 +1622,8 @@ class Launcher:
             "source": "",
             "configured_path": "",
             "error": "RPGMaker Linux runner is not installed or configured.",
+            "mkxpz": mkxpz,
+            "installable": rpgmaker_runner.runner_installability(),
         }
 
     def launch(
@@ -2040,7 +2053,7 @@ class Launcher:
                             cmd = game_sandbox.cheat_engine_wrapper(cmd, ce_command)
                         run_ce = False
                     sandbox_game_dir = game_sandbox.resolve_game_folder(
-                        exe_path, launch_mode
+                        exe_path, "rpgmaker_linux" if runner_root else launch_mode
                     )
                     user_home = os.path.expanduser("~")
                     game_sandbox.check_writable_mounts(
@@ -2463,6 +2476,7 @@ class Launcher:
             return clean_env
 
         def execute_rpgmaker_linux_runner() -> dict[str, object]:
+            nonlocal mangohud_active
             runner_status = self.get_rpgmaker_linux_runner_status()
             if not runner_status["available"]:
                 return {
@@ -2470,6 +2484,22 @@ class Launcher:
                     "error": runner_status["error"]
                     or "RPGMaker Linux runner is not available.",
                 }
+
+            if launch_mode != "rpgmaker_linux" and any(
+                os.path.basename(tool) == "mangohud" for tool in performance_tools
+            ):
+                performance_tools[:] = [
+                    tool
+                    for tool in performance_tools
+                    if os.path.basename(tool) != "mangohud"
+                ]
+                mangohud_active = (
+                    any(os.path.basename(arg) == "mangohud" for arg in user_wrappers)
+                    or env.get("MANGOHUD") == "1"
+                )
+                note = "MangoHud skipped: NW.js hangs with it"
+                performance_notes.append(note)
+                print(note)
 
             runner_game_dir = path_module.dirname(path_module.abspath(exe_path))
             if path_module.basename(runner_game_dir).lower() == "www":
@@ -2495,6 +2525,21 @@ class Launcher:
                         "the launch arguments, or turn off Run in sandbox for this game."
                     ),
                 }
+            if sandboxed and rpgmaker_runner.runner_engine(runner_game_dir) == "mkxpz":
+                bwrap_path = (
+                    sandbox_status["path"] if sandbox_status is not None else ""
+                )
+                mkxpz_folder = rpgmaker_runner.mkxpz_dir()
+                if not game_sandbox.runner_overlay_supported(bwrap_path, mkxpz_folder):
+                    return {
+                        "success": False,
+                        "code": "rpgmaker_mkxpz_sandbox",
+                        "error": (
+                            "mkxp-z needs overlay support in the sandbox to launch RPG Maker "
+                            "XP, VX, and VX Ace games without changing host files. "
+                            "Turn off Run in sandbox for this game."
+                        ),
+                    }
             print(f"Executing via RPGMaker Linux runner: {' '.join(command)}")
             return execute_process(
                 command,
@@ -2784,6 +2829,21 @@ class Launcher:
             native_result = execute_host_native(strict_native=launch_mode == "native")
             if native_result is not None:
                 return native_result
+
+        if launch_mode == "auto":
+            auto_runtime = rpgmaker_runner.resolve_auto_runtime(
+                exe_path,
+                auto_inject_ce=auto_inject_ce,
+                custom_prefix=custom_prefix,
+                proton_version=proton_version,
+                sandboxed=sandboxed,
+                runner_available=lambda: self.get_rpgmaker_linux_runner_status()[
+                    "available"
+                ],
+                bwrap=sandbox_status["path"] if sandbox_status is not None else None,
+            )
+            if auto_runtime["runtime"] == "rpgmaker_linux":
+                return execute_rpgmaker_linux_runner()
 
         if launch_mode == "rpgmaker_linux":
             return execute_rpgmaker_linux_runner()

@@ -55,6 +55,7 @@ import { displayScreenshots, screenshotUrls, type ScreenshotUrls } from "../../u
 import { defaultTargetLabel, hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion } from "../../utils/libraryGames";
 import { LANGUAGE_TAG_PREFIX, languageNames, linkLabel, parseAliasLines, parseLinkLines } from "../../utils/threadDetails";
 import type {
+  AutoLaunchRuntime,
   GameAttachment,
   NoteLink,
   GameRecord,
@@ -71,8 +72,8 @@ import type {
 } from "../../services/api";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../../services/api";
 import {
+  getAutoWineControlsVisibility,
   getLaunchModeOptions,
-  isClearlyNativeTarget,
   normalizeLaunchMode,
   resolveLaunchRuntimeOverrides,
   usesWineProtonControls,
@@ -360,6 +361,9 @@ const runnersLoaded = ref(false);
 const rpgmakerLinuxRunnerAvailable = ref(false);
 const rpgmakerLinuxRunnerLoaded = ref(false);
 const rpgmakerLinuxRunnerError = ref("");
+const autoLaunchRuntime = ref<AutoLaunchRuntime | null>(null);
+let autoLaunchRuntimeTimer: ReturnType<typeof setTimeout> | null = null;
+let autoLaunchRuntimeRequestId = 0;
 const ceInstalled = ref(false);
 const executableModifiedAt = ref<string | null>(null);
 const loadingExecutableModifiedAt = ref(false);
@@ -434,23 +438,32 @@ const runnerOptions = computed(() => protonVersion.value && !availableRunners.va
 const isNativeLaunchMode = computed(
   () => !usesWineProtonControls(launchMode.value),
 );
-const showWineProtonControls = computed(
+const autoResolvedToRpgmakerLinux = computed(
   () =>
-    platformCapabilities.value.wine_proton &&
-    usesWineProtonControls(launchMode.value),
+    launchMode.value === "auto" &&
+    autoLaunchRuntime.value?.runtime === "rpgmaker_linux",
 );
 // Visibility only: saved prefix/runner/CE values are untouched (see isNativeLaunchMode).
-const hideWineControlsForAuto = computed(() => {
-  if (!platformCapabilities.value.wine_proton || launchMode.value !== "auto")
-    return false;
-  const targets = [exePath.value, ...launchTargets.value.map((t) => t.exe_path)];
-  return targets.every(isClearlyNativeTarget);
-});
+const wineControlsVisibility = computed(() =>
+  getAutoWineControlsVisibility({
+    wineProtonSupported: platformCapabilities.value.wine_proton,
+    launchMode: launchMode.value,
+    targets: [exePath.value, ...launchTargets.value.map((t) => t.exe_path)],
+    resolvedToRpgmakerLinux: autoResolvedToRpgmakerLinux.value,
+  }),
+);
+const showWineProtonControls = computed(
+  () => wineControlsVisibility.value.showWineControls,
+);
+const hideWineControlsForAuto = computed(
+  () => !wineControlsVisibility.value.showWineControls,
+);
 const launchModeOptions = computed(() =>
   getLaunchModeOptions(
     platformCapabilities.value,
     rpgmakerLinuxRunnerAvailable.value,
     launchMode.value,
+    autoResolvedToRpgmakerLinux.value,
   ),
 );
 const rpgmakerLinuxModeUnavailable = computed(
@@ -1172,7 +1185,77 @@ useEventListener(window, "wlib-playtime-tick", handleJournalTick);
 onBeforeUnmount(() => {
   journalRequestId++;
   webPlayerExportsRequestId++;
+  autoLaunchRuntimeRequestId++;
+  if (autoLaunchRuntimeTimer) {
+    clearTimeout(autoLaunchRuntimeTimer);
+    autoLaunchRuntimeTimer = null;
+  }
 });
+
+const scheduleAutoLaunchRuntimeCheck = (immediate = false) => {
+  if (autoLaunchRuntimeTimer) {
+    clearTimeout(autoLaunchRuntimeTimer);
+    autoLaunchRuntimeTimer = null;
+  }
+  autoLaunchRuntimeRequestId++;
+  if (
+    !isOpen.value ||
+    !platformCapabilities.value.rpgmaker_linux ||
+    launchMode.value !== "auto"
+  ) {
+    autoLaunchRuntime.value = null;
+    return;
+  }
+  const requestId = autoLaunchRuntimeRequestId;
+  const targetExe = exePath.value;
+  const injectCe = autoInjectCe.value;
+  const prefix = useCustomPrefix.value ? customPrefix.value : "";
+  const proton = protonVersion.value;
+  const isSandboxed = sandboxEnabled.value;
+
+  const run = async () => {
+    autoLaunchRuntimeTimer = null;
+    try {
+      const result = await api.getAutoLaunchRuntime(
+        targetExe,
+        injectCe,
+        prefix,
+        proton,
+        isSandboxed,
+      );
+      if (requestId === autoLaunchRuntimeRequestId && isOpen.value) {
+        autoLaunchRuntime.value = result;
+      }
+    } catch (e) {
+      console.error("Failed to resolve auto launch runtime", e);
+      if (requestId === autoLaunchRuntimeRequestId) {
+        autoLaunchRuntime.value = null;
+      }
+    }
+  };
+
+  if (immediate) {
+    void run();
+  } else {
+    autoLaunchRuntimeTimer = setTimeout(() => {
+      void run();
+    }, 150);
+  }
+};
+
+watch(
+  [isOpen, () => platformCapabilities.value.rpgmaker_linux, launchMode, rpgmakerLinuxRunnerAvailable],
+  () => {
+    scheduleAutoLaunchRuntimeCheck(true);
+  },
+);
+
+watch(
+  [exePath, autoInjectCe, useCustomPrefix, customPrefix, protonVersion, sandboxEnabled],
+  () => {
+    scheduleAutoLaunchRuntimeCheck(false);
+  },
+);
 
 const openSandboxFolder = async () => {
   if (!props.game) return;
@@ -2943,6 +3026,22 @@ const removeAttachment = async (name: string) => {
                       {{ option.label }}
                     </option>
                   </select>
+                  <p
+                    v-if="launchMode === 'auto' && autoResolvedToRpgmakerLinux"
+                    data-testid="auto-launch-runtime-note"
+                    class="text-xs mt-2 font-medium"
+                    style="color: var(--success-text)"
+                  >
+                    Auto Detect → RPGMaker Linux
+                  </p>
+                  <p
+                    v-else-if="launchMode === 'auto' && autoLaunchRuntime?.reason === 'wine_settings'"
+                    data-testid="auto-launch-runtime-note"
+                    class="text-xs mt-2"
+                    style="color: var(--text-secondary)"
+                  >
+                    Auto Detect → Wine / Proton (Wine/Proton settings are active on this game).
+                  </p>
                   <p class="text-xs mt-2" style="color: var(--text-muted)">
                     {{
                       platformCapabilities.platform === "windows"
@@ -3140,7 +3239,7 @@ const removeAttachment = async (name: string) => {
                 </div>
 
                 <div class="flex gap-2"><button class="modal-btn" @click="openPrefixTool('winecfg')">Winecfg</button><button class="modal-btn" @click="openPrefixTool('winetricks')">Winetricks</button></div>
-                <div class="pt-2 border-t border-gray-700/50">
+                <div v-if="wineControlsVisibility.showRtpInstaller" class="pt-2 border-t border-gray-700/50">
                   <button
                     @click="installRtpsToPrefix"
                     class="w-full text-xs font-medium px-4 py-2 rounded-lg transition-colors"

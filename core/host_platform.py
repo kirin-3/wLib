@@ -188,6 +188,44 @@ def unsupported_on_host(feature: str) -> dict[str, object]:
 
 
 FLATPAK_INFO_PATH = "/.flatpak-info"
+RUNNER_INSTALL_CONFIG_REL = os.path.join(".config", "defrpgmakerlinuxpath.txt")
+
+
+def runner_install_config_path(home: str | None = None) -> str:
+    """Path to the upstream RPGMaker Linux runner's custom install folder file."""
+    base_home = os.path.expanduser("~") if home is None else home
+    return os.path.join(base_home, RUNNER_INSTALL_CONFIG_REL)
+
+
+def runner_install_dir(home: str | None = None) -> str:
+    """The RPGMaker Linux runner's install folder: `~/.config/defrpgmakerlinuxpath.txt` or `~/desktopapps`."""
+    base_home = os.path.expanduser("~") if home is None else home
+    default_dir = os.path.abspath(os.path.join(base_home, "desktopapps"))
+    config_path = runner_install_config_path(base_home)
+    try:
+        with open(config_path, encoding="utf-8") as config_file:
+            configured = config_file.readline().strip()
+    except OSError:
+        return default_dir
+
+    if not configured:
+        return default_dir
+
+    trimmed = configured.rstrip("/") or "/"
+    if trimmed == "~":
+        expanded = base_home
+    elif trimmed.startswith("~/"):
+        expanded = os.path.join(base_home, trimmed[2:])
+    else:
+        expanded = os.path.expanduser(trimmed)
+    return os.path.abspath(expanded)
+
+
+def mkxpz_dir(install_dir: str | None = None, *, home: str | None = None) -> str:
+    """Path to the RPGMaker Linux runner's mkxp-z module folder."""
+    base_dir = runner_install_dir(home=home) if install_dir is None else install_dir
+    return os.path.join(base_dir, "mkxp-z")
+
 
 # PyInstaller points LD_LIBRARY_PATH at the bundled libraries. flatpak-spawn is
 # the runtime's binary, and the bundle's older libmount makes its GIO fail to

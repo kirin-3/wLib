@@ -70,10 +70,39 @@ export const resolveLaunchRuntimeOverrides = (
   };
 };
 
+export interface AutoWineControlsVisibility {
+  showWineControls: boolean;
+  showRtpInstaller: boolean;
+}
+
+export const getAutoWineControlsVisibility = (input: {
+  wineProtonSupported: boolean;
+  launchMode: unknown;
+  targets: readonly string[];
+  resolvedToRpgmakerLinux: boolean;
+}): AutoWineControlsVisibility => {
+  if (!input.wineProtonSupported || !usesWineProtonControls(input.launchMode)) {
+    return { showWineControls: false, showRtpInstaller: false };
+  }
+  const mode = normalizeLaunchMode(input.launchMode);
+  if (
+    mode === "auto" &&
+    input.targets.length > 0 &&
+    input.targets.every(isClearlyNativeTarget)
+  ) {
+    return { showWineControls: false, showRtpInstaller: false };
+  }
+  return {
+    showWineControls: true,
+    showRtpInstaller: !(mode === "auto" && input.resolvedToRpgmakerLinux),
+  };
+};
+
 export const getLaunchModeOptions = (
   capabilities: LaunchModeCapabilities,
   rpgmakerLinuxRunnerAvailable: boolean,
   currentMode?: unknown,
+  autoResolvedToRpgmakerLinux = false,
 ) => {
   const current = normalizeLaunchMode(currentMode);
   const supported = new Set(capabilities.launch_modes);
@@ -89,6 +118,8 @@ export const getLaunchModeOptions = (
     label:
       option.value === current && !supported.has(option.value)
         ? `${option.label} (Unavailable on this platform)`
-        : option.label,
+        : option.value === "auto" && autoResolvedToRpgmakerLinux
+          ? "Auto Detect → RPGMaker Linux"
+          : option.label,
   }));
 };

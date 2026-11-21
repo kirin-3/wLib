@@ -79,6 +79,29 @@ class LaunchMixin(ApiBase):
         with self._status_lock:
             return dict(self._sandbox_install_status)
 
+    def get_auto_launch_runtime(
+        self,
+        exe_path: object = "",
+        auto_inject_ce: object = False,
+        custom_prefix: object = "",
+        proton_version: object = "",
+        sandboxed: object = False,
+    ) -> dict[str, object]:
+        """Resolve which runtime Auto Detect will use for a target and settings."""
+        from core.rpgmaker_runner import resolve_auto_runtime
+
+        result = resolve_auto_runtime(
+            str(exe_path or ""),
+            auto_inject_ce=bool(auto_inject_ce),
+            custom_prefix=str(custom_prefix or ""),
+            proton_version=str(proton_version or ""),
+            sandboxed=bool(sandboxed),
+            runner_available=lambda: self.launcher.get_rpgmaker_linux_runner_status()[
+                "available"
+            ],
+        )
+        return dict(result)
+
     def install_sandbox_tool(self, tool: str = "") -> dict[str, object]:
         from core import game_sandbox
 

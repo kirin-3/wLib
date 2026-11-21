@@ -28,7 +28,7 @@ export const networkSwitchState = (player: WebPlayer, platform: string, sandboxE
 };
 
 const SANDBOX_SETTINGS_CODES = ['sandbox_missing', 'sandbox_unusable', 'network_block_unavailable', 'network_block_needs_sandbox', 'proton_missing_offline'];
-const SANDBOX_INFO_CODES = ['prefix_in_use', 'rpgmaker_cicpoffs_sandbox'];
+const SANDBOX_INFO_CODES = ['prefix_in_use', 'rpgmaker_cicpoffs_sandbox', 'rpgmaker_mkxpz_sandbox'];
 
 export const sandboxLaunchError = (code: string | undefined, message: string | undefined) => {
   if (!code || (!SANDBOX_SETTINGS_CODES.includes(code) && !SANDBOX_INFO_CODES.includes(code))) return null;

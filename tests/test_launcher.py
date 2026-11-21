@@ -584,6 +584,8 @@ def test_launch_proton_prefix_isolation(mock_get_setting, mock_popen, mock_exist
             return True
         if "/home/user/.wine/pfx" in path:
             return False
+        if path.endswith(("package.json", "Game.ini")):
+            return False
         return True
 
     mock_exists.side_effect = exists_side_effect
@@ -5293,3 +5295,239 @@ def test_windows_alternate_target_uses_locale_emulator(monkeypatch):
         assert popen.call_args.args[0] == [LEPROC, r"C:\Games\JP\Config.exe"]
         assert popen.call_args.kwargs["cwd"] == r"C:\Games\JP"
     launcher.shutdown()
+
+
+def _create_mv_game(root):
+    game_dir = root / "mv_game"
+    (game_dir / "www" / "js").mkdir(parents=True)
+    (game_dir / "package.json").write_text("{}", encoding="utf-8")
+    (game_dir / "www" / "js" / "plugins.js").write_text("", encoding="utf-8")
+    exe = game_dir / "Game.exe"
+    exe.write_bytes(b"MZstub")
+    return game_dir, exe
+
+
+def _create_fake_runner(root):
+    runner = root / "rpgmaker-linux"
+    runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    os.chmod(runner, 0o755)
+    return runner
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux Auto Detect runner test")
+def test_auto_detect_mv_launches_through_rpgmaker_linux_runner(tmp_path, monkeypatch):
+    game_dir, exe = _create_mv_game(tmp_path)
+    runner = _create_fake_runner(tmp_path)
+    monkeypatch.setenv("WINEPREFIX", "/tmp/leaked-prefix")
+    monkeypatch.setenv("WINEDLLOVERRIDES", "winhttp=n,b")
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "",
+    )
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value = MagicMock()
+        result = Launcher().launch(str(exe), launch_mode="auto")
+
+    assert result["success"] is True
+    mock_popen.assert_called_once()
+    cmd = mock_popen.call_args.args[0]
+    env = mock_popen.call_args.kwargs["env"]
+    assert cmd == [str(runner), "--gamepath", str(game_dir)]
+    assert "WINEPREFIX" not in env
+    assert "WINEDLLOVERRIDES" not in env
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux Auto Detect runner test")
+@pytest.mark.parametrize(
+    "extra_kwargs",
+    [
+        {"custom_prefix": "/tmp/custom-pfx"},
+        {"proton_version": "/usr/bin/proton"},
+        {"auto_inject_ce": True},
+    ],
+)
+def test_auto_detect_mv_with_wine_settings_stays_on_wine_or_proton(
+    tmp_path, monkeypatch, extra_kwargs
+):
+    _game_dir, exe = _create_mv_game(tmp_path)
+    runner = _create_fake_runner(tmp_path)
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: (
+            str(runner)
+            if key == "rpgmaker_linux_runner_path"
+            else str(tmp_path / "default-pfx")
+            if key == "wine_prefix_path"
+            else ""
+        ),
+    )
+    with (
+        patch("subprocess.Popen") as mock_popen,
+        patch("os.makedirs"),
+        patch("threading.Thread"),
+    ):
+        mock_popen.return_value = MagicMock()
+        result = Launcher().launch(str(exe), launch_mode="auto", **extra_kwargs)
+
+    assert result["success"] is True
+    mock_popen.assert_called_once()
+    cmd = mock_popen.call_args.args[0]
+    assert str(runner) not in cmd
+    assert "--gamepath" not in cmd
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux Auto Detect runner test")
+def test_auto_detect_elf_named_exe_still_runs_natively(tmp_path, monkeypatch):
+    game_dir, exe = _create_mv_game(tmp_path)
+    exe.write_bytes(b"\x7fELF\x02\x01\x01\x00")
+    os.chmod(exe, 0o755)
+    runner = _create_fake_runner(tmp_path)
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "",
+    )
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value = MagicMock()
+        result = Launcher().launch(str(exe), launch_mode="auto")
+
+    assert result["success"] is True
+    assert mock_popen.call_args.args[0] == [str(exe)]
+    assert mock_popen.call_args.kwargs["cwd"] == str(game_dir)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux Auto Detect runner test")
+def test_auto_detect_mv_wraps_runner_command_with_percent_command(
+    tmp_path, monkeypatch
+):
+    game_dir, exe = _create_mv_game(tmp_path)
+    runner = _create_fake_runner(tmp_path)
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "",
+    )
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value = MagicMock()
+        result = Launcher().launch(
+            str(exe),
+            command_line_args="FOO=bar wrapper %command% --extra",
+            launch_mode="auto",
+        )
+
+    assert result["success"] is True
+    cmd = mock_popen.call_args.args[0]
+    env = mock_popen.call_args.kwargs["env"]
+    assert cmd == ["wrapper", str(runner), "--gamepath", str(game_dir), "--extra"]
+    assert env["FOO"] == "bar"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux sandbox runner test")
+def test_sandboxed_rpgmaker_linux_refuses_mkxpz_without_overlay(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    vxace_dir = tmp_path / "vxace"
+    vxace_dir.mkdir()
+    (vxace_dir / "Game.ini").write_text("[Game]\n", encoding="utf-8")
+    exe = vxace_dir / "Game.exe"
+    exe.write_bytes(b"MZ")
+
+    runner = (
+        tmp_path
+        / "home"
+        / "desktopapps"
+        / "nwjs"
+        / "nwjs"
+        / "packagefiles"
+        / "nwjsstart-cicpoffs.sh"
+    )
+    runner.parent.mkdir(parents=True)
+    runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    os.chmod(runner, 0o755)
+
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "",
+    )
+    monkeypatch.setattr(
+        "core.game_sandbox.get_sandbox_status",
+        lambda **_kwargs: {
+            "status": "ready",
+            "tool": "bwrap",
+            "path": "/usr/bin/bwrap",
+            "version": "0.10",
+            "reason": "",
+        },
+    )
+    monkeypatch.setattr(
+        "core.game_sandbox.runner_overlay_supported", lambda _bwrap, _root: False
+    )
+
+    with patch("subprocess.Popen") as mock_popen:
+        result = Launcher().launch(
+            str(exe),
+            launch_mode="rpgmaker_linux",
+            game_id=42,
+            sandbox_enabled=True,
+        )
+
+    assert result["success"] is False
+    assert result["code"] == "rpgmaker_mkxpz_sandbox"
+    assert "overlay" in str(result["error"]).lower()
+    assert "Run in sandbox" in str(result["error"])
+    mock_popen.assert_not_called()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux sandbox runner test")
+def test_sandboxed_rpgmaker_linux_mv_keeps_fallback_without_overlay(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    _game_dir, exe = _create_mv_game(tmp_path)
+
+    runner = (
+        tmp_path
+        / "home"
+        / "desktopapps"
+        / "nwjs"
+        / "nwjs"
+        / "packagefiles"
+        / "nwjsstart-cicpoffs.sh"
+    )
+    runner.parent.mkdir(parents=True)
+    runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    os.chmod(runner, 0o755)
+
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "",
+    )
+    monkeypatch.setattr(
+        "core.game_sandbox.get_sandbox_status",
+        lambda **_kwargs: {
+            "status": "ready",
+            "tool": "bwrap",
+            "path": "/usr/bin/bwrap",
+            "version": "0.10",
+            "reason": "",
+        },
+    )
+    monkeypatch.setattr(
+        "core.game_sandbox.runner_overlay_supported", lambda _bwrap, _root: False
+    )
+
+    with patch("subprocess.Popen") as mock_popen:
+        proc = MagicMock()
+        proc.poll.return_value = None
+        mock_popen.return_value = proc
+        result = Launcher().launch(
+            str(exe),
+            launch_mode="rpgmaker_linux",
+            game_id=43,
+            sandbox_enabled=True,
+        )
+
+    assert result["success"] is True
+    mock_popen.assert_called_once()
+    cmd = mock_popen.call_args.args[0]
+    assert "--ro-bind" in cmd
+    assert str(runner.parent.parent) in cmd

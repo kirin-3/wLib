@@ -670,8 +670,47 @@ export class MockBackend {
         run.cancel = true;
         return { success: true, mock: true };
       }
-      case "get_settings":
-        return readMockSettings();
+      case "get_settings": {
+        const settings = readMockSettings();
+        const mockState =
+          typeof window !== "undefined" && window.location?.search
+            ? new URLSearchParams(window.location.search).get("mock_rpgm_runner")
+            : null;
+        if (mockState === "installed" || mockState === "installed_with_mkxpz") {
+          return {
+            ...settings,
+            rpgmaker_linux_runner_status: {
+              ...settings.rpgmaker_linux_runner_status,
+              available: true,
+              path: "/home/user/.local/bin/rpgmaker-linux",
+              source: "local-bin",
+              configured_path: "",
+              error: "",
+              mkxpz:
+                mockState === "installed_with_mkxpz"
+                  ? { installed: true, path: "/home/user/desktopapps/mkxp-z/mkxp-z.x86_64" }
+                  : { installed: false, path: "" },
+              installable: { supported: true, can_install: true, missing_tools: [], reason: "" },
+            },
+          };
+        }
+        if (mockState === "not_installed" || mockState === "running" || mockState === "failed") {
+          return {
+            ...settings,
+            rpgmaker_linux_runner_status: {
+              ...settings.rpgmaker_linux_runner_status,
+              available: false,
+              path: "",
+              source: "",
+              configured_path: "",
+              error: "RPGMaker Linux runner is not installed or configured.",
+              mkxpz: { installed: false, path: "" },
+              installable: { supported: true, can_install: true, missing_tools: [], reason: "" },
+            },
+          };
+        }
+        return settings;
+      }
       case "check_lc_plus": {
         // Mock rule: the result comes from localStorage "wlib-mock-lc-plus-result" ("plus", "standard" or unset for unknown).
         const settings = readMockSettings();
@@ -1656,6 +1695,144 @@ export class MockBackend {
           dlls_installed: false,
           rtps_installed: false,
         };
+      case "get_rpgmaker_runner_install_status": {
+        const mockPlatform =
+          localStorage.getItem("wlib-mock-platform") ||
+          (typeof window !== "undefined" && window.location?.search
+            ? new URLSearchParams(window.location.search).get("mock_platform")
+            : null);
+        if (mockPlatform === "windows") {
+          return {
+            success: false,
+            code: "unsupported_platform",
+            error: "RPGMaker Linux runner installation is only available on Linux.",
+            running: false,
+            target: "",
+            stage: "",
+            done: 0,
+            total: 0,
+          };
+        }
+        try {
+          const saved = localStorage.getItem("wlib-mock-rpgm-runner-install");
+          if (saved) {
+            const parsed = JSON.parse(saved) as {
+              running?: boolean;
+              target?: string;
+              started_at?: number;
+            };
+            // A mock install finishes after a few seconds and marks its
+            // target installed, so the page can leave the running state.
+            if (
+              parsed.running &&
+              typeof parsed.started_at === "number" &&
+              Date.now() - parsed.started_at > 3000
+            ) {
+              const settings = readMockSettings();
+              const current = settings.rpgmaker_linux_runner_status;
+              const next =
+                parsed.target === "runner"
+                  ? {
+                      ...current,
+                      available: true,
+                      path: "/home/user/.local/bin/rpgmaker-linux",
+                      source: "local-bin",
+                      error: "",
+                    }
+                  : {
+                      ...current,
+                      mkxpz: {
+                        installed: true,
+                        path: "/home/user/desktopapps/mkxp-z/mkxp-z.x86_64",
+                      },
+                    };
+              writeMockSettings({ ...settings, rpgmaker_linux_runner_status: next });
+              localStorage.removeItem("wlib-mock-rpgm-runner-install");
+              return {
+                success: true,
+                running: false,
+                target: parsed.target || "",
+                stage: "",
+                done: 0,
+                total: 0,
+                error: "",
+              };
+            }
+            return { success: true, ...parsed };
+          }
+        } catch (_err) {
+          // ignore malformed override
+        }
+        const mockState =
+          typeof window !== "undefined" && window.location?.search
+            ? new URLSearchParams(window.location.search).get("mock_rpgm_runner")
+            : null;
+        if (mockState === "running") {
+          return {
+            success: true,
+            running: true,
+            target: "runner",
+            stage: "Downloading RPGMaker Linux runner v1.1.9",
+            done: 85 * 1024 * 1024,
+            total: 220 * 1024 * 1024,
+            error: "",
+          };
+        }
+        if (mockState === "failed") {
+          return {
+            success: true,
+            running: false,
+            target: "runner",
+            stage: "",
+            done: 0,
+            total: 0,
+            error:
+              "Downloaded archive failed SHA-256 hash mismatch check (expected d926a07e0c0f70be…, got 0000000000000000…). Install manually from https://github.com/bakustarver/rpgmakermlinux-cicpoffs.",
+          };
+        }
+        return { success: true, running: false, target: "", stage: "", done: 0, total: 0, error: "" };
+      }
+      case "install_rpgmaker_linux_runner":
+      case "install_rpgmaker_mkxpz": {
+        const mockPlatform =
+          localStorage.getItem("wlib-mock-platform") ||
+          (typeof window !== "undefined" && window.location?.search
+            ? new URLSearchParams(window.location.search).get("mock_platform")
+            : null);
+        if (mockPlatform === "windows") {
+          return {
+            success: false,
+            code: "unsupported_platform",
+            error: "RPGMaker Linux runner installation is only available on Linux.",
+          };
+        }
+        const target = method === "install_rpgmaker_linux_runner" ? "runner" : "mkxpz";
+        const currentRaw = localStorage.getItem("wlib-mock-rpgm-runner-install");
+        if (currentRaw) {
+          try {
+            const parsed = JSON.parse(currentRaw) as { running?: boolean };
+            if (parsed.running) {
+              return { success: false, error: "Another RPGMaker Linux runner install is already running. Wait for it to finish." };
+            }
+          } catch (_err) {
+            // ignore
+          }
+        }
+        const stage = target === "runner" ? "Downloading RPGMaker Linux runner v1.1.9" : "Downloading mkxp-z";
+        localStorage.setItem(
+          "wlib-mock-rpgm-runner-install",
+          JSON.stringify({
+            running: true,
+            target,
+            stage,
+            done: 0,
+            total: 0,
+            error: "",
+            started_at: Date.now(),
+          }),
+        );
+        return { success: true };
+      }
       case "get_performance_tools":
         return { gamemode: false, mangohud: false, gamescope: mockGamescopeInstalled() };
       case "get_gamescope_status":
@@ -1674,6 +1851,46 @@ export class MockBackend {
         return { platform: "linux", tool: "bwrap", command: "sudo pacman -S bubblewrap", can_install: false, pkexec_available: false, download_url: "https://github.com/containers/bubblewrap", package_manager: "pacman" };
       case "get_sandbox_install_status":
         return { running: false, done: 0, total: 1, current: "", error: "" };
+      case "get_auto_launch_runtime": {
+        const mockPlatform =
+          localStorage.getItem("wlib-mock-platform") ||
+          (typeof window !== "undefined" && window.location?.search
+            ? new URLSearchParams(window.location.search).get("mock_platform")
+            : null);
+        if (mockPlatform !== "linux") {
+          return { runtime: "default", engine: "", reason: "non_linux" };
+        }
+        const exePath = String(args[0] || "").trim();
+        const autoInjectCe = Boolean(args[1]);
+        const customPrefix = String(args[2] || "").trim();
+        const protonVersion = String(args[3] || "").trim();
+        if (!exePath.toLowerCase().endsWith(".exe")) {
+          return { runtime: "default", engine: "", reason: "not_exe" };
+        }
+        if (autoInjectCe || customPrefix || protonVersion) {
+          return { runtime: "default", engine: "", reason: "wine_settings" };
+        }
+        const mockState =
+          typeof window !== "undefined" && window.location?.search
+            ? new URLSearchParams(window.location.search).get("mock_rpgm_runner")
+            : null;
+        const runnerAvailable =
+          mockState === "installed" ||
+          mockState === "installed_with_mkxpz" ||
+          readMockSettings().rpgmaker_linux_runner_status.available;
+        const lowerExe = exePath.toLowerCase();
+        const matchingGame = readMockGames().find((g) => g.exe_path === exePath);
+        const looksRpgm =
+          matchingGame?.engine === "RPGM" ||
+          /(^|[\\/])(mv|mz|rpgm|rpgmaker)([\\/._-]|$)/.test(lowerExe);
+        if (!looksRpgm) {
+          return { runtime: "default", engine: "", reason: "not_rpgmaker" };
+        }
+        if (!runnerAvailable) {
+          return { runtime: "default", engine: "mv", reason: "runner_missing" };
+        }
+        return { runtime: "rpgmaker_linux", engine: "mv", reason: "" };
+      }
       case "install_sandbox_tool":
         return { success: false, error: "Sandbox installation requires the desktop app." };
       case "open_game_sandbox_folder":
@@ -1696,18 +1913,24 @@ export class MockBackend {
       }
       case "open_steam_keyboard":
         return { success: false, code: "unsupported" };
-      case "get_platform_capabilities":
-        if (localStorage.getItem("wlib-mock-platform") === "linux") return {
+      case "get_platform_capabilities": {
+        const mockPlatform =
+          localStorage.getItem("wlib-mock-platform") ||
+          (typeof window !== "undefined" && window.location?.search
+            ? new URLSearchParams(window.location.search).get("mock_platform")
+            : null);
+        if (mockPlatform === "linux") return {
           ...CONSERVATIVE_PLATFORM_CAPABILITIES, platform: "linux", sandbox: "bwrap", wine_proton: true,
           japanese_locale: true,
           runtime_installers: true, wayland: true, rpgmaker_linux: true, cheat_engine_injection: true, companion_tools: true,
           launch_modes: LAUNCH_MODE_OPTIONS.map((option) => option.value),
         };
-        if (localStorage.getItem("wlib-mock-platform") === "windows") return {
+        if (mockPlatform === "windows") return {
           ...CONSERVATIVE_PLATFORM_CAPABILITIES, platform: "windows", sandbox: "sandboxie",
           native_windows_launch: true, japanese_locale: true,
         };
         return { ...CONSERVATIVE_PLATFORM_CAPABILITIES };
+      }
       case "get_system_deps_command":
         return {
           detected: false,

@@ -48,6 +48,13 @@ export const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
     source: "",
     configured_path: "",
     error: "RPGMaker Linux runner is not installed or configured.",
+    mkxpz: { installed: false, path: "" },
+    installable: {
+      supported: true,
+      can_install: true,
+      missing_tools: [],
+      reason: "",
+    },
   },
   library_folder: "",
   library_folders: [],
@@ -226,6 +233,15 @@ const normalizeMockRpgmakerLinuxStatus = (
   const available =
     typeof source.available === "boolean" ? source.available : !!path.trim();
 
+  const rawMkxpz =
+    typeof source.mkxpz === "object" && source.mkxpz !== null
+      ? (source.mkxpz as Record<string, unknown>)
+      : {};
+  const rawInstallable =
+    typeof source.installable === "object" && source.installable !== null
+      ? (source.installable as Record<string, unknown>)
+      : {};
+
   return {
     available,
     path: available ? path : "",
@@ -245,6 +261,18 @@ const normalizeMockRpgmakerLinuxStatus = (
         : available
           ? ""
           : DEFAULT_MOCK_SETTINGS.rpgmaker_linux_runner_status.error,
+    mkxpz: {
+      installed: rawMkxpz.installed === true,
+      path: typeof rawMkxpz.path === "string" ? rawMkxpz.path : "",
+    },
+    installable: {
+      supported: typeof rawInstallable.supported === "boolean" ? rawInstallable.supported : true,
+      can_install: typeof rawInstallable.can_install === "boolean" ? rawInstallable.can_install : true,
+      missing_tools: Array.isArray(rawInstallable.missing_tools)
+        ? rawInstallable.missing_tools.filter((v): v is string => typeof v === "string")
+        : [],
+      reason: typeof rawInstallable.reason === "string" ? rawInstallable.reason : "",
+    },
   };
 };
 

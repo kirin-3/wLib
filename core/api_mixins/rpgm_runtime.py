@@ -712,3 +712,120 @@ class RpgmRuntimeMixin(ApiBase):
             "dlls_installed": self._dlls_installed_in_prefix(target["resolved_prefix"]),
             "rtps_installed": self._rtps_installed_in_prefix(target["resolved_prefix"]),
         }
+
+    def get_rpgmaker_runner_install_status(self) -> dict[str, object]:
+        """Return the shared background install status for RPGMaker Linux runner and mkxp-z."""
+        if not is_linux():
+            return {
+                "success": False,
+                "code": "unsupported_platform",
+                "error": "RPGMaker Linux runner installation is only available on Linux.",
+                "running": False,
+                "target": "",
+                "stage": "",
+                "done": 0,
+                "total": 0,
+            }
+        with self._status_lock:
+            status = dict(
+                getattr(
+                    self,
+                    "_rpgm_runner_install_status",
+                    {
+                        "running": False,
+                        "target": "",
+                        "stage": "",
+                        "done": 0,
+                        "total": 0,
+                        "error": "",
+                    },
+                )
+            )
+        return {"success": True, **status}
+
+    def _start_rpgmaker_runner_install(
+        self, target: str, initial_stage: str
+    ) -> dict[str, object]:
+        from core import rpgmaker_runner
+
+        if not is_linux():
+            return unsupported_on_host("RPGMaker Linux runner installation")
+
+        installability = rpgmaker_runner.runner_installability()
+        if not installability["supported"]:
+            return {"success": False, "error": installability["reason"]}
+
+        runner_status = self.launcher.get_rpgmaker_linux_runner_status()
+        if target == "runner":
+            if runner_status["available"]:
+                return {
+                    "success": False,
+                    "error": "RPGMaker Linux runner is already installed.",
+                }
+            if not installability["can_install"]:
+                return {"success": False, "error": installability["reason"]}
+        elif target == "mkxpz":
+            if not runner_status["available"]:
+                return {
+                    "success": False,
+                    "error": "Install the RPGMaker Linux runner before installing mkxp-z.",
+                }
+            if runner_status["mkxpz"]["installed"]:
+                return {"success": False, "error": "mkxp-z is already installed."}
+        else:
+            return {"success": False, "error": f"Unknown install target: {target}"}
+
+        with self._status_lock:
+            if self._rpgm_runner_install_status.get("running"):
+                return {
+                    "success": False,
+                    "error": "Another RPGMaker Linux runner install is already running. Wait for it to finish.",
+                }
+            self._rpgm_runner_install_status: dict[str, object] = {
+                "running": True,
+                "target": target,
+                "stage": initial_stage,
+                "done": 0,
+                "total": 0,
+                "error": "",
+            }
+
+        def _on_progress(stage: str, done: int, total: int) -> None:
+            with self._status_lock:
+                self._rpgm_runner_install_status["stage"] = stage
+                self._rpgm_runner_install_status["done"] = done
+                self._rpgm_runner_install_status["total"] = total
+
+        def _worker() -> None:
+            error = ""
+            try:
+                if target == "runner":
+                    _ = rpgmaker_runner.install_runner(_on_progress)
+                else:
+                    _ = rpgmaker_runner.install_mkxpz(_on_progress)
+            except Exception as exc:
+                error = str(exc) or "Installation failed."
+            with self._status_lock:
+                self._rpgm_runner_install_status = {
+                    "running": False,
+                    "target": target,
+                    "stage": "",
+                    "done": 0,
+                    "total": 0,
+                    "error": error,
+                }
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return {"success": True}
+
+    def install_rpgmaker_linux_runner(self) -> dict[str, object]:
+        """Download, verify, and install the pinned RPGMaker Linux runner in the background."""
+        return self._start_rpgmaker_runner_install(
+            "runner", "Starting RPGMaker Linux runner installation"
+        )
+
+    def install_rpgmaker_mkxpz(self) -> dict[str, object]:
+        """Download, verify, and install the pinned mkxp-z module in the background."""
+        return self._start_rpgmaker_runner_install(
+            "mkxpz", "Starting mkxp-z installation"
+        )
