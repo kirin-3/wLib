@@ -21,7 +21,11 @@ _KEY = "a" * 43
         ("mega", "https://f95zone.to/dl/1/?fake", True),
         ("mega", "https://lewdcorner.com/masked/out?t=fake", True),
         ("buzzheavier", "https://buzzheavier.com/share", False),
-        ("gofile", "https://gofile.io/d/abc", True),
+        ("gofile", "https://gofile.io/d/abc", False),
+        ("1fichier", "https://1fichier.com/?abc", False),
+        ("krakenfiles", "https://krakenfiles.com/view/abc/file.html", False),
+        ("bzzhr.co", "https://bzzhr.co/e", False),
+        ("mega.io", "https://mega.io/file/c#d", False),
     ],
 )
 def test_in_app_requires_a_single_file_link(host, url, expected):

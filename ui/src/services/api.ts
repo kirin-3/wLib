@@ -560,6 +560,7 @@ export interface UpdateDownloadLinks extends ApiBasicResponse {
   site?: DownloadSite;
   sites?: DownloadSiteOption[];
   version?: string;
+  archive_password?: string;
   builds?: UpdateBuild[];
 }
 export interface UpdateDownloadJob {
@@ -616,7 +617,7 @@ export interface DownloadJobDetails {
   installed?: boolean;
   restarting?: boolean;
 }
-export interface DownloadJobSource { site?: DownloadSite; label?: string; section?: string; platform?: string; host?: string; part?: string; rpdl_id?: number }
+export interface DownloadJobSource { site?: DownloadSite; label?: string; section?: string; platform?: string; host?: string; part?: string; rpdl_id?: number; archive_password?: string }
 export interface DownloadQueueJob {
   job_id: string;
   kind: "host" | "torrent";
@@ -708,6 +709,8 @@ export interface ArchiveInstallOptions {
   source_kind?: "archive" | "folder" | undefined;
   /** Launch file inside the archive, chosen by the user when an update found none. */
   exe_relpath?: string | undefined;
+  /** Optional archive password for encrypted archives; never stored. */
+  archive_password?: string | undefined;
 }
 
 export interface ArchiveInstallResponse extends ApiBasicResponse {

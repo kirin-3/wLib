@@ -5,7 +5,7 @@ import {IconAlertTriangle, IconCheck, IconChevronRight, IconCircleCheck, IconCop
 import {useRouter} from 'vue-router';
 import {api, type DownloadSite, type DownloadSiteOption, type RpdlSearchResponse, type RpdlTorrent, type UpdateBuild, type UpdateMirror} from '../../services/api';
 import {useUpdateDownloads} from '../../composables/useUpdateDownloads';
-import {downloadFailureMessage, inAppMirror, needsExtensionSwitch, orderBuilds, pickerTargetVersion, preselect, selectableBuild, siteUnavailable, suitable, type HostPlatform} from '../../utils/updateDownloads';
+import {downloadFailureMessage, inAppMirror, needsExtensionSwitch, orderBuilds, pickerTargetVersion, platformLabel, preselect, selectableBuild, siteUnavailable, suitable, visibleArchivePassword, type HostPlatform} from '../../utils/updateDownloads';
 import {isWishlisted} from '../../utils/libraryGames';
 import {loadPlatformCapabilities} from '../../utils/platformCapabilities';
 import {formatSize, formatUploadDate, rpdlMarks, rpdlNote, rpdlPreselected, rpdlPrimaryAction, rpdlPrimaryLabel, torrentSentMessage} from '../../utils/torrentDownloads';
@@ -23,6 +23,9 @@ const builds = ref<UpdateBuild[]>([]);
 const chosenBuild = ref<UpdateBuild | null>(null);
 const chosenMirror = ref<UpdateMirror | null>(null);
 const version = ref('');
+const archivePassword = ref('');
+const passwordCopied = ref(false);
+let passwordCopyTimer: ReturnType<typeof setTimeout> | null = null;
 const sites = ref<DownloadSiteOption[]>([]);
 const activeSite = ref<DownloadSite | ''>('');
 const siteNames = {f95: 'F95Zone', lc: 'LewdCorner'};
@@ -54,7 +57,7 @@ const rpdlNoteText = computed(() => rpdlNote(rpdl.value));
 const ordered = computed(()=>orderBuilds(builds.value,platform.value));
 const onlySuitablePatches = computed(() => wishlisted.value && ordered.value.suitable.length > 0
   && ordered.value.suitable.every(build => !canSelect(build)));
-const close = () => { generation++; rpdlGeneration++; if (game.value) void api.closeUpdateDownloadLinks(game.value.id); downloads.close(); };
+const close = () => { generation++; rpdlGeneration++; if (passwordCopyTimer) { clearTimeout(passwordCopyTimer); passwordCopyTimer = null; } passwordCopied.value = false; if (game.value) void api.closeUpdateDownloadLinks(game.value.id); downloads.close(); };
 const openSiteSettings = () => {
   close();
   void router.push(SITE_SETTINGS_ROUTE);
@@ -65,7 +68,7 @@ async function loadLinks(site: DownloadSite | '' = activeSite.value) {
   if (!game.value) return;
   const current = ++generation;
   activeSite.value = site;
-  loading.value = true; error.value = ''; version.value = ''; builds.value = [];
+  loading.value = true; error.value = ''; version.value = ''; archivePassword.value = ''; passwordCopied.value = false; builds.value = [];
   chosenBuild.value = null; chosenMirror.value = null;
   // A selected torrent remains selected when changing thread sites.
   userChose = !!chosenTorrent.value;
@@ -81,6 +84,7 @@ async function loadLinks(site: DownloadSite | '' = activeSite.value) {
     if (!response.success) throw new Error(response.error || 'Could not load links');
     platform.value = capabilities.platform === 'windows' ? 'windows' : 'linux';
     builds.value = response.builds || []; version.value = response.version || 'Unknown';
+    archivePassword.value = visibleArchivePassword(response.archive_password);
     const choice = preselect(builds.value,platform.value);
     if (!userChose && !chosenTorrent.value) { chosenBuild.value = choice?.build || null; chosenMirror.value = choice?.mirror || null; }
   } catch (e) { if (current === generation) error.value = String(e instanceof Error ? e.message : e); }
@@ -212,8 +216,17 @@ const canDownloadMirror = computed(()=>!!chosenMirror.value && !!chosenBuild.val
 const canDownloadTorrent = computed(()=>!!chosenTorrent.value && !!rpdl.value?.signed_in);
 const canDownload = computed(()=>canDownloadMirror.value || canDownloadTorrent.value);
 const buildTitle = (build: UpdateBuild) => (build.section ? build.section + ' · ' : '') + build.label;
-const platformLabel = (value: string) => value === 'unknown' ? 'Any platform' : value === 'all' ? 'All platforms' : value.split('/').map(part=>part.charAt(0).toUpperCase()+part.slice(1)).join(' / ');
 const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).replace(/\s/g,'').toLowerCase() !== build.label.replace(/\s/g,'').toLowerCase();
+async function copyArchivePassword() {
+  if (!archivePassword.value) return;
+  if (!(await copyText(archivePassword.value))) {
+    notify('Could not copy the password. Select it and copy it by hand.', 'error');
+    return;
+  }
+  passwordCopied.value = true;
+  if (passwordCopyTimer) clearTimeout(passwordCopyTimer);
+  passwordCopyTimer = setTimeout(() => { passwordCopied.value = false; passwordCopyTimer = null; }, 1800);
+}
 </script>
 <template>
   <div v-if="game" class="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -275,6 +288,17 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
         </div>
 
         <template v-else>
+          <div v-if="archivePassword" class="callout items-center justify-between gap-3" data-testid="archive-password-row">
+            <div class="min-w-0 flex items-center gap-2 flex-wrap">
+              <span class="text-xs font-medium uppercase tracking-wide" style="color: var(--text-muted)">Archive password</span>
+              <code class="font-mono text-sm px-2 py-0.5 rounded select-all break-all" style="background: var(--bg-overlay); color: var(--text-primary)">{{ archivePassword }}</code>
+            </div>
+            <button type="button" class="modal-btn shrink-0" @click="copyArchivePassword">
+              <IconCheck v-if="passwordCopied" class="w-4 h-4" />
+              <IconCopy v-else class="w-4 h-4" />
+              {{ passwordCopied ? 'Copied' : 'Copy' }}
+            </button>
+          </div>
           <p v-if="!builds.length" class="text-sm py-6 text-center" style="color: var(--text-muted)">No download links found on the game's page.</p>
 
           <div v-for="build in ordered.suitable" :key="build.label + build.section" class="space-y-2" :aria-disabled="!canSelect(build) || undefined">

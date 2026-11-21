@@ -676,6 +676,7 @@ class DownloadQueue:
                     if kind == "host" and key == "site"
                     else replaced.source.get(key) == value
                     for key, value in source.items()
+                    if key != "archive_password"
                 )
             )
             if same and replaced is not None and replaced.source.get("part_file"):
@@ -1219,6 +1220,7 @@ _PUBLIC_SOURCE_KEYS = (
     "host",
     "part",
     "rpdl_id",
+    "archive_password",
 )
 
 

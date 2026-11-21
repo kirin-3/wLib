@@ -1377,7 +1377,7 @@ export class MockBackend {
         const option = sites.find(item => item.site === site);
         if (!option) return {success:false, sites, error:"This game has no available thread for downloads"};
         const prefix = site === "lc" ? "mock-lc" : "mock";
-        return {success:true, site, sites, version:option.version || "v1.2", builds:[{
+        return {success:true, site, sites, version:option.version || "v1.2", archive_password:"f95zone", builds:[{
           // Listed first, as a post with an "Old Versions" spoiler above the current links would be.
           label:"Win", section:"Old Versions", platform:"windows", kind:"old",
           mirrors:[{link_id:`${prefix}-old-mega`,host:"mega",label:"MEGA",part:"",split:false}],
@@ -1398,7 +1398,7 @@ export class MockBackend {
         const link = String(args[1]);
         const site: DownloadSite = link.startsWith("mock-lc-") ? "lc" : "f95";
         const host = link.endsWith("-buzzheavier") ? "buzzheavier" : link.endsWith("-mega") ? "mega" : "pixeldrain";
-        return this._mockDownloads.add("host", gameId, "v1.2", {site,label:"Windows/Linux",section:"",platform:"windows/linux",host,part:""}, typeof args[2] === "string" ? args[2] : null);
+        return this._mockDownloads.add("host", gameId, "v1.2", {site,label:"Windows/Linux",section:"",platform:"windows/linux",host,part:"",archive_password:"f95zone"}, typeof args[2] === "string" ? args[2] : null);
       }
       case "get_download_queue":
         return this._mockDownloads.status(args[0] === true);

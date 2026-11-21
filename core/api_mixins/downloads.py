@@ -857,6 +857,8 @@ class DownloadsMixin(ApiBase):
 
         from core.archive_install import (
             ArchiveInstallError,
+            ArchivePasswordRequired,
+            ArchivePasswordWrong,
             InstallCancelled,
             NoLauncherChosenError,
             archive_stem,
@@ -875,6 +877,12 @@ class DownloadsMixin(ApiBase):
         )
         source_kind = (
             "folder" if str(payload.get("source_kind") or "") == "folder" else "archive"
+        )
+        raw_password = payload.get("archive_password")
+        archive_password = (
+            raw_password
+            if source_kind == "archive" and isinstance(raw_password, str)
+            else ""
         )
         from core.archive_install import in_torrent_area
         from core.downloads.torrents import supervisor as torrent_supervisor
@@ -1056,6 +1064,7 @@ class DownloadsMixin(ApiBase):
                 cancel=self._archive_install_cancel,
                 source_kind=source_kind,
                 exe_relpath=str(payload.get("exe_relpath") or ""),
+                password=archive_password,
             )
         except InstallCancelled as exc:
             self._set_archive_install_status(running=False, stage="cancelled")
@@ -1071,6 +1080,13 @@ class DownloadsMixin(ApiBase):
                 "error": str(exc),
                 "error_code": "no_launcher_chosen",
                 "launch_candidates": exc.candidates,
+            }
+        except (ArchivePasswordRequired, ArchivePasswordWrong) as exc:
+            self._set_archive_install_status(running=False, stage="failed")
+            return {
+                "success": False,
+                "error": str(exc),
+                "error_code": exc.error_code,
             }
         except ArchiveInstallError as exc:
             self._set_archive_install_status(running=False, stage="failed")

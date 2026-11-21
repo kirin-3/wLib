@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   INSTALL_ARCHIVE_EVENT,
   openInstallArchive,
+  formatInstallError,
   defaultDeleteArchive,
   choicesAfterInspect,
   mergeArchiveFields,
@@ -27,12 +28,13 @@ test("openInstallArchive dispatches custom event with details", () => {
   (globalThis as unknown as { window: typeof mockWindow }).window = mockWindow;
 
   try {
-    openInstallArchive({ gameId: 42, archivePath: "/path/to/archive.zip" });
+    openInstallArchive({ gameId: 42, archivePath: "/path/to/archive.zip", archivePassword: "f95zone" });
     assert.ok(dispatchedEvent);
     assert.equal((dispatchedEvent as CustomEvent<InstallArchiveRequest>).type, INSTALL_ARCHIVE_EVENT);
     assert.deepEqual((dispatchedEvent as CustomEvent<InstallArchiveRequest>).detail, {
       gameId: 42,
       archivePath: "/path/to/archive.zip",
+      archivePassword: "f95zone",
     });
 
     dispatchedEvent = null;
@@ -146,4 +148,20 @@ test("re-inspecting the same source keeps the user's choices", () => {
     removeOld: true,
     deleteArchive: true,
   });
+});
+
+test("formatInstallError maps password and cancellation codes to clear messages", () => {
+  const required = formatInstallError({ error_code: "archive_password_required", error: "raw" });
+  assert.match(required, /needs a password/i);
+  assert.match(required, /Archive password/i);
+
+  const wrong = formatInstallError({ error_code: "archive_password_wrong", error: "raw" });
+  assert.match(wrong, /password is wrong/i);
+
+  assert.equal(
+    formatInstallError({ error_code: "install_cancelled", error: "cancelled" }),
+    "Install cancelled. Nothing was changed.",
+  );
+  assert.equal(formatInstallError({ error: "Disk full" }), "Disk full");
+  assert.equal(formatInstallError(null), "Install failed.");
 });

@@ -15,6 +15,12 @@ FIXTURES = Path(__file__).parent / "fixtures" / "f95_download_links"
         ("PC - Android", ("android", "full")),
         ("Linux hotfix", ("linux", "patch")),
         ("Win/Linux", ("windows/linux", "full")),
+        ("Android", ("android", "full")),
+        ("APK", ("android", "full")),
+        ("Patch - APK", ("android", "patch")),
+        ("iOS (IPA)", ("ios", "full")),
+        ("iPhone", ("ios", "full")),
+        ("iPad", ("ios", "full")),
     ],
 )
 def test_classify(label, expected):
@@ -90,14 +96,31 @@ def test_mirror_url_is_decoded_once():
 
 
 def test_domains_the_download_adapters_reject_are_not_named_as_in_app_hosts():
+    from core import update_downloads
+
     html = (
         '<html data-logged-in="true"><article class="message-threadStarterPost"><div class="bbWrapper">'
         '<b>DOWNLOAD</b><br><b>Win: <a href="https://mega.nz/file/a#b">MEGA</a> - '
-        '<a href="https://mega.io/file/c#d">MEGA</a> - <a href="https://bzzhr.co/e">BZZHR</a></b>'
+        '<a href="https://mega.io/file/c#d">MEGA</a> - <a href="https://bzzhr.co/e">BZZHR</a> - '
+        '<a href="https://1fichier.com/?abc">1fichier</a> - '
+        '<a href="https://krakenfiles.com/view/abc/file.html">KrakenFiles</a></b>'
         "</div></article></html>"
     )
     mirrors = parse_download_links(html)["builds"][0]["mirrors"]
-    assert [m["host"] for m in mirrors] == ["mega", "mega.io", "bzzhr.co"]
+    assert [m["host"] for m in mirrors] == [
+        "mega",
+        "mega.io",
+        "bzzhr.co",
+        "1fichier",
+        "krakenfiles",
+    ]
+    assert [update_downloads._in_app(m["host"], m["url"]) for m in mirrors] == [
+        True,
+        False,
+        False,
+        False,
+        False,
+    ]
 
 
 def test_lc_downloads():
@@ -389,3 +412,199 @@ def test_spoiler_in_hidden_quote_copy_is_not_read():
     assert [(b["label"], b["section"], b["kind"]) for b in builds] == [
         ("Win", "", "full")
     ]
+
+
+def test_hidden_regions_and_trap_links_are_skipped():
+    html = _post(
+        "<b>DOWNLOAD</b><br><b>Win</b>: "
+        '<div aria-hidden="true"><a href="https://mega.nz/file/aria#k">MEGA</a></div>'
+        '<div class="u-hidden"><a href="https://gofile.io/d/uhid">GoFile</a></div>'
+        '<a href="https://pixeldrain.com/u/trap" tabindex="-1">Pixeldrain</a>'
+        '<a href="https://pixeldrain.com/u/real">'
+        '<img aria-hidden="true" src="icon.png">'
+        '<i class="fa" aria-hidden="true">icon</i>Pixeldrain</a>'
+    )
+    builds = parse_download_links(html)["builds"]
+    assert len(builds) == 1
+    assert [(m["url"], m["host"], m["label"]) for m in builds[0]["mirrors"]] == [
+        ("https://pixeldrain.com/u/real", "pixeldrain", "Pixeldrain")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("label", "expected_host"),
+    [
+        ("1fichier", "1fichier"),
+        ("Krakenfiles", "krakenfiles"),
+        ("Files.fm", "filesfm"),
+        ("MEGA", "mega"),
+        ("Google Drive", "gdrive"),
+        ("Download", "unknown"),
+        ("Download files", "unknown"),
+    ],
+)
+def test_masked_link_without_favicon_names_host_from_label(label, expected_host):
+    html = _post(
+        "<b>DOWNLOAD</b><br><b>Win</b>: "
+        f'<a href="https://f95zone.to/dl/1/?k=abc">{label}</a>'
+    )
+    mirror = parse_download_links(html)["builds"][0]["mirrors"][0]
+    assert mirror["host"] == expected_host
+
+
+def test_headingless_post_starts_at_newly_known_host():
+    html = _post(
+        '<a href="https://example.com/blog">Blog</a><br>'
+        '<b>APK</b>: <a href="https://1fichier.com/?xyz">1fichier</a>'
+    )
+    builds = parse_download_links(html)["builds"]
+    assert len(builds) == 1
+    assert builds[0]["platform"] == "android"
+    assert [m["host"] for m in builds[0]["mirrors"]] == ["1fichier"]
+
+
+def test_elements_collects_plain_text_lines():
+    from core.download_links import _Elements
+
+    html = _post(
+        "<b>DOWNLOAD</b><br>"
+        '<b>Win</b>: <a href="https://mega.nz/file/a#b">MEGA</a><br>'
+        '<span class="u-hidden">Password: hidden-secret</span>'
+        "<p>Password:</p>"
+        + _spoiler(
+            "Password",
+            '<div class="bbCodeBlock-title">Code:</div>'
+            "<pre><code>mysecret\nline2</code></pre>",
+        )
+    )
+    parser = _Elements()
+    parser.feed(html)
+    assert parser.lines == [
+        "DOWNLOAD",
+        "Win: MEGA",
+        "Password:",
+        "Code:",
+        "mysecret",
+        "line2",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("lines", "expected"),
+    [
+        (["DOWNLOAD", "Password: f95zone"], "f95zone"),
+        (["DOWNLOAD", "Password:", "Spoiler: Password", "gamepass123"], "gamepass123"),
+        (
+            ["DOWNLOAD", "Password:", "Code:", "Click to expand...", "secret42"],
+            "secret42",
+        ),
+        (["DOWNLOAD", "Пароль на архив: abc123"], "abc123"),
+        (["DOWNLOAD", "Pass - dashpass"], "dashpass"),
+        (["DOWNLOAD", "pwd=eqpass"], "eqpass"),
+        (["DOWNLOAD", "Archive password: archpass"], "archpass"),
+        (["DOWNLOAD", "Password: none", "Win: MEGA"], ""),
+        (["DOWNLOAD", "Password: N/A"], ""),
+        (["DOWNLOAD", "Password: not required"], ""),
+        (["DOWNLOAD", "Password: see below", "Win: MEGA"], ""),
+        (["DOWNLOAD", "Password: in spoiler", "Win: MEGA"], ""),
+        (["DOWNLOAD", 'Password: "my game 2"'], "my game 2"),
+        (["DOWNLOAD", "Pass: xyz789 (case sensitive)"], "xyz789"),
+        (["DOWNLOAD", "Password: f95zone."], "f95zone"),
+        (["DOWNLOAD", "Win: MEGA"], ""),
+        (["DOWNLOAD", "Password: https://example.com/pass"], ""),
+        (["DOWNLOAD", "Password: " + "a" * 129], ""),
+        (["DOWNLOAD", "Password: " + "a" * 128], "a" * 128),
+        (["Password: before", "DOWNLOAD", "Win: MEGA"], "before"),
+        (["Password: before", "DOWNLOAD", "Password: after"], "after"),
+        (["Season Pass: included", "DOWNLOAD", "Win: MEGA"], ""),
+        (["DOWNLOAD", "Battle pass - free"], ""),
+        (["DOWNLOAD", "Rar pass: rarpw"], "rarpw"),
+        (["DOWNLOAD", "• PW: bulletpw"], "bulletpw"),
+        (["DOWNLOAD", "Password:", "Win: MEGA - PIXELDRAIN"], ""),
+        (["DOWNLOAD", "Password:", "Pass: inner"], "inner"),
+        (["Password:", "DOWNLOAD", "Win: MEGA"], ""),
+        (
+            ["DOWNLOAD", "Password:", "Spoiler", "Code:", "Click to expand...", "deep"],
+            "deep",
+        ),
+    ],
+)
+def test_find_archive_password(lines, expected):
+    from core.download_links import find_archive_password
+
+    assert find_archive_password(lines) == expected
+
+
+def test_parse_download_links_extracts_archive_password_for_f95_and_lc():
+    f95_html = _post(
+        '<b>DOWNLOAD</b><br><b>Win</b>: <a href="https://mega.nz/file/a#b">MEGA</a><br>'
+        "<b>Password:</b><br>" + _spoiler("Password", "gamepass123")
+    )
+    f95 = parse_download_links(f95_html)
+    assert f95["archive_password"] == "gamepass123"
+
+    lc_html = _post(
+        '<b>DOWNLOAD</b><br><b>APK</b>: <a href="https://mega.nz/file/a#b">MEGA</a><br>'
+        "Password: lewdcorner"
+    ).replace(
+        '<article class="message-threadStarterPost">',
+        '<article class="message message--post">',
+    )
+    lc = parse_download_links(lc_html, "lc", page_version="v0.21")
+    assert lc["archive_password"] == "lewdcorner"
+    assert lc["builds"][0]["platform"] == "android"
+
+    assert (
+        parse_download_links((FIXTURES / "signed_in.html").read_text())[
+            "archive_password"
+        ]
+        == ""
+    )
+    assert (
+        parse_download_links(
+            (FIXTURES.parent / "lc_thread_downloads.html").read_text(), "lc"
+        )["archive_password"]
+        == ""
+    )
+
+
+def test_fetch_thread_download_links_passes_password_without_logging_it(
+    monkeypatch, caplog
+):
+    import logging
+
+    from core import extension_bridge, scraper
+
+    secret = "SuperSecretArchivePass99"
+    f95_html = _post(
+        '<b>DOWNLOAD</b><br><b>Win</b>: <a href="https://mega.nz/file/a#b">MEGA</a><br>'
+        f"Password: {secret}"
+    )
+    monkeypatch.setattr(extension_bridge, "is_available", lambda: True)
+    monkeypatch.setattr(scraper, "_f95_get_via_extension", lambda _url: (200, f95_html))
+    with caplog.at_level(logging.DEBUG):
+        f95_res = scraper.fetch_thread_download_links(
+            "https://f95zone.to/threads/example.12345/"
+        )
+    assert f95_res["success"] is True
+    assert f95_res["archive_password"] == secret
+    assert any("found 1 download links" in r.getMessage() for r in caplog.records)
+    assert all(secret not in r.getMessage() for r in caplog.records)
+
+    lc_html = (
+        (FIXTURES.parent / "lc_thread_downloads.html")
+        .read_text()
+        .replace("<b>DOWNLOAD</b><br>", f"<b>DOWNLOAD</b><br>Password: {secret}<br>")
+    )
+    canonical = "https://lewdcorner.com/threads/25467/"
+    monkeypatch.setattr(
+        extension_bridge,
+        "fetch",
+        lambda _url, *, site: extension_bridge.BridgeResponse(200, canonical, lc_html),
+    )
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        lc_res = scraper.fetch_thread_download_links(canonical, "lc")
+    assert lc_res["success"] is True
+    assert lc_res["archive_password"] == secret
+    assert all(secret not in r.getMessage() for r in caplog.records)

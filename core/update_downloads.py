@@ -11,7 +11,7 @@ from typing import NamedTuple, TypedDict, cast, final
 from collections.abc import Callable, Mapping
 
 from core import database, extension_bridge, game_lookup, lewdcorner, scraper
-from core.download_links import Build, masked_download_site
+from core.download_links import IN_APP_HOSTS, Build, masked_download_site
 from core.downloads.hosts import mega, pixeldrain
 from core.downloads.manager import DownloadManager, Resolve
 from core.downloads.queue import DownloadQueue, QueueJob
@@ -47,6 +47,7 @@ class _Link:
     version: str = ""
     # Which thread read made this link; a later read replaces older links only.
     fetch: int = 0
+    password: str = ""
 
     @property
     def site(self) -> lewdcorner.Site:
@@ -99,10 +100,13 @@ def default_download_site(
 def _in_app(host: str, url: str) -> bool:
     """Whether wLib can download this mirror itself.
 
-    Buzzheavier needs a masked link so the extension can open the share page.
-    A direct Pixeldrain or MEGA link must be a single file; the adapters do not
-    download folders. A masked link stays eligible until the browser resolves it.
+    Only hosts in IN_APP_HOSTS have adapters. Buzzheavier needs a masked link
+    so the extension can open the share page. A direct Pixeldrain or MEGA link
+    must be a single file; the adapters do not download folders. A masked link
+    stays eligible until the browser resolves it.
     """
+    if host not in IN_APP_HOSTS:
+        return False
     if masked_download_site(url) is not None:
         return True
     if host == "buzzheavier":
@@ -111,7 +115,7 @@ def _in_app(host: str, url: str) -> bool:
         return pixeldrain.is_file_link(url)
     if host == "mega":
         return not mega.is_folder_link(url)
-    return True
+    return False
 
 
 def _not_in_app_error(host: str) -> str:
@@ -119,7 +123,9 @@ def _not_in_app_error(host: str) -> str:
         return "Pixeldrain folder links are not supported; open in browser"
     if host == "mega":
         return "unsupported MEGA link: folders cannot be downloaded in-app; open in browser"
-    return "This Buzzheavier link cannot be downloaded in-app; open in browser"
+    if host == "buzzheavier":
+        return "This Buzzheavier link cannot be downloaded in-app; open in browser"
+    return "This mirror cannot be downloaded in-app; open in browser"
 
 
 @final
@@ -195,6 +201,7 @@ class UpdateDownloads:
                 "error": str(result.get("error") or "Could not load download links"),
             }
         builds = cast(list[Build], result["builds"])
+        archive_password = str(result.get("archive_password") or "")
         output: list[dict[str, object]] = []
         now = time.monotonic()
         new_links: dict[str, _Link] = {}
@@ -223,6 +230,7 @@ class UpdateDownloads:
                     now,
                     str(result.get("version") or ""),
                     fetch,
+                    archive_password,
                 )
                 mirrors.append(
                     {
@@ -271,6 +279,7 @@ class UpdateDownloads:
             "site": selected,
             "sites": sites,
             "version": result["version"],
+            "archive_password": archive_password,
             "builds": output,
         }
 
@@ -382,6 +391,8 @@ class UpdateDownloads:
             raise DownloadError(_not_in_app_error(host))
         game = database.get_game(game_id) or {}
         source: dict[str, object] = dict(zip(KEY_FIELDS, link.key, strict=True))
+        if link.password:
+            source["archive_password"] = link.password
         return self.queue.add(
             "host",
             game_id,
@@ -461,7 +472,12 @@ class UpdateDownloads:
             links = [link for link in links if link.key.copy == copy]
             if not links:
                 raise DownloadError(_gone(job.version))
-        return self._resolver(links[0].url, links[0].key.host)
+        chosen = links[0]
+        if chosen.password:
+            job.source["archive_password"] = chosen.password
+        else:
+            _ = job.source.pop("archive_password", None)
+        return self._resolver(chosen.url, chosen.key.host)
 
     def browser_link(self, game_id: int, link_id: str) -> str:
         return self._find(game_id, link_id).url

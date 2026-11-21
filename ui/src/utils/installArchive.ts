@@ -25,6 +25,18 @@ export interface InstallArchiveRequest {
   seed?: InstallArchiveSeed | undefined;
   gameId?: number | undefined;
   archivePath?: string | undefined;
+  archivePassword?: string | undefined;
+}
+
+export function formatInstallError(res: { error?: string | undefined; error_code?: string | undefined } | null | undefined): string {
+  if (res?.error_code === "install_cancelled") return "Install cancelled. Nothing was changed.";
+  if (res?.error_code === "archive_password_required") {
+    return "This archive needs a password. Enter it in the Archive password field and install again.";
+  }
+  if (res?.error_code === "archive_password_wrong") {
+    return "The archive password is wrong. Check the password and install again.";
+  }
+  return res?.error || "Install failed.";
 }
 
 export const INSTALL_ARCHIVE_EVENT = "wlib-install-archive";

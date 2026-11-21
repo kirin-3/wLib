@@ -197,9 +197,13 @@ const pollSyncStatus = async () => {
 
 // Install-from-archive dialog (global so any view or toast can open it).
 const showInstallModal = ref(false);
-watch(showInstallModal, value => updateDownloads.setInstallDialogOpen(value));
+watch(showInstallModal, value => {
+  updateDownloads.setInstallDialogOpen(value);
+  if (!value) installArchivePassword.value = "";
+});
 const installGame = ref<GameRecord | null>(null);
 const installArchivePath = ref("");
+const installArchivePassword = ref("");
 const installSeed = ref<InstallArchiveSeed | undefined>();
 
 let installRequestId = 0;
@@ -221,6 +225,7 @@ const handleInstallArchiveRequest = async (event: Event) => {
   // Set game and archive together so an open dialog re-seeds once per request.
   installGame.value = game;
   installArchivePath.value = detail.archivePath || "";
+  installArchivePassword.value = detail.archivePassword || "";
   installSeed.value = detail.seed;
   showInstallModal.value = true;
 };
@@ -887,6 +892,7 @@ onUnmounted(() => {
         :game="installGame"
         @installed="updateDownloads.markInstalled"
         :preselected-archive="installArchivePath"
+        :archive-password="installArchivePassword"
         :seed="installSeed"
       />
     </main>

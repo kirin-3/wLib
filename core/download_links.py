@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import SplitResult, urlsplit
@@ -14,30 +14,97 @@ from core.versions import normalize_version
 from typing import TypedDict, final, override
 
 
-# Host id -> domains it serves from. Order matters only for readability.
-# The in-app hosts (pixeldrain, mega, buzzheavier) list only the domains their
-# download adapters accept, or the UI would offer downloads that cannot start.
-HOST_DOMAINS: dict[str, tuple[str, ...]] = {
-    "pixeldrain": ("pixeldrain.com", "pixeldrain.net", "pixeldra.in"),
-    "mega": ("mega.nz", "mega.co.nz"),
-    "buzzheavier": ("buzzheavier.com", "bzzhr.to"),
-    "gofile": ("gofile.io",),
-    "datanodes": ("datanodes.to",),
+# Hosts with an in-app download adapter. Their domains in HOST_DOMAINS must
+# match only what the adapters accept, or the UI would offer downloads that
+# cannot start.
+IN_APP_HOSTS: frozenset[str] = frozenset({"pixeldrain", "mega", "buzzheavier"})
+
+# Host id -> (display name, domains it serves from). Order matters only for readability.
+HOST_DOMAINS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "pixeldrain": ("Pixeldrain", ("pixeldrain.com", "pixeldrain.net", "pixeldra.in")),
+    "mega": ("MEGA", ("mega.nz", "mega.co.nz")),
+    "buzzheavier": ("BuzzHeavier", ("buzzheavier.com", "bzzhr.to")),
+    "gofile": ("GoFile", ("gofile.io",)),
+    "datanodes": ("DataNodes", ("datanodes.to",)),
     "mixdrop": (
-        "mixdrop.ag",
-        "mixdrop.co",
-        "mixdrop.to",
-        "mixdrop.ps",
-        "mixdrop.sx",
-        "mxdrop.sx",
+        "Mixdrop",
+        (
+            "mixdrop.ag",
+            "mixdrop.co",
+            "mixdrop.to",
+            "mixdrop.ps",
+            "mixdrop.sx",
+            "mxdrop.sx",
+            "mixdrop.ch",
+            "mixdrop.club",
+            "mixdrop.gl",
+            "mixdrop.is",
+            "mixdrop.my",
+            "mixdrop.nu",
+            "mixdrop.sb",
+            "mixdrop.si",
+            "mixdrop.vc",
+            "mixdrop21.net",
+            "mxdrop.to",
+        ),
     ),
-    "workupload": ("workupload.com",),
-    "mediafire": ("mediafire.com",),
-    "vikingfile": ("vikingfile.com",),
-    "akirabox": ("akirabox.com",),
+    "workupload": ("Workupload", ("workupload.com",)),
+    "mediafire": ("MediaFire", ("mediafire.com",)),
+    "vikingfile": ("VikingFile", ("vikingfile.com", "vik1ngfile.site")),
+    "akirabox": ("AkiraBox", ("akirabox.com", "akirabox.to")),
+    "1fichier": (
+        "1fichier",
+        (
+            "1fichier.com",
+            "alterupload.com",
+            "cjoint.net",
+            "desfichiers.com",
+            "desfichiers.net",
+            "dfichiers.com",
+            "dl4free.com",
+            "megadl.fr",
+            "mesfichiers.net",
+            "mesfichiers.org",
+            "piecejointe.net",
+            "pjointe.com",
+            "tenvoi.com",
+        ),
+    ),
+    "krakenfiles": ("KrakenFiles", ("krakenfiles.com",)),
+    "uploadhaven": ("UploadHaven", ("uploadhaven.com",)),
+    "filesfm": ("Files.fm", ("files.fm",)),
+    "catbox": ("Catbox", ("catbox.moe",)),
+    "dropbox": ("Dropbox", ("dropbox.com", "dropboxusercontent.com")),
+    "onedrive": ("OneDrive", ("onedrive.live.com", "1drv.ms")),
+    "gdrive": ("Google Drive", ("drive.google.com", "drive.usercontent.google.com")),
+    "nopy": ("Nopy", ("nopy.to",)),
+    "racaty": ("Racaty", ("racaty.io", "racaty.net")),
+    "bowfile": ("Bowfile", ("bowfile.com",)),
 }
-# Words a poster uses as link text for a host ("MEGA", "BZZHR").
-HOST_WORDS = {name: name for name in HOST_DOMAINS} | {"bzzhr": "buzzheavier"}
+
+
+def _norm_host_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _build_host_words() -> dict[str, str]:
+    words: dict[str, str] = {}
+    for host_id, (display_name, domains) in HOST_DOMAINS.items():
+        for candidate in (host_id, display_name):
+            norm = _norm_host_token(candidate)
+            if norm:
+                _ = words.setdefault(norm, host_id)
+        for domain in domains:
+            first = _norm_host_token(domain.split(".", 1)[0])
+            # Skip generic first labels like "files" (from files.fm); "Files.fm"
+            # still matches through the normalized display name "filesfm".
+            if first and first not in ("files",):
+                _ = words.setdefault(first, host_id)
+    return words
+
+
+# Normalized words a poster uses as link text for a host ("MEGA", "BZZHR", "1fichier").
+HOST_WORDS: dict[str, str] = _build_host_words()
 DENIED_HOSTS = (
     "f95zone.com",
     "patreon.com",
@@ -83,6 +150,157 @@ _DATE_IN_TEXT = re.compile(
     r"\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[/.-]\d{1,2}[/.-]\d{4}\b"
 )
 _OLD_WORDS = re.compile(r"\b(?:old|older|previous|prior|legacy|archived?|past)\b", re.I)
+# A bare "Pass"/"PW" counts only at the start of a line, so "Season Pass:" or
+# "Battle pass -" is not read as a password label.
+_PASSWORD_LABEL = re.compile(
+    r"(?:"
+    + r"\b(?:(?:archive|rar|zip|7z|extract(?:ion)?|file)\s+)?(?:password|passwd|pwd)"
+    + r"|\b(?:archive|rar|zip|7z|extract(?:ion)?|file)\s+(?:pass|pw)"
+    + r"|^[\W_]*(?:pass|pw)"
+    + r"|\bпароль(?:\s+(?:на|от|к|для)\s+(?:архив\w*|файл\w*))?"
+    + r")\s*(?:[:=]|[–—]|-\s+|\s+-\s*)(.*)$",
+    re.I,
+)
+# A "Win: MEGA" row after a bare "Password:" line is not its value.
+_PASSWORD_ROW_LABEL = re.compile(r"^[^\s:][^:]{0,39}:\s+\S")
+_PASSWORD_CHROME = re.compile(
+    r"^(?:spoiler\b.*|code\s*:?|click\s+to\s+expand\b.*)$",
+    re.I,
+)
+_PASSWORD_DENY = frozenset(
+    {
+        "none",
+        "no",
+        "n/a",
+        "na",
+        "nil",
+        "null",
+        "empty",
+        "nothing",
+        "no password",
+        "no pass",
+        "no pwd",
+        "not required",
+        "not needed",
+        "unprotected",
+        "see below",
+        "see above",
+        "below",
+        "above",
+        "in spoiler",
+        "spoiler",
+        "check spoiler",
+        "check below",
+        "in thread",
+        "in comments",
+        "in description",
+        "in post",
+        "tbd",
+        "unknown",
+        "нет",
+        "не требуется",
+        "не нужен",
+        "без пароля",
+    }
+)
+_PASSWORD_DENY_PREFIX = re.compile(
+    r"^(?:none|no\s+(?:password|pass|pwd)|not\s+(?:required|needed)|n/?a|"
+    + r"see\s+(?:below|above)|in\s+(?:the\s+)?(?:spoiler|thread|comments|description|post)|"
+    + r"check\s+(?:the\s+)?(?:spoiler|below)|без\s+пароля|не\s+(?:требуется|нужен))\b",
+    re.I,
+)
+_QUOTE_PAIRS = (
+    ('"', '"'),
+    ("'", "'"),
+    ("`", "`"),
+    ("“", "”"),
+    ("«", "»"),
+    ("[", "]"),
+    ("(", ")"),
+)
+_MAX_PASSWORD_LEN = 128
+
+
+def _clean_password_value(raw: str) -> str:
+    text = raw.strip()
+    if not text:
+        return ""
+    if re.match(r"^https?://", text, re.I) or text.lower().startswith("www."):
+        return ""
+    lowered = " ".join(text.lower().split()).strip(".,;:!?\"'`()[]")
+    if not lowered or lowered in _PASSWORD_DENY or _PASSWORD_DENY_PREFIX.match(lowered):
+        return ""
+    quoted = False
+    for opener, closer in _QUOTE_PAIRS:
+        if text.startswith(opener):
+            end = text.find(closer, len(opener))
+            if end > len(opener):
+                text = text[len(opener) : end].strip()
+                quoted = True
+                break
+    if not quoted:
+        text = text.split(None, 1)[0].rstrip(".,;:)]}'\"")
+    if not text or len(text) > _MAX_PASSWORD_LEN:
+        return ""
+    if re.match(r"^https?://", text, re.I) or text.lower().startswith("www."):
+        return ""
+    if text.lower() in _PASSWORD_DENY:
+        return ""
+    return text
+
+
+def find_archive_password(lines: Sequence[str], start: int | None = None) -> str:
+    """Find an archive password in plain-text first-post lines.
+
+    Starts at ``start`` (or at the first DOWNLOAD heading when omitted) and
+    wraps to the start of the post.
+    """
+    if not lines:
+        return ""
+    if start is None:
+        start = next(
+            (
+                i
+                for i, line in enumerate(lines)
+                if _DOWNLOAD_HEADING.fullmatch(line.strip(" :\t"))
+            ),
+            0,
+        )
+    else:
+        start = max(0, min(start, len(lines)))
+    order = [*range(start, len(lines)), *range(0, start)]
+    for index in order:
+        match = _PASSWORD_LABEL.search(lines[index])
+        if not match:
+            continue
+        inline = match.group(1).strip()
+        if inline:
+            value = _clean_password_value(inline)
+            if value:
+                return value
+            continue
+        # The value is the next line that is not spoiler or code chrome; at
+        # most three chrome lines are skipped.
+        chrome = 0
+        for follow in lines[index + 1 :]:
+            candidate = follow.strip()
+            if not candidate:
+                continue
+            if _PASSWORD_CHROME.match(candidate):
+                chrome += 1
+                if chrome > 3:
+                    break
+                continue
+            if not (
+                _PASSWORD_LABEL.search(candidate)
+                or _PASSWORD_ROW_LABEL.match(candidate)
+                or _DOWNLOAD_HEADING.fullmatch(candidate.strip(" :\t"))
+            ):
+                value = _clean_password_value(candidate)
+                if value:
+                    return value
+            break
+    return ""
 
 
 def _versions_in(text: str) -> set[str]:
@@ -124,8 +342,10 @@ def classify_build(label: str) -> tuple[str, str]:
 
     win = has(r"\b(win(?:dows)?|pc)\b")
     linux = has(r"\b(linux|lin)\b")
-    if has(r"\bandroid\b"):
+    if has(r"\b(android|apk)\b"):
         platform = "android"
+    elif has(r"\b(ios|iphone|ipad|ipa)\b"):
+        platform = "ios"
     elif win and linux:
         platform = "windows/linux"
     elif linux:
@@ -149,7 +369,7 @@ def classify_build(label: str) -> tuple[str, str]:
 
 def _host_of_domain(domain: str) -> str:
     domain = domain.lower().removeprefix("www.")
-    for name, domains in HOST_DOMAINS.items():
+    for name, (_, domains) in HOST_DOMAINS.items():
         if any(domain == d or domain.endswith("." + d) for d in domains):
             return name
     return ""
@@ -246,11 +466,17 @@ def masked_download_site(url: str) -> lewdcorner.Site | None:
 
 
 def _host_of_label(text: str) -> str:
-    words: list[str] = re.findall(r"[a-z]+", text.lower())
-    for word in words:
-        if word in HOST_WORDS:
-            return HOST_WORDS[word]
-    return ""
+    for token in re.split(r"[\s/|,+:\-()\[\]]+", text.lower()):
+        if not token:
+            continue
+        norm = _norm_host_token(token)
+        if norm in HOST_WORDS:
+            return HOST_WORDS[norm]
+        if "." in token:
+            domain_host = _host_of_domain(token.strip("."))
+            if domain_host:
+                return domain_host
+    return HOST_WORDS.get(_norm_host_token(text), "")
 
 
 class Mirror(TypedDict):
@@ -273,6 +499,31 @@ class ThreadDownloads(TypedDict):
     version: str
     signed_in: bool
     builds: list[Build]
+    archive_password: str
+
+
+_VOID_TAGS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+)
+
+
+_LINE_BREAK_START_TAGS = frozenset({"div", "p", "li", "pre"})
+_LINE_BREAK_END_TAGS = frozenset({"div", "p", "li", "pre", "code", "button"})
 
 
 @final
@@ -288,7 +539,8 @@ class _Elements(HTMLParser):
         self.article = 0
         self.wrapper = 0
         self.seen = False
-        self.hidden = 0
+        self.hidden_tag = ""
+        self.hidden_depth = 0
         self.bold = 0
         self.bold_parts: list[str] = []
         self.anchor: dict[str, str] | None = None
@@ -296,7 +548,21 @@ class _Elements(HTMLParser):
         self.spoilers: list[int] = []
         self.button = 0
         self.button_parts: list[str] = []
+        self.pre = 0
+        self._lines: list[str] = []
+        self._line_parts: list[str] = []
         self.events: list[tuple[str, str, dict[str, str]]] = []
+
+    def _break_line(self) -> None:
+        line = " ".join("".join(self._line_parts).split())
+        self._line_parts = []
+        if line:
+            self._lines.append(line)
+
+    @property
+    def lines(self) -> list[str]:
+        tail = " ".join("".join(self._line_parts).split())
+        return [*self._lines, tail] if tail else list(self._lines)
 
     def _flush_bold(self) -> None:
         text = "".join(self.bold_parts).strip()
@@ -306,8 +572,15 @@ class _Elements(HTMLParser):
 
     @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        a = {k: v or "" for k, v in attrs if k in ("class", "href", "style")}
+        a = {
+            k: v or ""
+            for k, v in attrs
+            if k in ("class", "href", "style", "aria-hidden", "tabindex")
+        }
         classes = a.get("class", "").split()
+        is_hidden = (
+            "u-hidden" in classes or a.get("aria-hidden", "").strip().lower() == "true"
+        )
         if (
             tag == "article"
             and not self.seen
@@ -320,15 +593,24 @@ class _Elements(HTMLParser):
         if self.article and tag == "div":
             if self.wrapper:
                 self.wrapper += 1
-                # A spoiler inside a hidden quote copy is not read, like the rest of that copy.
-                if "bbCodeSpoiler" in classes and not self.hidden:
+                # A spoiler inside a hidden region is not read, like the rest of that region.
+                if (
+                    "bbCodeSpoiler" in classes
+                    and not self.hidden_depth
+                    and not is_hidden
+                ):
                     self.spoilers.append(self.wrapper)
             elif "bbWrapper" in classes:
                 self.wrapper = 1
         if not self.wrapper:
             return
         if tag == "button" and (
-            self.button or ("bbCodeSpoiler-button" in classes and not self.hidden)
+            self.button
+            or (
+                "bbCodeSpoiler-button" in classes
+                and not self.hidden_depth
+                and not is_hidden
+            )
         ):
             # The button's own text ("Spoiler: <title>") is not post text.
             if not self.button:
@@ -337,12 +619,21 @@ class _Elements(HTMLParser):
             return
         if self.button:
             return
+        if self.hidden_depth:
+            if tag == self.hidden_tag:
+                self.hidden_depth += 1
+            return
+        if is_hidden:
+            if tag not in _VOID_TAGS:
+                self.hidden_tag = tag
+                self.hidden_depth = 1
+            return
+        if tag in _LINE_BREAK_START_TAGS:
+            self._break_line()
+        if tag == "pre":
+            self.pre += 1
         if "messageHide--link" in classes:
             self.events.append(("hidden_link", "", {}))
-        if tag == "span" and (self.hidden or "u-hidden" in classes):
-            self.hidden += 1
-        if self.hidden:
-            return
         if tag in ("b", "strong"):
             if self.anchor is None:
                 self.bold += 1
@@ -352,6 +643,7 @@ class _Elements(HTMLParser):
                     self._flush_bold()
                 self.anchor, self.anchor_parts = a, []
         elif tag == "br":
+            self._break_line()
             if self.anchor is not None:
                 self.anchor_parts.append(" ")
             elif self.bold:
@@ -367,24 +659,33 @@ class _Elements(HTMLParser):
             if tag == "button":
                 self.button -= 1
                 if not self.button:
+                    self._break_line()
                     title = _SPOILER_PREFIX.sub(
                         "", " ".join("".join(self.button_parts).split())
                     )
                     self.events.append(("spoiler_open", title, {}))
             return
         if self.wrapper:
-            if self.hidden:
-                if tag == "span":
-                    self.hidden -= 1
-            elif tag == "a" and self.anchor is not None:
-                self.events.append(
-                    ("a", "".join(self.anchor_parts).strip(), self.anchor)
-                )
-                self.anchor = None
-            elif tag in ("b", "strong") and self.bold and self.anchor is None:
-                self.bold -= 1
-                if not self.bold:
-                    self._flush_bold()
+            if self.hidden_depth:
+                if tag == self.hidden_tag:
+                    self.hidden_depth -= 1
+                    if not self.hidden_depth:
+                        self.hidden_tag = ""
+            else:
+                if tag == "pre" and self.pre:
+                    self.pre -= 1
+                if tag in _LINE_BREAK_END_TAGS:
+                    self._break_line()
+                if tag == "a" and self.anchor is not None:
+                    if self.anchor.get("tabindex", "").strip() != "-1":
+                        self.events.append(
+                            ("a", "".join(self.anchor_parts).strip(), self.anchor)
+                        )
+                    self.anchor = None
+                elif tag in ("b", "strong") and self.bold and self.anchor is None:
+                    self.bold -= 1
+                    if not self.bold:
+                        self._flush_bold()
             if tag == "div":
                 if self.spoilers and self.spoilers[-1] == self.wrapper:
                     _ = self.spoilers.pop()
@@ -397,11 +698,23 @@ class _Elements(HTMLParser):
 
     @override
     def handle_data(self, data: str) -> None:
-        if self.hidden:
+        if self.hidden_depth:
             return
         if self.button:
             self.button_parts.append(data)
             return
+        if self.wrapper and (
+            self.anchor is None or self.anchor.get("tabindex", "").strip() != "-1"
+        ):
+            if self.pre:
+                for part in data.splitlines(keepends=True):
+                    if part.endswith(("\n", "\r")):
+                        self._line_parts.append(part.rstrip("\r\n"))
+                        self._break_line()
+                    else:
+                        self._line_parts.append(part)
+            else:
+                self._line_parts.append(data)
         if self.anchor is not None:
             self.anchor_parts.append(data)
         elif self.bold:
@@ -470,7 +783,12 @@ def parse_download_links(
 
     for index, (typ, value, attrs) in enumerate(events):
         if typ == "hidden_link" and active and site == "lc":
-            return {"version": "Unknown", "signed_in": False, "builds": []}
+            return {
+                "version": "Unknown",
+                "signed_in": False,
+                "builds": [],
+                "archive_password": "",
+            }
         if typ == "spoiler_open":
             # A spoiler is its own scope: what it sets ends where it ends.
             saved.append((section, label, divider, pending_part, glue, old, active))
@@ -619,4 +937,9 @@ def parse_download_links(
                 }
             )
             glue = False
-    return {"version": version, "signed_in": signed_in, "builds": builds}
+    return {
+        "version": version,
+        "signed_in": signed_in,
+        "builds": builds,
+        "archive_password": find_archive_password(parser.lines),
+    }

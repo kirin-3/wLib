@@ -366,10 +366,30 @@ export function shouldAutoOpen(
 }
 
 /** The archive or folder a finished download installs from. */
-export function installSource(job: DownloadQueueJob): { archivePath: string; sourceKind: "archive" | "folder" } | null {
-  if (job.details.archive_path) return { archivePath: job.details.archive_path, sourceKind: "archive" };
+export function installSource(
+  job: DownloadQueueJob,
+): { archivePath: string; sourceKind: "archive" | "folder"; archivePassword?: string } | null {
+  if (job.details.archive_path) {
+    const archivePassword = job.source.archive_password?.trim() || "";
+    return archivePassword
+      ? { archivePath: job.details.archive_path, sourceKind: "archive", archivePassword }
+      : { archivePath: job.details.archive_path, sourceKind: "archive" };
+  }
   if (job.details.folder_path) return { archivePath: job.details.folder_path, sourceKind: "folder" };
   return null;
+}
+
+/** Builds the install-dialog request for a finished download, including its saved password if any. */
+export function installRequestForJob(job: DownloadQueueJob): {
+  gameId: number;
+  archivePath: string;
+  archivePassword?: string;
+} | null {
+  const source = installSource(job);
+  if (!source) return null;
+  return source.archivePassword
+    ? { gameId: job.game_id, archivePath: source.archivePath, archivePassword: source.archivePassword }
+    : { gameId: job.game_id, archivePath: source.archivePath };
 }
 
 /** Polyline points for the speed chart; the highest sample touches the top. */

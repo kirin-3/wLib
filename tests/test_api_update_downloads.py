@@ -607,3 +607,169 @@ def test_lc_resolve_without_support_names_the_missing_step(
     )
     with pytest.raises(DownloadError, match=message):
         _ = resolver(lambda _: None, threading.Event())
+
+
+def test_get_links_returns_archive_password_and_stores_it_on_links(monkeypatch):
+    game = {"id": 1, "title": "Game", "f95_url": "https://f95zone.to/threads/game.1/"}
+    monkeypatch.setattr(update_downloads.database, "get_game", lambda _gid: game)
+    payload = _thread(
+        [
+            {
+                "url": "https://pixeldrain.com/u/abc123",
+                "host": "pixeldrain",
+                "label": "PD",
+                "part": "",
+                "split": False,
+            }
+        ]
+    )
+    payload["archive_password"] = "f95zone"
+    monkeypatch.setattr(
+        update_downloads.scraper,
+        "fetch_thread_download_links",
+        lambda _url, site="f95": payload,
+    )
+    service = UpdateDownloads(DownloadManager())
+    res = service.get_links(1)
+    assert res["success"] is True
+    assert res["archive_password"] == "f95zone"
+    link_id = res["builds"][0]["mirrors"][0]["link_id"]
+    assert service.links[link_id].password == "f95zone"
+
+    payload.pop("archive_password")
+    res_empty = service.get_links(1)
+    assert res_empty["success"] is True
+    assert res_empty["archive_password"] == ""
+    link_id2 = res_empty["builds"][0]["mirrors"][0]["link_id"]
+    assert service.links[link_id2].password == ""
+
+
+def test_queue_persists_relinks_and_deletes_archive_password(monkeypatch):
+    from core.downloads.queue import (
+        DownloadQueue,
+        PHASE_DONE,
+        PHASE_PREPARED,
+        QueueStore,
+        WorkerState,
+    )
+
+    database.init_db()
+    game = {"id": 1, "title": "Game", "f95_url": "https://f95zone.to/threads/game.1/"}
+    monkeypatch.setattr(update_downloads.database, "get_game", lambda _gid: game)
+
+    current_password = ["f95zone"]
+
+    def fetch(_url, site="f95"):
+        payload = _thread(
+            [
+                {
+                    "url": "https://pixeldrain.com/u/abc123",
+                    "host": "pixeldrain",
+                    "label": "PD",
+                    "part": "",
+                    "split": False,
+                }
+            ]
+        )
+        payload["archive_password"] = current_password[0]
+        return payload
+
+    monkeypatch.setattr(update_downloads.scraper, "fetch_thread_download_links", fetch)
+
+    class _StubWorker:
+        kind = "host"
+
+        def __init__(self):
+            self.phase = PHASE_PREPARED
+
+        def prepare(self, _job, _context):
+            pass
+
+        def start(self, _job, _context):
+            pass
+
+        def stop(self, _job, *, remove_partial=False):
+            pass
+
+        def remove(self, _job, *, keep_partial=False):
+            pass
+
+        def snapshot(self, _job):
+            return WorkerState(phase=self.phase)
+
+        def restore(self, _job):
+            return True
+
+        def unclaimed(self, _known):
+            return []
+
+        def set_speed_share(self, _limit, _limited):
+            pass
+
+        def cleanup(self, _jobs):
+            pass
+
+    worker = _StubWorker()
+    queue = DownloadQueue(
+        [worker],
+        store=QueueStore(),
+        run_thread=False,
+        free_space=lambda: 10**12,
+    )
+    service = UpdateDownloads(DownloadManager(), queue=queue)
+
+    # Start with a password: saved to DB and exposed in public status source.
+    links = service.get_links(1)
+    link_id = links["builds"][0]["mirrors"][0]["link_id"]
+    job = service.start(1, link_id)
+    assert job.source["archive_password"] == "f95zone"
+    assert queue.status()["jobs"][0]["source"]["archive_password"] == "f95zone"
+
+    # Reload from SQLite: password survives restart.
+    reloaded = DownloadQueue(
+        [worker],
+        store=QueueStore(),
+        run_thread=False,
+        free_space=lambda: 10**12,
+    )
+    reloaded.load()
+    loaded_job = reloaded._jobs[job.id]
+    assert loaded_job.source["archive_password"] == "f95zone"
+    assert reloaded.status()["jobs"][0]["source"]["archive_password"] == "f95zone"
+
+    # Library backup and diagnostics never include queued passwords.
+    import json
+    from core import diagnostics, library_backup
+
+    backup_json = json.dumps(library_backup.build_library_backup())
+    assert "f95zone" not in backup_json
+    diag_text = diagnostics.build_report(diagnostics.collect_basic("test", ""))
+    assert "f95zone" not in diag_text
+
+    # Relink after password change: mirror still matches and password updates.
+    service.clear(1)
+    current_password[0] = "newpass"
+    resolver = service.relink(loaded_job)
+    assert resolver(lambda _: None, None)["url"] == "https://pixeldrain.com/u/abc123"
+    assert loaded_job.source["archive_password"] == "newpass"
+
+    # Relink after password removed: key is removed and mirror still matches.
+    service.clear(1)
+    current_password[0] = ""
+    resolver = service.relink(loaded_job)
+    assert resolver(lambda _: None, None)["url"] == "https://pixeldrain.com/u/abc123"
+    assert "archive_password" not in loaded_job.source
+
+    # Removing the job deletes the row and password from the queue store.
+    assert reloaded.remove(job.id) is True
+    assert database.list_download_jobs() == []
+
+    # Starting with no password omits the key from source.
+    service.queue = reloaded
+    links_no_pw = service.get_links(1)
+    job2 = service.start(1, links_no_pw["builds"][0]["mirrors"][0]["link_id"])
+    assert "archive_password" not in job2.source
+    assert "archive_password" not in reloaded.status()["jobs"][0]["source"]
+    assert reloaded.remove(job2.id) is True
+    assert database.list_download_jobs() == []
+    _ = PHASE_DONE

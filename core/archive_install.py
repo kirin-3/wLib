@@ -119,6 +119,27 @@ class ArchiveInstallError(Exception):
     """Base failure for archive installs (message is user-facing)."""
 
 
+class ArchivePasswordRequired(ArchiveInstallError):
+    """Extraction failed because the archive needs a password and none was given."""
+
+    error_code: str = "archive_password_required"
+
+    def __init__(
+        self,
+        message: str = "This archive needs a password. Enter it in the install dialog and try again.",
+    ) -> None:
+        super().__init__(message)
+
+
+class ArchivePasswordWrong(ArchiveInstallError):
+    """Extraction failed because the given archive password is wrong."""
+
+    error_code: str = "archive_password_wrong"
+
+    def __init__(self, message: str = "The archive password is wrong.") -> None:
+        super().__init__(message)
+
+
 class InstallCancelled(ArchiveInstallError):
     """The user cancelled the install before the new version moved into place."""
 
@@ -420,7 +441,11 @@ def library_folder_status(path: str, is_default: bool) -> dict[str, object]:
 
 
 def detect_archive_tool(
-    archive_path: str, *, platform: str | None = None, library_folder: str = ""
+    archive_path: str,
+    *,
+    platform: str | None = None,
+    library_folder: str = "",
+    password: str = "",
 ) -> tuple[str | None, str | None]:
     """Return (tool, error) for an archive.
 
@@ -448,23 +473,28 @@ def detect_archive_tool(
         found = host_which(candidate)
         if found:
             return found, None
-    # bsdtar opens one file; it cannot follow the parts of a multi-part set.
+    # bsdtar opens one file; it cannot follow the parts of a multi-part set
+    # and libarchive cannot decrypt password-protected .7z or .rar archives.
     multi_part = volume_set(archive_path) is not None
-    found = None if multi_part else host_which("bsdtar")
-    if found:
-        return found, None
+    bsdtar = None if multi_part else host_which("bsdtar")
+    if bsdtar and not password:
+        return bsdtar, None
     if fmt == "rar":
         found = host_which("unrar")
         if found:
             return found, None
-    if multi_part and not _is_windows(platform):
-        return None, "Install 7-Zip (7z) to extract archives split into several parts."
-
     if _is_windows(platform):
         found = _windows_7zip()
         if found:
             return found, None
         return None, "Install 7-Zip to extract .7z/.rar archives."
+    if password and bsdtar:
+        return (
+            None,
+            "Install 7-Zip (7z) to extract password-protected .7z or .rar archives.",
+        )
+    if multi_part:
+        return None, "Install 7-Zip (7z) to extract archives split into several parts."
     if fmt == "rar":
         return None, "Install 7-Zip (7z), bsdtar, or unrar to extract .rar archives."
     return None, "Install 7-Zip (7z) or bsdtar to extract .7z archives."
@@ -1096,6 +1126,7 @@ def extract_zip(
     workers: int = 1,
     exec_bits: bool = False,
     cancel: threading.Event | None = None,
+    password: str = "",
 ) -> int:
     """Extract a zip into staging with per-entry validation.
 
@@ -1110,6 +1141,8 @@ def extract_zip(
     """
     os.makedirs(staging_dir, exist_ok=True)
     count = 0
+    encrypted = False
+    pwd_bytes = password.encode("utf-8") if password else None
     try:
         with zipfile.ZipFile(archive_path, "r") as zf:
             infos = zf.infolist()
@@ -1118,9 +1151,9 @@ def extract_zip(
             names: list[str] = []
             for info in infos:
                 if info.flag_bits & 0x1:
-                    raise ArchiveInstallError(
-                        f"Archive is password-protected or encrypted: {info.filename!r}"
-                    )
+                    encrypted = True
+                    if not password:
+                        raise ArchivePasswordRequired()
                 name = _zip_entry_name(info, name_encoding)
                 if name == "" or (name.endswith("/") and name.strip("/") == ""):
                     raise ArchiveSafetyError(f"Archive entry is unsafe: {name!r}")
@@ -1172,7 +1205,7 @@ def extract_zip(
                 # Symlink entries are written as plain files holding the link
                 # text, so a zip can't plant links (deliberate, see design).
                 with member_lock:
-                    src = zf.open(info, "r")
+                    src = zf.open(info, "r", pwd=pwd_bytes)
                 try:
                     chunk = src.read(_COPY_CHUNK)
                     head = chunk[:4]
@@ -1211,16 +1244,20 @@ def extract_zip(
             _run_parallel(_write, order, workers)
             count += len(files)
     except NotImplementedError as exc:
+        detail = _sanitize_error_detail(str(exc), password)
         raise ZipMethodUnsupportedError(
-            f"Archive uses a compression method wLib can't read: {exc}"
+            f"Archive uses a compression method wLib can't read: {detail}"
         ) from exc
     except (zipfile.BadZipFile, RuntimeError, EOFError, zlib.error) as exc:
         msg = str(exc)
-        if "encrypted" in msg.lower() or "password" in msg.lower():
-            raise ArchiveInstallError(
-                f"Archive is password-protected or encrypted: {exc}"
-            ) from exc
-        raise ArchiveInstallError(f"Archive is corrupt or incomplete: {exc}") from exc
+        if _PASSWORD_ERROR_RE.search(msg):
+            raise _password_failure(password) from exc
+        if encrypted and password:
+            raise ArchivePasswordWrong() from exc
+        detail = _sanitize_error_detail(msg, password)
+        raise ArchiveInstallError(
+            f"Archive is corrupt or incomplete: {detail}"
+        ) from exc
     check_symlinks_inside_staging(staging_dir)
     return count
 
@@ -1518,19 +1555,38 @@ def _copy_refused_symlinks(copies: list[tuple[str, str]], staging_dir: str) -> N
         pending = waiting
 
 
+_PASSWORD_ERROR_RE = re.compile(
+    r"wrong\s+password|incorrect\s+password|bad\s+password|encrypted|password|passphrase",
+    re.I,
+)
+
+
+def _sanitize_error_detail(detail: str, password: str) -> str:
+    if password and password in detail:
+        return "command failed"
+    return detail
+
+
+def _password_failure(password: str) -> ArchiveInstallError:
+    if password:
+        return ArchivePasswordWrong()
+    return ArchivePasswordRequired()
+
+
 def _tool_failure(
-    completed: subprocess.CompletedProcess[str], what: str
+    completed: subprocess.CompletedProcess[str],
+    what: str,
+    *,
+    password: str = "",
 ) -> ArchiveInstallError:
-    detail = (
+    raw_detail = (
         (completed.stderr or "").strip()
         or (completed.stdout or "").strip()
         or f"exit {completed.returncode}"
     )
-    lowered = detail.lower()
-    if "password" in lowered or "encrypted" in lowered:
-        return ArchiveInstallError(
-            f"Archive is password-protected or encrypted ({detail})"
-        )
+    if _PASSWORD_ERROR_RE.search(raw_detail):
+        return _password_failure(password)
+    detail = _sanitize_error_detail(raw_detail, password)
     return ArchiveInstallError(f"{what} ({detail})")
 
 
@@ -1617,11 +1673,16 @@ def _seven_zip_member_lines(output: str) -> list[str]:
 
 
 def _unrar_links(
-    tool: str, archive_path: str, env: dict[str, str] | None
+    tool: str,
+    archive_path: str,
+    env: dict[str, str] | None,
+    *,
+    password: str = "",
 ) -> list[tuple[str, str, bool]]:
     """Best-effort link list from `unrar lt` (Name/Type/Target blocks)."""
+    pw_arg = f"-p{password}" if password else "-p-"
     try:
-        completed = _run_tool(tool, ["lt", archive_path], env)
+        completed = _run_tool(tool, ["lt", pw_arg, archive_path], env)
     except OSError:
         return []
     if completed.returncode != 0:
@@ -1645,7 +1706,11 @@ def _unrar_links(
 
 
 def list_tool_entries(
-    tool: str, archive_path: str, links: list[tuple[str, str, bool]] | None = None
+    tool: str,
+    archive_path: str,
+    links: list[tuple[str, str, bool]] | None = None,
+    *,
+    password: str = "",
 ) -> list[str]:
     """List archive entries via the external tool (for the path pre-check).
 
@@ -1656,20 +1721,34 @@ def list_tool_entries(
     base = _tool_basename(tool)
     env = None if tool == BUNDLED_7ZZ else build_host_open_env()
     if "unrar" in base:
-        completed = _run_tool(tool, ["lb", archive_path], env)
+        pw_arg = f"-p{password}" if password else "-p-"
+        completed = _run_tool(tool, ["lb", pw_arg, archive_path], env)
         if completed.returncode != 0:
-            raise _tool_failure(completed, "Could not list archive contents")
+            raise _tool_failure(
+                completed, "Could not list archive contents", password=password
+            )
         if links is not None:
-            links.extend(_unrar_links(tool, archive_path, env))
+            links.extend(_unrar_links(tool, archive_path, env, password=password))
         return [
             line.strip()
             for line in (completed.stdout or "").splitlines()
             if line.strip()
         ]
     if "bsdtar" in base or base == "tar":
-        completed = _run_tool(tool, ["-tf", archive_path], env)
+        if password and archive_format(archive_path) != "zip":
+            raise ArchiveInstallError(
+                "Install 7-Zip (7z) to extract password-protected .7z or .rar archives."
+            )
+        list_args = (
+            ["--passphrase", password, "-tf", archive_path]
+            if password
+            else ["-tf", archive_path]
+        )
+        completed = _run_tool(tool, list_args, env)
         if completed.returncode != 0:
-            raise _tool_failure(completed, "Could not list archive contents")
+            raise _tool_failure(
+                completed, "Could not list archive contents", password=password
+            )
         entries: list[str] = []
         for line in (completed.stdout or "").splitlines():
             line = line.strip()
@@ -1679,9 +1758,11 @@ def list_tool_entries(
                 entries.append(line)
         return entries
     # 7z/7zz/7za (also a raw 7z.exe path on Windows).
-    completed = _run_tool(tool, ["l", "-slt", "-p", archive_path], env)
+    completed = _run_tool(tool, ["l", "-slt", f"-p{password}", archive_path], env)
     if completed.returncode != 0:
-        raise _tool_failure(completed, "Could not list archive contents")
+        raise _tool_failure(
+            completed, "Could not list archive contents", password=password
+        )
     entries = []
     archive_real = os.path.abspath(archive_path)
     current = ""
@@ -1872,11 +1953,22 @@ def extract_with_tool(
     archive_path: str,
     staging_dir: str,
     cancel: threading.Event | None = None,
+    *,
+    password: str = "",
 ) -> int:
     """Extract via an external tool after a listing-based safety pre-check."""
+    base = _tool_basename(tool)
+    if (
+        ("bsdtar" in base or base == "tar")
+        and password
+        and archive_format(archive_path) != "zip"
+    ):
+        raise ArchiveInstallError(
+            "Install 7-Zip (7z) to extract password-protected .7z or .rar archives."
+        )
     os.makedirs(staging_dir, exist_ok=True)
     links: list[tuple[str, str, bool]] = []
-    entries = list_tool_entries(tool, archive_path, links)
+    entries = list_tool_entries(tool, archive_path, links, password=password)
     meaningful: list[str] = []
     for entry in entries:
         # 7z lists the archive itself as "." or empty in some outputs; skip those.
@@ -1886,22 +1978,27 @@ def extract_with_tool(
         meaningful.append(entry)
     check_archive_entries_no_collisions(meaningful)
     check_archive_links_safe(links, meaningful)
-    base = _tool_basename(tool)
     env = None if tool == BUNDLED_7ZZ else build_host_open_env()
     if "unrar" in base:
-        args = ["x", "-o+", archive_path, staging_dir + os.sep]
+        pw_arg = f"-p{password}" if password else "-p-"
+        args = ["x", "-o+", pw_arg, archive_path, staging_dir + os.sep]
     elif "bsdtar" in base or base == "tar":
-        args = ["-xf", archive_path, "-C", staging_dir]
+        args = (
+            ["--passphrase", password, "-xf", archive_path, "-C", staging_dir]
+            if password
+            else ["-xf", archive_path, "-C", staging_dir]
+        )
     else:
-        args = ["x", archive_path, f"-o{staging_dir}", "-y", "-p"]
+        args = ["x", archive_path, f"-o{staging_dir}", "-y", f"-p{password}"]
     argv = _tool_argv(tool, _tool_args(tool, args), env=env)
     if cancel is None:
         try:
             completed = _run_tool(tool, args, env)
         except OSError as exc:
-            raise ArchiveInstallError(f"Extraction failed: {exc}") from exc
+            detail = _sanitize_error_detail(str(exc), password)
+            raise ArchiveInstallError(f"Extraction failed: {detail}") from exc
         if completed.returncode != 0:
-            raise _tool_failure(completed, "Extraction failed")
+            raise _tool_failure(completed, "Extraction failed", password=password)
         check_symlinks_inside_staging(staging_dir)
         return len(meaningful)
     try:
@@ -1916,7 +2013,8 @@ def extract_with_tool(
             creationflags=no_console_window(),
         )
     except OSError as exc:
-        raise ArchiveInstallError(f"Extraction failed: {exc}") from exc
+        detail = _sanitize_error_detail(str(exc), password)
+        raise ArchiveInstallError(f"Extraction failed: {detail}") from exc
     while True:
         try:
             stdout, stderr = process.communicate(timeout=0.5)
@@ -1928,7 +2026,7 @@ def extract_with_tool(
                 raise InstallCancelled() from None
     completed = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     if completed.returncode != 0:
-        raise _tool_failure(completed, "Extraction failed")
+        raise _tool_failure(completed, "Extraction failed", password=password)
     check_symlinks_inside_staging(staging_dir)
     return len(meaningful)
 
@@ -2284,7 +2382,9 @@ def ensure_free_space(library_folder: str, required_bytes: int | None) -> None:
         )
 
 
-def uncompressed_size(archive_path: str, *, library_folder: str = "") -> int | None:
+def uncompressed_size(
+    archive_path: str, *, library_folder: str = "", password: str = ""
+) -> int | None:
     """Best-effort uncompressed size in bytes (None when unknown)."""
 
     fmt = archive_format(archive_path)
@@ -2307,11 +2407,15 @@ def uncompressed_size(archive_path: str, *, library_folder: str = "") -> int | N
             return None
         return total if total > 0 else None
     if fmt in ("7z", "rar"):
-        tool, _err = detect_archive_tool(archive_path, library_folder=library_folder)
+        tool, _err = detect_archive_tool(
+            archive_path, library_folder=library_folder, password=password
+        )
         if tool and "7z" in _tool_basename(tool):
             try:
                 env = None if tool == BUNDLED_7ZZ else build_host_open_env()
-                completed = _run_tool(tool, ["l", "-slt", "-p", archive_path], env)
+                completed = _run_tool(
+                    tool, ["l", "-slt", f"-p{password}", archive_path], env
+                )
                 if completed.returncode == 0:
                     total = 0
                     # The header blocks repeat the archive's own size.
@@ -3087,6 +3191,7 @@ def install_archive(
     cancel: threading.Event | None = None,
     source_kind: str = "archive",
     exe_relpath: str = "",
+    password: str = "",
 ) -> dict[str, object]:
     """Full install orchestration per design §7 (filesystem + DB).
 
@@ -3288,11 +3393,13 @@ def install_archive(
         seeding = _torrent_seeding(archive_path)
     else:
         tool, tool_error = detect_archive_tool(
-            archive_path, library_folder=library_folder
+            archive_path, library_folder=library_folder, password=password
         )
         if tool_error:
             raise ArchiveInstallError(tool_error)
-        required_bytes = uncompressed_size(archive_path, library_folder=library_folder)
+        required_bytes = uncompressed_size(
+            archive_path, library_folder=library_folder, password=password
+        )
     # A compressed tar does not record its unpacked size; it needs at least
     # its own size.
     min_free = required_bytes
@@ -3348,10 +3455,11 @@ def install_archive(
                         workers=zip_extract_workers(network),
                         exec_bits=True,
                         cancel=cancel,
+                        password=password,
                     )
                 except ZipMethodUnsupportedError as exc:
-                    # Deflate64 (Windows Explorer's choice for large files) and
-                    # other methods zipfile lacks: 7-Zip reads them.
+                    # Deflate64 (Windows Explorer's choice for large files), AES
+                    # encryption, and other methods zipfile lacks: 7-Zip reads them.
                     fallback = find_7zip_tool(
                         archive_path, library_folder=library_folder
                     )
@@ -3360,7 +3468,9 @@ def install_archive(
                             f"{exc}. Install 7-Zip (7z) to extract this archive."
                         ) from exc
                     _empty_dir(staging)
-                    _ = extract_with_tool(fallback, archive_path, staging, cancel)
+                    _ = extract_with_tool(
+                        fallback, archive_path, staging, cancel, password=password
+                    )
                     _progress("fixing permissions")
                     try:
                         _ = apply_execute_bits(staging)
@@ -3391,7 +3501,7 @@ def install_archive(
                     pass
             elif network and _extract_tool_via_local_scratch(
                 lambda folder, stop: extract_with_tool(
-                    cast(str, tool), archive_path, folder, stop
+                    cast(str, tool), archive_path, folder, stop, password=password
                 ),
                 archive_path,
                 staging,
@@ -3405,7 +3515,9 @@ def install_archive(
                 pass
             else:
                 assert tool is not None
-                _ = extract_with_tool(tool, archive_path, staging, cancel)
+                _ = extract_with_tool(
+                    tool, archive_path, staging, cancel, password=password
+                )
                 _progress("fixing permissions")
                 try:
                     _ = apply_execute_bits(staging)

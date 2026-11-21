@@ -18,6 +18,14 @@ export const inAppMirror = (mirror: UpdateMirror): boolean =>
   !mirror.split && mirror.in_app !== false && ["pixeldrain", "mega", "buzzheavier"].includes(mirror.host.toLowerCase());
 export const suitable = (build: UpdateBuild, host: HostPlatform): boolean =>
   (host === "linux" ? ["linux", "windows/linux", "windows", "all", "unknown"] : ["windows", "windows/linux", "all", "unknown"]).includes(build.platform);
+export function platformLabel(value: string): string {
+  if (value === "unknown") return "Any platform";
+  if (value === "all") return "All platforms";
+  if (value === "ios") return "iOS";
+  return value.split("/").map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" / ");
+}
+export const visibleArchivePassword = (password: string | null | undefined): string =>
+  (password ?? "").trim();
 /** Old builds (from an older-version spoiler) are kept apart from the others, whatever their platform. */
 export function orderBuilds(builds: UpdateBuild[], host: HostPlatform): { suitable: UpdateBuild[]; other: UpdateBuild[]; old: UpdateBuild[] } {
   const order = host === "linux" ? ["linux", "windows/linux", "windows", "all", "unknown"] : ["windows", "windows/linux", "all", "unknown"];

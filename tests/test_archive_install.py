@@ -254,7 +254,7 @@ def test_external_tool_traversal_rejected_before_run(monkeypatch, tmp_path):
     monkeypatch.setattr(
         ai,
         "list_tool_entries",
-        lambda _t, _a, _links=None: ["ok.txt", "../../evil.txt"],
+        lambda _t, _a, _links=None, password="": ["ok.txt", "../../evil.txt"],
     )
     called = []
 
@@ -272,7 +272,9 @@ def test_external_tool_traversal_rejected_before_run(monkeypatch, tmp_path):
 def test_external_tool_nonzero_exit_fails(monkeypatch, tmp_path):
     import core.archive_install as ai
 
-    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a, _links=None: ["ok.txt"])
+    monkeypatch.setattr(
+        ai, "list_tool_entries", lambda _t, _a, _links=None, password="": ["ok.txt"]
+    )
 
     class _Result:
         returncode = 1
@@ -1361,7 +1363,7 @@ def test_extract_with_tool_flatpak_argv_and_default_path(monkeypatch, tmp_path):
     archive = str(tmp_path / "game.7z")
 
     monkeypatch.setattr(
-        ai, "list_tool_entries", lambda _t, _a, _links=None: ["Game.exe"]
+        ai, "list_tool_entries", lambda _t, _a, _links=None, password="": ["Game.exe"]
     )
 
     calls: list[list[str]] = []
@@ -1461,11 +1463,11 @@ def test_install_checks_destination_when_selecting_tool(monkeypatch, tmp_path):
     archive.touch()
     checked_folders = []
 
-    def detect(path, *, library_folder):
+    def detect(path, *, library_folder, password=""):
         checked_folders.append(library_folder)
         return "/usr/bin/7z", None
 
-    def extract(tool, path, staging, cancel=None):
+    def extract(tool, path, staging, cancel=None, *, password=""):
         from pathlib import Path
 
         (Path(staging) / "Game.exe").write_bytes(b"game")
@@ -1533,7 +1535,9 @@ def test_external_tool_duplicate_precheck(monkeypatch, tmp_path):
     import core.archive_install as ai
 
     monkeypatch.setattr(
-        ai, "list_tool_entries", lambda _t, _a, _links=None: ["a.txt", "a.txt"]
+        ai,
+        "list_tool_entries",
+        lambda _t, _a, _links=None, password="": ["a.txt", "a.txt"],
     )
     called = []
 
@@ -1551,7 +1555,9 @@ def test_external_tool_case_collision_precheck(monkeypatch, tmp_path):
     import core.archive_install as ai
 
     monkeypatch.setattr(
-        ai, "list_tool_entries", lambda _t, _a, _links=None: ["Game.exe", "game.exe"]
+        ai,
+        "list_tool_entries",
+        lambda _t, _a, _links=None, password="": ["Game.exe", "game.exe"],
     )
 
     def _fail(cmd, **kwargs):
@@ -2657,7 +2663,9 @@ def test_extract_with_tool_kills_the_extractor_on_cancel(tmp_path, monkeypatch):
     from core import archive_install
 
     monkeypatch.setattr(
-        archive_install, "list_tool_entries", lambda tool, path, links: ["a.txt"]
+        archive_install,
+        "list_tool_entries",
+        lambda tool, path, links, password="": ["a.txt"],
     )
     monkeypatch.setattr(
         archive_install,
@@ -2770,7 +2778,7 @@ def test_install_of_a_set_starts_at_part_one_and_deletes_every_part(
     lib.mkdir()
     seen = []
 
-    def extract(tool, path, staging, cancel=None):
+    def extract(tool, path, staging, cancel=None, *, password=""):
         seen.append(path)
         os.makedirs(staging, exist_ok=True)
         with open(os.path.join(staging, "Game.exe"), "wb") as handle:
@@ -3323,7 +3331,7 @@ def test_scratch_copy_honours_cancel(tmp_path, monkeypatch):
     staging.mkdir()
     cancel = threading.Event()
 
-    def fake_extract(_tool, _archive, dest, _cancel):
+    def fake_extract(_tool, _archive, dest, _cancel, *, password=""):
         for i in range(3):
             (Path(dest) / f"f{i}").write_bytes(b"x")
         return 0

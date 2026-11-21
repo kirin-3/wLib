@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {orderBuilds,preselect,downloadFailureMessage,needsExtensionSwitch,bulkDownloadDecision,pickerTargetVersion,selectableBuild,siteUnavailable} from './updateDownloads.ts';
+import {orderBuilds,preselect,downloadFailureMessage,needsExtensionSwitch,bulkDownloadDecision,pickerTargetVersion,platformLabel,selectableBuild,siteUnavailable,visibleArchivePassword} from './updateDownloads.ts';
 import type {UpdateBuild} from '../services/api.ts';
 const build = (platform: string, kind = 'full'): UpdateBuild => ({label:platform,section:'',platform,kind,mirrors:[{link_id:platform,host:'mega',label:'MEGA',part:'',split:false}]});
 test('prefers native full builds and separates unsuitable platforms',()=>{
@@ -95,4 +95,26 @@ test('bulk download asks when only older versions were found', () => {
   const decision = bulkDownloadDecision({success: true, builds: [build('windows', 'old'), build('mac')]}, 'linux');
   assert.equal(decision.kind, 'needs-choice');
   assert.equal(decision.kind === 'needs-choice' && decision.reason, 'Only older versions were found');
+});
+
+test('ios and android (APK) builds sit under other platforms and are never preselected', () => {
+  const apk: UpdateBuild = {...build('android'), label: 'APK'};
+  const ios: UpdateBuild = {...build('ios'), label: 'iOS (IPA)'};
+  for (const host of ['linux', 'windows'] as const) {
+    assert.deepEqual(orderBuilds([build('windows/linux'), apk, ios], host).other, [apk, ios]);
+    assert.equal(preselect([apk, ios], host), null);
+  }
+  assert.equal(platformLabel('ios'), 'iOS');
+  assert.equal(platformLabel('android'), 'Android');
+  assert.equal(platformLabel('windows/linux'), 'Windows / Linux');
+  assert.equal(platformLabel('unknown'), 'Any platform');
+  assert.equal(platformLabel('all'), 'All platforms');
+});
+
+test('archive password visibility trims whitespace and hides empty values', () => {
+  assert.equal(visibleArchivePassword('f95zone'), 'f95zone');
+  assert.equal(visibleArchivePassword('  my pass  '), 'my pass');
+  assert.equal(visibleArchivePassword(''), '');
+  assert.equal(visibleArchivePassword('   '), '');
+  assert.equal(visibleArchivePassword(undefined), '');
 });

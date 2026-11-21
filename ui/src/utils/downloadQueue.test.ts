@@ -4,6 +4,8 @@ import test from "node:test";
 import type { DownloadFailureCode, DownloadQueueJob, DownloadQueueState, UpdateDownloadJob } from "../services/api";
 import {
   installLabel,
+  installRequestForJob,
+  installSource,
   addedNotice,
   chartPoints,
   clampLimitKib,
@@ -309,4 +311,46 @@ test("LewdCorner checks and failures appear under Needs you", () => {
   assert.ok(failureInfo(expired).actions.includes("retry"));
   const signIn = "Sign in to LewdCorner in your browser";
   assert.equal(failureInfo(job({error_code: "sign_in", error_text: signIn})).sentence, signIn);
+});
+
+test("finished host download carries its saved archive password into the install request", () => {
+  const withPass = job({
+    game_id: 7,
+    state: "ready",
+    source: { host: "pixeldrain", archive_password: "f95zone" },
+    details: { archive_path: "/tmp/game.zip" },
+  });
+  assert.deepEqual(installSource(withPass), {
+    archivePath: "/tmp/game.zip",
+    sourceKind: "archive",
+    archivePassword: "f95zone",
+  });
+  assert.deepEqual(installRequestForJob(withPass), {
+    gameId: 7,
+    archivePath: "/tmp/game.zip",
+    archivePassword: "f95zone",
+  });
+
+  const withoutPass = job({
+    game_id: 8,
+    state: "ready",
+    source: { host: "pixeldrain" },
+    details: { archive_path: "/tmp/other.zip" },
+  });
+  assert.deepEqual(installRequestForJob(withoutPass), {
+    gameId: 8,
+    archivePath: "/tmp/other.zip",
+  });
+
+  const torrentFolder = job({
+    game_id: 9,
+    kind: "torrent",
+    state: "ready",
+    source: { rpdl_id: 42 },
+    details: { folder_path: "/tmp/torrent-folder" },
+  });
+  assert.deepEqual(installRequestForJob(torrentFolder), {
+    gameId: 9,
+    archivePath: "/tmp/torrent-folder",
+  });
 });

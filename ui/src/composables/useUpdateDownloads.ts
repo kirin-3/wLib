@@ -18,6 +18,7 @@ import {
   awaitsSeedAnswer,
   downloadPollMs,
   installLabel,
+  installRequestForJob,
   installSource,
   jobForGame,
   runQueueCommand,
@@ -58,8 +59,8 @@ function toastActions(job: DownloadQueueJob) {
 
 /** Opens the install dialog for a finished download, or says why it cannot. */
 async function install(job: DownloadQueueJob): Promise<void> {
-  const source = installSource(job);
-  if (!source) {
+  const request = installRequestForJob(job);
+  if (!request) {
     notify('The downloaded files are gone. Remove the download and start it again.', 'error');
     return;
   }
@@ -73,7 +74,7 @@ async function install(job: DownloadQueueJob): Promise<void> {
   }
   installDialogOpen = true;
   offered = job;
-  openInstallArchive({gameId: job.game_id, archivePath: source.archivePath});
+  openInstallArchive(request);
 }
 
 /** Settles the seeding question in a dialog, then opens the install dialog. */

@@ -11,7 +11,7 @@ import {
 } from "../../services/api";
 import { notifyError } from "../../utils/toast";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
-import { choicesAfterInspect, createInstallPreview, mergeArchiveFields, openInstallArchive, preselectLibraryFolder, formatLibraryFreeSpace, type InstallArchiveSeed } from "../../utils/installArchive";
+import { choicesAfterInspect, createInstallPreview, formatInstallError, mergeArchiveFields, openInstallArchive, preselectLibraryFolder, formatLibraryFreeSpace, type InstallArchiveSeed } from "../../utils/installArchive";
 import { defaultTargetLabel, isWishlisted } from "../../utils/libraryGames";
 import PathStatus from "../PathStatus.vue";
 
@@ -19,6 +19,7 @@ const isOpen = defineModel<boolean>({ required: true });
 const props = defineProps<{
   game?: GameRecord | null;
   preselectedArchive?: string;
+  archivePassword?: string;
   seed?: InstallArchiveSeed | undefined;
 }>();
 const emit = defineEmits<{ installed: [archivePath: string] }>();
@@ -27,6 +28,7 @@ type Phase = "pick" | "inspecting" | "ready" | "installing" | "done";
 
 const phase = ref<Phase>("pick");
 const archive = ref("");
+const archivePassword = ref("");
 const title = ref("");
 const version = ref("");
 const creator = ref("");
@@ -135,6 +137,7 @@ const inspecting = ref(false);
 // goes through this snapshot so the header, inspect and install never mix games.
 const target = ref<GameRecord | null>(null);
 const seededArchive = ref("");
+const seededArchivePassword = ref("");
 const isUpdate = computed(() => !!target.value);
 // A wishlisted game has no installed files: the archive installs it, not an update.
 const isWishlistTarget = computed(() => !!target.value && isWishlisted(target.value));
@@ -194,6 +197,7 @@ const reset = () => {
   previewError.value = "";
   phase.value = "pick";
   archive.value = "";
+  archivePassword.value = "";
   title.value = "";
   version.value = "";
   creator.value = "";
@@ -396,7 +400,11 @@ const installIntoDuplicate = () => {
   const gameId = duplicateGameId.value;
   const path = archive.value.trim();
   if (gameId === null || phase.value === "installing") return;
-  openInstallArchive({ gameId, archivePath: path });
+  openInstallArchive({
+    gameId,
+    archivePath: path,
+    ...(archivePassword.value ? { archivePassword: archivePassword.value } : {}),
+  });
 };
 
 const browseArchive = async () => {
@@ -550,11 +558,11 @@ const install = async (exeRelpath = "") => {
       delete_archive: torrentSource.value ? false : deleteArchive.value,
       source_kind: sourceKind.value,
       exe_relpath: exeRelpath || undefined,
+      archive_password: sourceKind.value === "archive" && archivePassword.value ? archivePassword.value : undefined,
     });
     if (!res?.success) {
-      installError.value = res?.error || "Install failed.";
+      installError.value = formatInstallError(res);
       launchCandidates.value = Array.isArray(res?.launch_candidates) ? res.launch_candidates : [];
-      if (res?.error_code === "install_cancelled") installError.value = "Install cancelled. Nothing was changed.";
       const payload = res as unknown as Record<string, unknown>;
       duplicateGameId.value =
         typeof payload?.game_id === "number" ? payload.game_id : null;
@@ -584,6 +592,8 @@ const seedForm = () => {
   reset();
   target.value = props.game ?? null;
   seededArchive.value = props.preselectedArchive || "";
+  seededArchivePassword.value = props.archivePassword || "";
+  archivePassword.value = seededArchivePassword.value;
   requestSeed.value = props.seed;
   if (target.value) {
     title.value = target.value.title || "";
@@ -618,19 +628,21 @@ const seedForm = () => {
 const hasPendingRequest = () =>
   (props.game?.id ?? null) !== (target.value?.id ?? null) ||
   (props.preselectedArchive || "") !== seededArchive.value ||
+  (props.archivePassword || "") !== seededArchivePassword.value ||
   props.seed !== requestSeed.value;
 
 // Re-seed when the dialog opens or a new request (another game or archive) lands
 // while it is open; a superseded inspection is cheap to cancel. A running install
 // owns the form, so the request waits until the install ends (see below).
 watch(
-  () => [isOpen.value, props.game?.id ?? null, props.preselectedArchive, props.seed] as const,
+  () => [isOpen.value, props.game?.id ?? null, props.preselectedArchive, props.archivePassword, props.seed] as const,
   ([open]) => {
     if (!open) {
       stopPolling();
       reset();
       target.value = null;
       seededArchive.value = "";
+      seededArchivePassword.value = "";
       requestSeed.value = undefined;
       return;
     }
@@ -785,6 +797,19 @@ watch(phase, (next, prev) => {
           <label class="block sm:col-span-2">
             <span class="field-label">F95Zone thread URL</span>
             <input v-model="f95Url" @change="lookupDetails" type="text" placeholder="https://f95zone.to/threads/…" class="modal-input w-full text-sm font-mono" :disabled="phase === 'installing'" @keydown.enter.prevent="lookupDetails" />
+          </label>
+          <label v-if="sourceKind === 'archive'" class="block sm:col-span-2" data-testid="archive-password-field">
+            <span class="field-label">Archive password (optional)</span>
+            <input
+              id="install-archive-password"
+              v-model="archivePassword"
+              type="text"
+              autocomplete="off"
+              placeholder="Leave empty if the archive has no password"
+              class="modal-input w-full text-sm font-mono"
+              :disabled="phase === 'installing'"
+              @keydown.enter="canInstall && install()"
+            />
           </label>
         </div>
 
