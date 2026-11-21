@@ -198,11 +198,12 @@ The **Saves** section sits at the end of the Launch tab in `GameDetailModal.vue`
 - **Browser mocks**: `services/mock/backend.ts` infers the engine from the mock game's `engine` label (matching `rgss`/`xp`/`vx` to `"rgss"`) and keeps console, decrypted, RGSS extracted and switch state for the session. Extract and Decrypt run one file per `MockBackend._mockToolStepMs` so polling sees `done` advance, and Cancel works.
 
 ## RPG Maker save editor
-The Tools tab of an RPG Maker MV/MZ game has a Save editor card (`GameToolsTab.vue`) listing slots with modified time and play time. Open shows `components/modals/RpgmSaveEditor.vue` (teleported to `body`) with Party, Actors, Switches, Variables and Raw tabs; the Raw tree is `RpgmRawNode.vue`, expanded lazily and capped at 200 rows per node.
-- Edits go into a patch map (`utils/rpgmSaveEditor.ts`) keyed by the JSON path of the leaf, so curated and Raw edits of the same value share one entry and the last wins. Level edits are sent first so an explicit experience edit made afterwards still wins.
-- Values are validated in the UI (gold 0 to 9,999,999, counts 0 to 9,999, level at least 1, bonuses may be negative); Save stays disabled while any field is invalid.
+The Tools tab of an RPG Maker MV/MZ (`"rpgm"`) or XP/VX/VX Ace (`"rgss"`) game has a shared Save editor card (`GameToolsTab.vue`) listing slots with engine label (for RGSS), modified time and play time. Open shows `components/modals/RpgmSaveEditor.vue` (teleported to `body`) with Party, Actors, Switches, Variables and Raw tabs.
+- For MV/MZ (`"mv"`, `"mz"`), the Raw tree is `RpgmRawNode.vue` and pending edits are keyed by JSON path (`pathKey`). For XP/VX/VX Ace (`"xp"`, `"vx"`, `"vxace"`), the Raw tree is `RgssRawNode.vue` (class names, ivar names, hash pairs as `key => value`, read-only `-> #id` links and `<Class> (N bytes)` blobs, lazy expansion capped at 200 rows) and pending edits use `ref:<id>` keys (`leafKey`/`refKey`) when a leaf carries a `ref`, so curated and Raw edits of the same node collapse into one edit.
+- `RpgmSaveEditor.vue` adapts labels by `format` and `names`: `names.mp_label` (`"SP"` for XP), parameter bonus fields from `names.params` (6 for XP/VX, 8 for VX Ace/MV/MZ), and a VX Ace level hint stating that experience stays unchanged. Level edits are sent first so an explicit experience edit made afterwards still wins.
+- Values are validated in the UI (gold 0 to 9,999,999, counts 0 to 9,999, level at least 1, bonuses may be negative; RGSS Raw edits keep strict `int`/`float`/`bool`/`str` Marshal types via `parseRgssRawInput`); Save stays disabled while any field is invalid.
 - A dirty indicator, Discard and a confirm on close protect unsaved edits. Save shows the backup name or the refusal message (game running, save changed since opened, backup failed).
-- Browser mocks in `services/mock/rpgm.ts` serve two slots and a small MV-shaped save, and record write calls in `globalThis.__wlibMockRpgmWrites` for checks.
+- Browser mocks in `services/mock/rpgm.ts` serve MV slots for MV/MZ games and one RGSS save per engine (`Save1.rxdata`, `Save1.rvdata`, `Save01.rvdata2`) for RGSS games, recording write calls in `globalThis.__wlibMockRpgmWrites` for checks.
 
 ## Game notes and attachments
 

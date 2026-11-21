@@ -1068,9 +1068,12 @@ export interface GameSaveActionResponse extends ApiBasicResponse {
   backups?: GameSaveBackup[];
 }
 
+export type RpgmSaveFormat = "mv" | "mz" | "xp" | "vx" | "vxace";
+
 export interface RpgmSaveSlot {
   file: string;
   slot: number;
+  format?: RpgmSaveFormat;
   modified: string;
   size: number;
   playtime: string;
@@ -1100,6 +1103,7 @@ export interface RpgmNames {
   variables: string[];
   currency: string;
   params: string[];
+  mp_label?: string;
 }
 
 export interface RpgmInventoryRow {
@@ -1107,6 +1111,7 @@ export interface RpgmInventoryRow {
   count: number;
   name: string;
   known: boolean;
+  ref?: number | null;
 }
 
 export interface RpgmActorView {
@@ -1121,6 +1126,12 @@ export interface RpgmActorView {
   hp: number | null;
   mp: number | null;
   param_plus: number[];
+  name_ref?: number | null;
+  level_ref?: number | null;
+  exp_ref?: number | null;
+  hp_ref?: number | null;
+  mp_ref?: number | null;
+  param_plus_refs?: (number | null)[];
 }
 
 export interface RpgmValueRow {
@@ -1128,10 +1139,12 @@ export interface RpgmValueRow {
   name: string;
   value: boolean | number | string | null;
   type: "bool" | "number" | "string" | "other";
+  ref?: number | null;
 }
 
 export interface RpgmSaveView {
   gold: number | null;
+  gold_ref?: number | null;
   inventory: Record<RpgmInventoryKind, RpgmInventoryRow[]>;
   actors: RpgmActorView[];
   switches: RpgmValueRow[];
@@ -1139,23 +1152,43 @@ export interface RpgmSaveView {
   missing: string[];
 }
 
+export type RgssRawNodeData =
+  | { id: number; t: "nil" }
+  | { id: number; t: "bool"; v: boolean; editable?: boolean }
+  | { id: number; t: "int"; v: number | string; editable?: boolean }
+  | { id: number; t: "float"; v: number | string; editable?: boolean }
+  | { id: number; t: "str"; v: string; editable?: boolean }
+  | { id: number; t: "sym"; v: string }
+  | { id: number; t: "array"; items: RgssRawNodeData[] }
+  | { id: number; t: "hash"; pairs: [RgssRawNodeData, RgssRawNodeData][]; default?: RgssRawNodeData }
+  | { id: number; t: "object" | "struct"; class: string; ivars: [string, RgssRawNodeData][] }
+  | { id: number; t: "userdef"; class: string; size: number }
+  | { id: number; t: "usermarshal"; class: string; value: RgssRawNodeData }
+  | { id: number; t: "extended"; module: string; inner: RgssRawNodeData }
+  | { id: number; t: "userclass"; class: string; inner: RgssRawNodeData }
+  | { id: number; t: "regexp"; v: string; options: number }
+  | { id: number; t: "classref"; kind: string; v: string }
+  | { id: number; t: "link"; to: number }
+  | { id: number; t: "unknown" };
+
 export type RpgmActorField = "name" | "level" | "exp" | "hp" | "mp" | "paramPlus";
 
 export type RpgmPatch =
   | { op: "set"; path: (string | number)[]; value: boolean | number | string }
+  | { op: "set_node"; node: number; value: boolean | number | string }
   | { op: "set_count"; kind: RpgmInventoryKind; id: number; count: number }
   | { op: "set_switch"; id: number; value: boolean }
   | { op: "set_variable"; id: number; value: number | string }
   | { op: "set_actor"; id: number; field: RpgmActorField; value: number | string; index?: number };
 
 export interface RpgmSaveLoadResponse extends ApiBasicResponse {
-  format: "mv" | "mz";
+  format: RpgmSaveFormat;
   size: number;
   // a string: nanosecond timestamps exceed JS's safe integer range
   mtime_ns: string;
   view: RpgmSaveView;
   names: RpgmNames;
-  raw: Record<string, unknown>;
+  raw: Record<string, unknown> | RgssRawNodeData[];
 }
 
 export interface RpgmSaveWriteResponse extends ApiBasicResponse {

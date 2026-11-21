@@ -284,6 +284,53 @@ def write_entry(
         _remove_if_present(temporary)
 
 
+def read_entry(
+    folder: str, name: str, max_bytes: int = 32 * 1024 * 1024
+) -> bytes | None:
+    """Read one decrypted entry from an RGSS archive in `folder` into memory.
+
+    Checks both plain and `.wlib-backup` archives; matches `name` ignoring
+    letter case and slash direction. Returns `None` if missing, unreadable,
+    or larger than `max_bytes`.
+    """
+    target = name.replace("\\", "/").lstrip("/").lower()
+    if not target or max_bytes < 0:
+        return None
+    archives = sorted(
+        discover_archives(folder), key=lambda archive: (archive.backup, archive.filename)
+    )
+    step = max(4, CHUNK_SIZE & ~3)
+    for archive in archives:
+        try:
+            index = read_rgss_index(archive.path)
+        except RgssUnsupportedError:
+            continue
+        match: RgssEntry | None = None
+        for entry in index.entries:
+            if entry.name.replace("\\", "/").lstrip("/").lower() == target:
+                match = entry
+                break
+        if match is None:
+            continue
+        if match.size > max_bytes:
+            return None
+        try:
+            with open(archive.path, "rb") as handle:
+                _ = handle.seek(match.offset)
+                remaining = match.size
+                key = match.key
+                out = bytearray()
+                while remaining > 0:
+                    chunk = _read_exact(handle, min(step, remaining))
+                    decrypted, key = decrypt_chunk(chunk, key)
+                    out += decrypted
+                    remaining -= len(chunk)
+            return bytes(out)
+        except OSError:
+            return None
+    return None
+
+
 # ── Extraction ──
 
 

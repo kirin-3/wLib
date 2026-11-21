@@ -2,20 +2,25 @@
 <script setup lang="ts">
 import { computed, ref, useTemplateRef, watch } from "vue";
 import { IconAlertCircle, IconLoader2, IconPlus, IconX } from "@tabler/icons-vue";
-import { api, type RpgmInventoryKind, type RpgmPatch, type RpgmSaveLoadResponse } from "../../services/api";
+import { api, type RgssRawNodeData, type RpgmActorView, type RpgmInventoryKind, type RpgmPatch, type RpgmSaveLoadResponse, type RpgmValueRow } from "../../services/api";
 import { confirmAction } from "../../utils/confirm";
 import { notify, notifyError } from "../../utils/toast";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import RpgmRawNode from "../RpgmRawNode.vue";
+import RgssRawNode, { type RgssRawEntry } from "../RgssRawNode.vue";
 import {
   badgeForKind,
   buildPatchList,
   clearPatch,
   filterPicker,
   filterRows,
+  formatLabel,
   isDirty,
+  isRgssFormat,
+  leafKey,
   patchValue,
   pathKey,
+  refKey,
   setPatch,
   validateBonus,
   validateCount,
@@ -71,6 +76,16 @@ const dirty = computed(() => isDirty(patches.value));
 const hasErrors = computed(() => Object.keys(errors.value).length > 0);
 const view = computed(() => save.value?.view ?? null);
 const names = computed(() => save.value?.names ?? null);
+const isRgss = computed(() => isRgssFormat(save.value?.format));
+const rgssDumpEntries = computed<RgssRawEntry[]>(() => {
+  if (!save.value || !isRgss.value || !Array.isArray(save.value.raw)) return [];
+  const fmt = save.value.format;
+  return (save.value.raw as RgssRawNodeData[]).map((dump, index) => ({
+    id: `dump:${dump.id}`,
+    label: fmt === "vxace" ? (index === 0 ? "Header" : index === 1 ? "Contents" : `Dump ${index}`) : `Dump ${index}`,
+    node: dump,
+  }));
+});
 
 const reset = (): void => {
   patches.value = new Map();
@@ -164,26 +179,33 @@ const pendingValue = <T,>(key: string, original: T): T => {
 };
 
 const GOLD_PATH: RpgmPath = ["party", "_gold"];
+const goldKey = computed(() => leafKey(view.value?.gold_ref, GOLD_PATH));
 const editGold = (event: Event): void => {
   const result = validateGold(inputValue(event));
   if (fail("gold", result) || !result.ok) return;
-  record(pathKey(GOLD_PATH), { op: "set", path: GOLD_PATH, value: result.value }, view.value?.gold);
+  const goldRef = view.value?.gold_ref;
+  const patch: RpgmPatch =
+    isRgss.value && goldRef !== null && goldRef !== undefined
+      ? { op: "set_node", node: goldRef, value: result.value }
+      : { op: "set", path: GOLD_PATH, value: result.value };
+  record(goldKey.value, patch, view.value?.gold);
 };
 
 const countPath = (kind: RpgmInventoryKind, id: number): RpgmPath => ["party", KIND_KEY[kind], String(id)];
+const countKey = (kind: RpgmInventoryKind, id: number, ref?: number | null): string => leafKey(ref, countPath(kind, id));
 const inventoryRows = (kind: RpgmInventoryKind) => {
   const rows = (view.value?.inventory[kind] ?? []).map((row) => ({ ...row, original: row.count as number | null }));
   for (const extra of added.value) {
     if (extra.kind === kind && !rows.some((row) => row.id === extra.id)) {
-      rows.push({ id: extra.id, count: 0, name: extra.name, known: true, original: null });
+      rows.push({ id: extra.id, count: 0, name: extra.name, known: true, ref: null, original: null });
     }
   }
   return rows.sort((a, b) => a.id - b.id);
 };
-const editCount = (kind: RpgmInventoryKind, id: number, original: number | null, event: Event): void => {
+const editCount = (kind: RpgmInventoryKind, id: number, original: number | null, ref: number | null | undefined, event: Event): void => {
   const result = validateCount(inputValue(event));
   if (fail(`count:${kind}:${id}`, result) || !result.ok) return;
-  record(pathKey(countPath(kind, id)), { op: "set_count", kind, id, count: result.value }, original ?? 0);
+  record(countKey(kind, id, ref), { op: "set_count", kind, id, count: result.value }, original ?? 0);
 };
 
 const pickerEntries = computed(() => {
@@ -198,7 +220,7 @@ const addEntry = (id: number, name: string): void => {
     return;
   }
   added.value = [...added.value, { kind, id, name }];
-  patches.value = setPatch(patches.value, pathKey(countPath(kind, id)), { op: "set_count", kind, id, count: 1 });
+  patches.value = setPatch(patches.value, countKey(kind, id, null), { op: "set_count", kind, id, count: 1 });
 };
 
 const actorPath = (id: number, leaf: string | number, extra?: string | number): RpgmPath =>
@@ -206,23 +228,48 @@ const actorPath = (id: number, leaf: string | number, extra?: string | number): 
 
 type ActorField = "name" | "level" | "exp" | "hp" | "mp";
 const LEAF: Record<ActorField, string> = { name: "_name", level: "_level", exp: "_exp", hp: "_hp", mp: "_mp" };
-const actorKey = (id: number, field: ActorField, classId: number | null): string =>
-  pathKey(field === "exp" ? actorPath(id, "_exp", String(classId)) : actorPath(id, LEAF[field]));
-const editActor = (id: number, field: ActorField, original: unknown, classId: number | null, event: Event): void => {
+const actorFieldRef = (actor: RpgmActorView, field: ActorField): number | null | undefined => {
+  switch (field) {
+    case "name":
+      return actor.name_ref;
+    case "level":
+      return actor.level_ref;
+    case "exp":
+      return actor.exp_ref;
+    case "hp":
+      return actor.hp_ref;
+    case "mp":
+      return actor.mp_ref;
+  }
+};
+const actorKey = (actor: RpgmActorView, field: ActorField): string =>
+  leafKey(
+    actorFieldRef(actor, field),
+    field === "exp" ? actorPath(actor.id, "_exp", String(actor.class_id)) : actorPath(actor.id, LEAF[field]),
+  );
+const bonusKey = (actor: RpgmActorView, index: number): string =>
+  leafKey(actor.param_plus_refs?.[index], actorPath(actor.id, "_paramPlus", index));
+const editActor = (actor: RpgmActorView, field: ActorField, original: unknown, event: Event): void => {
   const text = inputValue(event);
   const validators = { name: validateName, level: validateLevel, exp: validateExp, hp: validateStat, mp: validateStat } as const;
   const result = validators[field](text);
-  if (fail(`actor:${id}:${field}`, result) || !result.ok) return;
-  record(actorKey(id, field, classId), { op: "set_actor", id, field, value: result.value }, original);
+  if (fail(`actor:${actor.id}:${field}`, result) || !result.ok) return;
+  record(actorKey(actor, field), { op: "set_actor", id: actor.id, field, value: result.value }, original);
 };
-const editBonus = (id: number, index: number, original: number, event: Event): void => {
+const editBonus = (actor: RpgmActorView, index: number, original: number, event: Event): void => {
   const result = validateBonus(inputValue(event));
-  if (fail(`actor:${id}:bonus:${index}`, result) || !result.ok) return;
-  record(pathKey(actorPath(id, "_paramPlus", index)), { op: "set_actor", id, field: "paramPlus", index, value: result.value }, original);
+  if (fail(`actor:${actor.id}:bonus:${index}`, result) || !result.ok) return;
+  record(bonusKey(actor, index), { op: "set_actor", id: actor.id, field: "paramPlus", index, value: result.value }, original);
 };
-const levelEdited = (id: number): boolean => {
-  const patch = patches.value.get(pathKey(actorPath(id, "_level")));
+const levelEdited = (actor: RpgmActorView): boolean => {
+  const patch = patches.value.get(actorKey(actor, "level"));
   return patch !== undefined;
+};
+const levelHint = (actor: RpgmActorView): string => {
+  if (save.value?.format === "vxace") return "Experience stays unchanged for RPG Maker VX Ace.";
+  if (actor.has_curve) return "Experience will be recalculated for the new level. Edit it afterwards to override.";
+  if (isRgss.value) return "No experience table was found for this actor, so experience stays unchanged.";
+  return "Class data was not found, so experience stays unchanged.";
 };
 
 watch(switchFilter, () => (switchLimit.value = ROW_PAGE));
@@ -233,20 +280,28 @@ const switchRows = computed(() => switchMatches.value.slice(0, switchLimit.value
 const variableRows = computed(() => variableMatches.value.slice(0, variableLimit.value));
 const switchPath = (id: number): RpgmPath => ["switches", "_data", id];
 const variablePath = (id: number): RpgmPath => ["variables", "_data", id];
-const toggleSwitch = (id: number, original: boolean, event: Event): void => {
+const switchKey = (row: RpgmValueRow): string => leafKey(row.ref, switchPath(row.id));
+const variableKey = (row: RpgmValueRow): string => leafKey(row.ref, variablePath(row.id));
+const toggleSwitch = (row: RpgmValueRow, event: Event): void => {
   const value = (event.target as HTMLInputElement).checked;
-  record(pathKey(switchPath(id)), { op: "set_switch", id, value }, original);
+  record(switchKey(row), { op: "set_switch", id: row.id, value }, row.value as boolean);
 };
-const editVariable = (id: number, original: number | string | null, type: "number" | "string" | "bool" | "other", event: Event): void => {
-  const result = validateVariable(inputValue(event), type);
-  if (fail(`variable:${id}`, result) || !result.ok) return;
-  record(pathKey(variablePath(id)), { op: "set_variable", id, value: result.value }, original);
+const editVariable = (row: RpgmValueRow, event: Event): void => {
+  const result = validateVariable(inputValue(event), row.type);
+  if (fail(`variable:${row.id}`, result) || !result.ok) return;
+  record(variableKey(row), { op: "set_variable", id: row.id, value: result.value }, row.value as number | string | null);
 };
 
 const editRaw = (path: RpgmPath, original: RawScalar, value: RawScalar): void => {
   const key = pathKey(path);
   if (value === original) patches.value = clearPatch(patches.value, key);
   else patches.value = setPatch(patches.value, key, { op: "set", path, value });
+};
+
+const editRgssRaw = (nodeId: number, original: RawScalar, value: RawScalar): void => {
+  const key = refKey(nodeId);
+  if (value === original) patches.value = clearPatch(patches.value, key);
+  else patches.value = setPatch(patches.value, key, { op: "set_node", node: nodeId, value });
 };
 
 // ---- saving ----
@@ -272,7 +327,12 @@ const doSave = async (): Promise<void> => {
   }
 };
 
-const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"));
+const slotLabel = computed(() => {
+  // Number() drops the leading zero of VX Ace names (Save01 is slot 1).
+  const slot = props.file.replace(/^(?:file|save)(\d+)\..*$/i, (_match, digits: string) => `Slot ${Number(digits)}`);
+  const fmt = formatLabel(save.value?.format);
+  return fmt ? `${slot} (${fmt})` : slot;
+});
 </script>
 
 <template>
@@ -337,7 +397,7 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
               <input
                 class="editor-input w-full max-w-xs mt-1 block"
                 inputmode="numeric"
-                :value="pendingValue(pathKey(GOLD_PATH), view.gold)"
+                :value="pendingValue(goldKey, view.gold)"
                 aria-label="Gold"
                 @change="editGold"
               />
@@ -355,9 +415,9 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
                   <input
                     class="editor-input w-24 text-right"
                     inputmode="numeric"
-                    :value="pendingValue(pathKey(countPath(kind, row.id)), row.original ?? 0)"
+                    :value="pendingValue(countKey(kind, row.id, row.ref), row.original ?? 0)"
                     :aria-label="`Count of ${row.name}`"
-                    @change="editCount(kind, row.id, row.original, $event)"
+                    @change="editCount(kind, row.id, row.original, row.ref, $event)"
                   />
                   <span v-if="errors[`count:${kind}:${row.id}`]" role="alert" class="editor-error">{{ errors[`count:${kind}:${row.id}`] }}</span>
                 </li>
@@ -392,34 +452,39 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
             <p v-if="view.actors.length === 0" class="text-xs" style="color: var(--text-muted)">Actors were not found in this save.</p>
             <section v-for="actor in view.actors" :key="actor.id" class="editor-card space-y-2" :aria-label="`Actor ${actor.id}`">
               <h4 class="text-sm font-semibold" style="color: var(--text-primary)">
-                {{ pendingValue(actorKey(actor.id, 'name', actor.class_id), actor.name) }}
+                {{ pendingValue(actorKey(actor, 'name'), actor.name) }}
                 <span class="text-xs font-normal" style="color: var(--text-muted)">#{{ actor.id }}{{ actor.class_name ? ` · ${actor.class_name}` : "" }}</span>
               </h4>
               <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 <label class="editor-field">Name
-                  <input class="editor-input" :value="pendingValue(actorKey(actor.id, 'name', actor.class_id), actor.name)" @change="editActor(actor.id, 'name', actor.name, actor.class_id, $event)" />
+                  <input
+                    class="editor-input"
+                    :disabled="isRgss && actor.name_ref === null"
+                    :value="pendingValue(actorKey(actor, 'name'), actor.name)"
+                    @change="editActor(actor, 'name', actor.name, $event)"
+                  />
                 </label>
                 <label class="editor-field">Level
-                  <input class="editor-input" inputmode="numeric" :value="pendingValue(actorKey(actor.id, 'level', actor.class_id), actor.level ?? 1)" @change="editActor(actor.id, 'level', actor.level, actor.class_id, $event)" />
+                  <input class="editor-input" inputmode="numeric" :value="pendingValue(actorKey(actor, 'level'), actor.level ?? 1)" @change="editActor(actor, 'level', actor.level, $event)" />
                 </label>
                 <label class="editor-field">Experience
                   <input
                     class="editor-input"
                     inputmode="numeric"
                     :disabled="actor.exp === null"
-                    :value="pendingValue(actorKey(actor.id, 'exp', actor.class_id), actor.exp ?? 0)"
-                    @change="editActor(actor.id, 'exp', actor.exp, actor.class_id, $event)"
+                    :value="pendingValue(actorKey(actor, 'exp'), actor.exp ?? 0)"
+                    @change="editActor(actor, 'exp', actor.exp, $event)"
                   />
                 </label>
                 <label class="editor-field">HP
-                  <input class="editor-input" inputmode="numeric" :value="pendingValue(actorKey(actor.id, 'hp', actor.class_id), actor.hp ?? 0)" @change="editActor(actor.id, 'hp', actor.hp, actor.class_id, $event)" />
+                  <input class="editor-input" inputmode="numeric" :value="pendingValue(actorKey(actor, 'hp'), actor.hp ?? 0)" @change="editActor(actor, 'hp', actor.hp, $event)" />
                 </label>
-                <label class="editor-field">MP
-                  <input class="editor-input" inputmode="numeric" :value="pendingValue(actorKey(actor.id, 'mp', actor.class_id), actor.mp ?? 0)" @change="editActor(actor.id, 'mp', actor.mp, actor.class_id, $event)" />
+                <label class="editor-field">{{ names.mp_label || "MP" }}
+                  <input class="editor-input" inputmode="numeric" :value="pendingValue(actorKey(actor, 'mp'), actor.mp ?? 0)" @change="editActor(actor, 'mp', actor.mp, $event)" />
                 </label>
               </div>
-              <p v-if="levelEdited(actor.id)" class="text-xs" style="color: var(--text-muted)" role="status">
-                {{ actor.has_curve ? "Experience will be recalculated for the new level. Edit it afterwards to override." : "Class data was not found, so experience stays unchanged." }}
+              <p v-if="levelEdited(actor)" class="text-xs" style="color: var(--text-muted)" role="status">
+                {{ levelHint(actor) }}
               </p>
               <p class="text-xs font-medium" style="color: var(--text-secondary)">Parameter bonuses</p>
               <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -427,8 +492,8 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
                   <input
                     class="editor-input"
                     inputmode="numeric"
-                    :value="pendingValue(pathKey(actorPath(actor.id, '_paramPlus', index)), actor.param_plus[index] ?? 0)"
-                    @change="editBonus(actor.id, index, actor.param_plus[index] ?? 0, $event)"
+                    :value="pendingValue(bonusKey(actor, index), actor.param_plus[index] ?? 0)"
+                    @change="editBonus(actor, index, actor.param_plus[index] ?? 0, $event)"
                   />
                 </label>
               </div>
@@ -446,9 +511,9 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
                 <label class="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
                   <input
                     type="checkbox"
-                    :checked="pendingValue(pathKey(switchPath(row.id)), row.value as boolean)"
+                    :checked="pendingValue(switchKey(row), row.value as boolean)"
                     :aria-label="`Switch ${row.id} ${row.name}`"
-                    @change="toggleSwitch(row.id, row.value as boolean, $event)"
+                    @change="toggleSwitch(row, $event)"
                   />
                   <span class="text-sm truncate" style="color: var(--text-primary)">{{ row.name || "(unnamed)" }}</span>
                   <span class="text-xs" style="color: var(--text-muted)">#{{ row.id }}</span>
@@ -472,9 +537,9 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
                 <input
                   v-if="row.type === 'number' || row.type === 'string'"
                   class="editor-input w-40"
-                  :value="pendingValue(pathKey(variablePath(row.id)), row.value as number | string)"
+                  :value="pendingValue(variableKey(row), row.value as number | string)"
                   :aria-label="`Variable ${row.id} ${row.name}`"
-                  @change="editVariable(row.id, row.value as number | string | null, row.type, $event)"
+                  @change="editVariable(row, $event)"
                 />
                 <span v-else class="text-xs" style="color: var(--text-muted)" title="Holds a value the editor cannot change">read-only</span>
                 <span v-if="errors[`variable:${row.id}`]" role="alert" class="editor-error">{{ errors[`variable:${row.id}`] }}</span>
@@ -487,8 +552,14 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
           </template>
 
           <template v-else>
-            <p class="text-xs" style="color: var(--text-muted)">Change any existing text, number or true/false value. Keys starting with @ are used by RPG Maker and are read-only.</p>
-            <RpgmRawNode :node="save.raw" :path="[]" :patches="patches" @edit="editRaw" />
+            <template v-if="isRgss">
+              <p class="text-xs" style="color: var(--text-muted)">Change any existing UTF-8 text, number or true/false value. Links, symbols, hash keys and opaque engine data are read-only.</p>
+              <RgssRawNode :entries="rgssDumpEntries" :patches="patches" @edit="editRgssRaw" />
+            </template>
+            <template v-else>
+              <p class="text-xs" style="color: var(--text-muted)">Change any existing text, number or true/false value. Keys starting with @ are used by RPG Maker and are read-only.</p>
+              <RpgmRawNode :node="save.raw" :path="[]" :patches="patches" @edit="editRaw" />
+            </template>
           </template>
         </div>
 

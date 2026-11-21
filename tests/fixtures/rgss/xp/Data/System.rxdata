@@ -1,0 +1,4 @@
+o:RPG::System:@switches[	0"Intro Done"Bridge Open"\C[1]Boss Defeated\C[0]:@variables[
+0"
+Kills"Hero Title"Combo Rate"Unset Var:@wordso:RPG::System::Words:
+@gold"	Gold:@hp"HP:@sp"SP:	@str"STR:	@dex"DEX:	@agi"AGI:	@int"INT

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from collections.abc import Sequence
 from contextlib import closing
 from typing import cast
 
@@ -20,6 +21,7 @@ from core.api_mixins.base import ApiBase
 # the backup folder's identity, so a later backup that reuses the name (with
 # no note of its own) is not redirected.
 _GAME_SAVE_SOURCE = "rpgm_game_save"
+_RGSS_SAVE_SOURCE_PREFIX = "rgss_game_save:"
 _NOTE_SUFFIX = ".source.json"
 
 
@@ -374,6 +376,8 @@ class SavesMixin(ApiBase):
         source: str,
         verb: str = "Imported",
         game_save_folder: str = "",
+        source_note: str = "",
+        backup_files: Sequence[str] | None = None,
     ) -> dict[str, object]:
         """Shared import/restore body.
 
@@ -391,6 +395,7 @@ class SavesMixin(ApiBase):
         if not target:
             return {"success": False, "error": "Choose a saves folder first"}
         elsewhere = bool(game_save_folder) and not _same_folder(target, effective)
+        note_to_write = source_note or (_GAME_SAVE_SOURCE if elsewhere else "")
         try:
             with self._save_operation(coerced_id, writes=True):
                 info = import_saves(
@@ -399,14 +404,15 @@ class SavesMixin(ApiBase):
                     self._save_backups_root(),
                     coerced_id,
                     get_save_backup_keep(),
+                    backup_files=backup_files,
                 )
-                if elsewhere and info.backup is not None:
+                if note_to_write and info.backup is not None:
                     # The safety backup holds the game's save folder too.
                     try:
                         _write_source_note(
                             game_backup_dir(self._save_backups_root(), coerced_id),
                             info.backup.name,
-                            _GAME_SAVE_SOURCE,
+                            note_to_write,
                         )
                     except OSError as exc:
                         name = info.backup.name
@@ -441,7 +447,14 @@ class SavesMixin(ApiBase):
         self, game_id: object = None, backup_name: object = ""
     ) -> dict[str, object]:
         """Import one of the game's backups, like Import with that source."""
-        from core.game_saves import GameSavesError, game_backup_dir, resolve_backup
+        from core.game_saves import (
+            GameSavesError,
+            game_backup_dir,
+            loose_save_files,
+            resolve_backup,
+        )
+        from core.game_tools import ENGINE_RGSS, ENGINE_RPGM
+        from core.rgss_saves import ALLOWED_RELATIVES
 
         coerced_id = self._coerce_db_id(game_id)
         if coerced_id is None:
@@ -451,31 +464,69 @@ class SavesMixin(ApiBase):
             source = resolve_backup(self._save_backups_root(), coerced_id, name)
         except GameSavesError as exc:
             return {"success": False, "error": str(exc)}
+        missing_folder_error: dict[str, object] = {
+            "success": False,
+            "error": (
+                "This backup came from the game's own save folder, which "
+                "wLib cannot find now. Open the backup and copy the files "
+                "by hand."
+            ),
+        }
         game_save_folder = ""
+        source_note = ""
+        backup_files: list[str] | None = None
         backup_dir = game_backup_dir(self._save_backups_root(), coerced_id)
-        if _read_source_note(backup_dir, name) == _GAME_SAVE_SOURCE:
+        recorded = _read_source_note(backup_dir, name)
+        if recorded == _GAME_SAVE_SOURCE:
             context = self._rpgm_save_context(coerced_id)
             if isinstance(context, dict):
                 if context.get("error_code") == "game_not_found":
                     return context
-                return {
-                    "success": False,
-                    "error": (
-                        "This backup came from the game's own save folder, which "
-                        "wLib cannot find now. Open the backup and copy the files "
-                        "by hand."
-                    ),
-                }
-            game_save_folder = os.path.join(context[1], "save")
+                return missing_folder_error
+            if context[1] != ENGINE_RPGM:
+                return missing_folder_error
+            game_save_folder = os.path.join(context[2], "save")
+            source_note = _GAME_SAVE_SOURCE
+        elif recorded.startswith(_RGSS_SAVE_SOURCE_PREFIX):
+            relative = recorded[len(_RGSS_SAVE_SOURCE_PREFIX) :]
+            if relative in ALLOWED_RELATIVES:
+                context = self._rpgm_save_context(coerced_id)
+                if isinstance(context, dict):
+                    if context.get("error_code") == "game_not_found":
+                        return context
+                    return missing_folder_error
+                if context[1] != ENGINE_RGSS:
+                    return missing_folder_error
+                target = (
+                    os.path.join(context[2], relative) if relative else context[2]
+                )
+                if not os.path.isdir(target):
+                    return missing_folder_error
+                game_save_folder = target
+                source_note = recorded
+                if relative == "":
+                    backup_files = [
+                        os.path.basename(p) for p in loose_save_files(target)
+                    ]
         return self._merge_into_game_saves(
-            coerced_id, source, "Restored", game_save_folder
+            coerced_id,
+            source,
+            "Restored",
+            game_save_folder,
+            source_note=source_note,
+            backup_files=backup_files,
         )
 
     def _rpgm_save_context(
         self, game_id: object
-    ) -> tuple[int, str, str, dict[str, object]] | dict[str, object]:
-        """(id, data root, effective folder, row) or a failure payload."""
-        from core.game_tools import ENGINE_RPGM, detect_engine, rpgm_data_root
+    ) -> tuple[int, str, str, str, dict[str, object]] | dict[str, object]:
+        """(id, engine, root_or_exe_folder, effective folder, row) or a failure payload."""
+        from core.game_tools import (
+            ENGINE_RGSS,
+            ENGINE_RPGM,
+            detect_engine,
+            rpgm_data_root,
+        )
 
         state = self._saves_game_state(game_id)
         if state is None:
@@ -485,18 +536,18 @@ class SavesMixin(ApiBase):
         if game is None:
             return self._game_saves_not_found()
         _id, folder, exe_path = game
-        root = (
-            rpgm_data_root(folder)
-            if detect_engine(folder, exe_path) == ENGINE_RPGM
-            else None
-        )
-        if root is None:
-            return {
-                "success": False,
-                "error": "The save editor only works with RPG Maker MV/MZ games",
-                "error_code": "unsupported_engine",
-            }
-        return coerced_id, root, effective, row
+        engine = detect_engine(folder, exe_path)
+        if engine == ENGINE_RPGM:
+            root = rpgm_data_root(folder)
+            if root is not None:
+                return coerced_id, ENGINE_RPGM, root, effective, row
+        if engine == ENGINE_RGSS:
+            return coerced_id, ENGINE_RGSS, folder, effective, row
+        return {
+            "success": False,
+            "error": "The save editor only works with RPG Maker games",
+            "error_code": "unsupported_engine",
+        }
 
     @staticmethod
     def _rpgm_save_failure(exc: Exception) -> dict[str, object]:
@@ -506,20 +557,30 @@ class SavesMixin(ApiBase):
         return {"success": False, "error": str(exc), "error_code": code}
 
     def list_rpgm_saves(self, game_id: object = None) -> dict[str, object]:
-        from core.rpgm_saves import list_slots
+        from core.game_tools import ENGINE_RGSS
+        from core.rgss_saves import list_slots as list_rgss_slots
+        from core.rpgm_saves import list_slots as list_rpgm_slots
 
         context = self._rpgm_save_context(game_id)
         if isinstance(context, dict):
             return context
-        _id, root, effective, _row = context
+        _id, engine, root, effective, _row = context
         try:
-            slots = list_slots(root, effective)
+            slots = (
+                list_rgss_slots(root, effective)
+                if engine == ENGINE_RGSS
+                else list_rpgm_slots(root, effective)
+            )
         except OSError as exc:
             return {"success": False, "error": str(exc)}
         return {
             "success": True,
             "slots": [
-                {key: value for key, value in slot.items() if key != "folder"}
+                {
+                    key: value
+                    for key, value in slot.items()
+                    if key not in ("folder", "relative")
+                }
                 for slot in slots
             ],
         }
@@ -527,15 +588,27 @@ class SavesMixin(ApiBase):
     def load_rpgm_save(
         self, game_id: object = None, file: object = None
     ) -> dict[str, object]:
+        from core.game_tools import ENGINE_RGSS
+        from core.rgss_saves import (
+            format_for_name as rgss_format_for_name,
+            load_rgss_names,
+            load_save as load_rgss_save,
+            resolve_slot as resolve_rgss_slot,
+        )
         from core.rpgm_saves import RpgmSaveError, load_names, load_save, resolve_slot
 
         context = self._rpgm_save_context(game_id)
         if isinstance(context, dict):
             return context
-        _id, root, effective, _row = context
+        _id, engine, root, effective, _row = context
         try:
-            path, _folder = resolve_slot(root, effective, file)
-            payload = load_save(path, load_names(root))
+            if engine == ENGINE_RGSS:
+                path, _folder, _relative = resolve_rgss_slot(root, effective, file)
+                fmt = rgss_format_for_name(os.path.basename(path))
+                payload = load_rgss_save(path, load_rgss_names(root, fmt))
+            else:
+                path, _folder = resolve_slot(root, effective, file)
+                payload = load_save(path, load_names(root))
         except RpgmSaveError as exc:
             return self._rpgm_save_failure(exc)
         except (OSError, RecursionError, MemoryError) as exc:
@@ -551,7 +624,12 @@ class SavesMixin(ApiBase):
         mtime_ns: object = None,
     ) -> dict[str, object]:
         from core.database import get_save_backup_keep
-        from core.game_saves import GameSavesError, backup_saves
+        from core.game_saves import GameSavesError, backup_saves, loose_save_files
+        from core.game_tools import ENGINE_RGSS
+        from core.rgss_saves import (
+            resolve_slot as resolve_rgss_slot,
+            write_save as write_rgss_save,
+        )
         from core.rpgm_saves import (
             BackupFailed,
             InvalidPatch,
@@ -564,7 +642,7 @@ class SavesMixin(ApiBase):
         context = self._rpgm_save_context(game_id)
         if isinstance(context, dict):
             return context
-        coerced_id, root, effective, _row = context
+        coerced_id, engine, root, effective, _row = context
         stamp = (
             int(mtime_ns)
             if isinstance(mtime_ns, str) and mtime_ns.isdigit()
@@ -581,37 +659,81 @@ class SavesMixin(ApiBase):
                 InvalidPatch("The edit request is not valid")
             )
         try:
-            path, folder = resolve_slot(root, effective, file)
-            with self._save_operation(coerced_id, writes=True):
+            if engine == ENGINE_RGSS:
+                path, folder, relative = resolve_rgss_slot(root, effective, file)
+                with self._save_operation(coerced_id, writes=True):
 
-                def backup() -> str:
-                    try:
-                        info = backup_saves(
-                            folder,
-                            self._save_backups_root(),
-                            coerced_id,
-                            get_save_backup_keep(),
+                    def rgss_backup() -> str:
+                        files_only = (
+                            [os.path.basename(p) for p in loose_save_files(folder)]
+                            if relative == ""
+                            else None
                         )
-                    except GameSavesError as exc:
-                        raise BackupFailed(str(exc)) from exc
-                    if not _same_folder(folder, effective):
-                        # A restore must go back to this folder, not the
-                        # effective one. Without the note it would not.
-                        backup_dir = os.path.dirname(info.path)
                         try:
-                            _write_source_note(
-                                backup_dir, info.name, _GAME_SAVE_SOURCE
+                            info = backup_saves(
+                                folder,
+                                self._save_backups_root(),
+                                coerced_id,
+                                get_save_backup_keep(),
+                                files=files_only,
                             )
-                        except OSError as exc:
-                            shutil.rmtree(info.path, ignore_errors=True)
-                            raise BackupFailed(
-                                f"Backup failed: could not record its folder: {exc}"
-                            ) from exc
-                    return info.name
+                        except GameSavesError as exc:
+                            raise BackupFailed(str(exc)) from exc
+                        if relative is not None:
+                            backup_dir = os.path.dirname(info.path)
+                            try:
+                                _write_source_note(
+                                    backup_dir,
+                                    info.name,
+                                    f"{_RGSS_SAVE_SOURCE_PREFIX}{relative}",
+                                )
+                            except OSError as exc:
+                                shutil.rmtree(info.path, ignore_errors=True)
+                                raise BackupFailed(
+                                    f"Backup failed: could not record its folder: {exc}"
+                                ) from exc
+                        return info.name
 
-                backup_name = write_save(
-                    path, cast("list[object]", patches), size, stamp, load_names(root), backup
-                )
+                    backup_name = write_rgss_save(
+                        path, cast("list[object]", patches), size, stamp, rgss_backup
+                    )
+            else:
+                path, folder = resolve_slot(root, effective, file)
+                with self._save_operation(coerced_id, writes=True):
+
+                    def backup() -> str:
+                        try:
+                            info = backup_saves(
+                                folder,
+                                self._save_backups_root(),
+                                coerced_id,
+                                get_save_backup_keep(),
+                            )
+                        except GameSavesError as exc:
+                            raise BackupFailed(str(exc)) from exc
+                        if not _same_folder(folder, effective):
+                            # A restore must go back to this folder, not the
+                            # effective one. Without the note it would not.
+                            backup_dir = os.path.dirname(info.path)
+                            try:
+                                _write_source_note(
+                                    backup_dir, info.name, _GAME_SAVE_SOURCE
+                                )
+                            except OSError as exc:
+                                shutil.rmtree(info.path, ignore_errors=True)
+                                raise BackupFailed(
+                                    f"Backup failed: could not record its folder: {exc}"
+                                ) from exc
+                        return info.name
+
+                    backup_name = write_save(
+                        path,
+                        cast("list[object]", patches),
+                        size,
+                        stamp,
+                        load_names(root),
+                        backup,
+                    )
         except GameSavesError as exc:
             running = "Close the game" in str(exc)
             return {

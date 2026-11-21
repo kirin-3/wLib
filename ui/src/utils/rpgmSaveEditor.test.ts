@@ -8,11 +8,16 @@ import {
   clearPatch,
   filterPicker,
   filterRows,
+  formatLabel,
   isDirty,
   isEditableRaw,
+  isRgssFormat,
+  leafKey,
   parseRawInput,
+  parseRgssRawInput,
   pathKey,
   rawChildren,
+  refKey,
   setPatch,
   validateBonus,
   validateCount,
@@ -111,4 +116,47 @@ test("raw input keeps the type of the original value", () => {
   assert.deepEqual(parseRawInput(false, "TRUE"), { ok: true, value: true });
   assert.equal(parseRawInput(false, "yes").ok, false);
   assert.deepEqual(parseRawInput("a", "b c"), { ok: true, value: "b c" });
+});
+
+test("rgss ref keys collapse curated and raw edits of the same leaf", () => {
+  assert.equal(refKey(42), "ref:42");
+  assert.equal(leafKey(42, ["party", "_gold"]), "ref:42");
+  assert.equal(leafKey(null, ["party", "_gold"]), pathKey(["party", "_gold"]));
+  assert.equal(leafKey(undefined, ["party", "_gold"]), pathKey(["party", "_gold"]));
+
+  let map: PatchMap = new Map();
+  const key = leafKey(10, ["party", "_gold"]);
+  map = setPatch(map, key, { op: "set_node", node: 10, value: 500 });
+  map = setPatch(map, refKey(10), { op: "set_node", node: 10, value: 900 });
+  assert.equal(map.size, 1);
+  assert.deepEqual(buildPatchList(map), [{ op: "set_node", node: 10, value: 900 }]);
+});
+
+test("rgss raw input keeps strict Marshal scalar types", () => {
+  assert.deepEqual(parseRgssRawInput("int", "42"), { ok: true, value: 42 });
+  assert.deepEqual(parseRgssRawInput("int", "-7"), { ok: true, value: -7 });
+  assert.equal(parseRgssRawInput("int", "abc").ok, false);
+  assert.equal(parseRgssRawInput("int", "1.5").ok, false);
+  assert.equal(parseRgssRawInput("int", "99999999999999999999").ok, false);
+
+  assert.deepEqual(parseRgssRawInput("float", "1.5"), { ok: true, value: 1.5 });
+  assert.deepEqual(parseRgssRawInput("float", "2"), { ok: true, value: 2 });
+  assert.equal(parseRgssRawInput("float", "abc").ok, false);
+  assert.equal(parseRgssRawInput("float", "").ok, false);
+  assert.equal(parseRgssRawInput("float", "Infinity").ok, false);
+
+  assert.deepEqual(parseRgssRawInput("bool", "true"), { ok: true, value: true });
+  assert.deepEqual(parseRgssRawInput("bool", "FALSE"), { ok: true, value: false });
+  assert.equal(parseRgssRawInput("bool", "1").ok, false);
+
+  assert.deepEqual(parseRgssRawInput("str", "Clärís"), { ok: true, value: "Clärís" });
+  assert.deepEqual(parseRgssRawInput("str", ""), { ok: true, value: "" });
+
+  assert.equal(isRgssFormat("xp"), true);
+  assert.equal(isRgssFormat("vx"), true);
+  assert.equal(isRgssFormat("vxace"), true);
+  assert.equal(isRgssFormat("mv"), false);
+  assert.equal(formatLabel("xp"), "XP");
+  assert.equal(formatLabel("vx"), "VX");
+  assert.equal(formatLabel("vxace"), "VX Ace");
 });

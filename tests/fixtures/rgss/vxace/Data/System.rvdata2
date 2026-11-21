@@ -1,0 +1,2 @@
+o:RPG::System	:@switches[	0I"Tutorial Seen:ETI"Tower Opened;TI"Secret Ending;T:@variables[
+0I"Gold Found;TI"Companion Name;TI"Affection;TI"Raw Object;T:@termso:RPG::System::Terms:@params[I"Max HP;TI"Max MP;TI"ATK;TI"DEF;TI"MAT;TI"MDF;TI"AGI;TI"LUK;T:@currency_unitI"GP;T

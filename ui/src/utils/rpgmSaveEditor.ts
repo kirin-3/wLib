@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { RpgmDatabaseEntry, RpgmPatch, RpgmValueRow } from "../services/api";
+import type { RpgmDatabaseEntry, RpgmPatch, RpgmSaveFormat, RpgmValueRow } from "../services/api";
 
 export const MAX_GOLD = 9_999_999;
 export const MAX_COUNT = 9_999;
@@ -15,6 +15,29 @@ export type Validated<T> = { ok: true; value: T } | { ok: false; error: string }
 
 // Curated and Raw edits of the same leaf share this key, so the last edit wins.
 export const pathKey = (path: RpgmPath): string => JSON.stringify(path);
+export const refKey = (id: number): string => `ref:${id}`;
+export const leafKey = (ref: number | null | undefined, fallback: RpgmPath): string =>
+  ref !== null && ref !== undefined ? refKey(ref) : pathKey(fallback);
+
+export const isRgssFormat = (format: RpgmSaveFormat | undefined): boolean =>
+  format === "xp" || format === "vx" || format === "vxace";
+
+export const formatLabel = (format: RpgmSaveFormat | undefined): string => {
+  switch (format) {
+    case "xp":
+      return "XP";
+    case "vx":
+      return "VX";
+    case "vxace":
+      return "VX Ace";
+    case "mv":
+      return "MV";
+    case "mz":
+      return "MZ";
+    default:
+      return "";
+  }
+};
 
 export const setPatch = (map: PatchMap, key: string, patch: RpgmPatch): PatchMap => {
   const next = new Map(map);
@@ -78,7 +101,7 @@ export const filterPicker = (entries: RpgmDatabaseEntry[], query: string, limit 
   const named = entries.filter((entry) => entry.name.trim() !== "");
   if (!needle) return named.slice(0, limit);
   const hits = named.filter((entry) => entry.name.toLowerCase().includes(needle) || String(entry.id) === needle);
-  hits.sort((a, b) => Number(!b.name.toLowerCase().startsWith(needle)) - Number(!a.name.toLowerCase().startsWith(needle)) || a.id - b.id);
+  hits.sort((a, b) => Number(!a.name.toLowerCase().startsWith(needle)) - Number(!b.name.toLowerCase().startsWith(needle)) || a.id - b.id);
   return hits.slice(0, limit);
 };
 
@@ -149,6 +172,31 @@ export const parseRawInput = (original: RawScalar, text: string): Validated<RawS
   if (raw === "" || !Number.isFinite(Number(raw))) return { ok: false, error: "Enter a number" };
   const value = Number(raw);
   if (Number.isInteger(original) && !Number.isInteger(value)) return { ok: false, error: "This value must be a whole number" };
+  if (Math.abs(value) > Number.MAX_SAFE_INTEGER) return { ok: false, error: "The number is too large" };
+  return { ok: true, value };
+};
+
+// Parse text typed for an RGSS Raw scalar, strictly preserving the Marshal type
+// (unlike JS numbers, Ruby distinguishes Integer `1` from Float `1.0`).
+export type RgssScalarType = "int" | "float" | "bool" | "str";
+
+export const parseRgssRawInput = (type: RgssScalarType, text: string): Validated<RawScalar> => {
+  if (type === "str") return { ok: true, value: text };
+  if (type === "bool") {
+    const lowered = text.trim().toLowerCase();
+    if (lowered === "true") return { ok: true, value: true };
+    if (lowered === "false") return { ok: true, value: false };
+    return { ok: false, error: "Enter true or false" };
+  }
+  const raw = text.trim();
+  if (type === "int") {
+    if (!/^-?\d+$/.test(raw)) return { ok: false, error: "This value must be a whole number" };
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value)) return { ok: false, error: "The number is too large" };
+    return { ok: true, value };
+  }
+  if (raw === "" || !Number.isFinite(Number(raw))) return { ok: false, error: "Enter a number" };
+  const value = Number(raw);
   if (Math.abs(value) > Number.MAX_SAFE_INTEGER) return { ok: false, error: "The number is too large" };
   return { ok: true, value };
 };

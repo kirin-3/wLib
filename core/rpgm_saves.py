@@ -12,25 +12,33 @@ Save formats:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
 import re
-import shutil
 import zlib
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from typing import ClassVar, cast
+from typing import cast
 
-from core.game_tools import create_temp_file
+from core._save_io import (
+    CHANGED_MESSAGE as _CHANGED,
+    TEMP_SUFFIX as TEMP_SUFFIX,
+    BackupFailed as BackupFailed,
+    InvalidPatch as InvalidPatch,
+    RpgmSaveError as RpgmSaveError,
+    SaveChanged as SaveChanged,
+    UnsupportedSaveFormat as UnsupportedSaveFormat,
+    atomic_replace_checked,
+    read_fingerprint as _read_fingerprint,
+    reject_symlink,
+)
 from core.lzstring import LZStringError, compress_to_base64, decompress_from_base64
 
 FORMAT_MV = "mv"
 FORMAT_MZ = "mz"
 _EXTENSIONS = {FORMAT_MV: ".rpgsave", FORMAT_MZ: ".rmmzsave"}
 SLOT_NAME = re.compile(r"^file(\d+)\.(rpgsave|rmmzsave)$")
-TEMP_SUFFIX = ".wlib-tmp"
 
 MAX_GOLD = 9_999_999
 MAX_COUNT = 9_999
@@ -48,32 +56,6 @@ _COUNT_KEYS = {"item": "_items", "weapon": "_weapons", "armor": "_armors"}
 _CATEGORY_FILES = {"item": "Items", "weapon": "Weapons", "armor": "Armors"}
 
 JsonDict = dict[str, object]
-
-
-class RpgmSaveError(Exception):
-    """A save editor action failed; the message is safe to show the user."""
-
-    default_code: ClassVar[str] = "error"
-
-    def __init__(self, message: str, code: str | None = None) -> None:
-        super().__init__(message)
-        self.code: str = code if code is not None else self.default_code
-
-
-class UnsupportedSaveFormat(RpgmSaveError):
-    default_code: ClassVar[str] = "unsupported_format"
-
-
-class InvalidPatch(RpgmSaveError):
-    default_code: ClassVar[str] = "invalid_patch"
-
-
-class SaveChanged(RpgmSaveError):
-    default_code: ClassVar[str] = "changed"
-
-
-class BackupFailed(RpgmSaveError):
-    default_code: ClassVar[str] = "backup_failed"
 
 
 # ---------------------------------------------------------------- codecs
@@ -874,27 +856,6 @@ def load_save(path: str, names: Mapping[str, object]) -> JsonDict:
     }
 
 
-_CHANGED = "The save changed since it was opened. Reopen the slot."
-
-
-def _read_fingerprint(path: str) -> tuple[bytes, tuple[int, int, int, int, str]]:
-    """Read `path` and return its bytes and a fingerprint of those bytes.
-
-    The fingerprint holds the size, mtime_ns, device and inode from the open
-    handle, and a SHA-256 of the bytes read.
-    """
-    try:
-        with open(path, "rb") as handle:
-            stat = os.fstat(handle.fileno())
-            data = handle.read()
-    except FileNotFoundError as exc:
-        raise SaveChanged("The save file is gone. Reopen the slot.") from exc
-    except OSError as exc:
-        raise RpgmSaveError("The save file could not be read", "read_failed") from exc
-    digest = hashlib.sha256(data).hexdigest()
-    return data, (len(data), stat.st_mtime_ns, stat.st_dev, stat.st_ino, digest)
-
-
 def write_save(
     path: str,
     patches: Sequence[object],
@@ -914,13 +875,7 @@ def write_save(
     that write. A check-then-replace is not fully atomic, but the window is
     only the time between the last read and `os.replace`.
     """
-    if os.path.islink(path):
-        # The backup skips links and the replace would turn the link into a
-        # plain file, so the edit would have no backup of the real slot.
-        raise RpgmSaveError(
-            "This save file is a link to another file. Linked saves cannot be edited.",
-            "write_failed",
-        )
+    reject_symlink(path)
     data, fingerprint = _read_fingerprint(path)
     if fingerprint[0] != size or fingerprint[1] != mtime_ns:
         raise SaveChanged(_CHANGED)
@@ -931,29 +886,5 @@ def write_save(
     encoded = encode_save(tree, fmt)
     if decode_save(encoded, fmt) != tree:
         raise RpgmSaveError("The edited save failed its check, nothing was written")
-    temp = ""
-    try:
-        fd, temp = create_temp_file(path, TEMP_SUFFIX)
-        with os.fdopen(fd, "wb") as handle:
-            _ = handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            shutil.copymode(path, temp)
-        except OSError:
-            pass
-        _, current = _read_fingerprint(path)
-        if current != fingerprint:
-            raise SaveChanged(_CHANGED)
-        os.replace(temp, path)
-    except OSError as exc:
-        raise RpgmSaveError(
-            f"The save could not be written: {exc.strerror or exc}", "write_failed"
-        ) from exc
-    finally:
-        if temp and os.path.lexists(temp):
-            try:
-                os.remove(temp)
-            except OSError:
-                pass
+    atomic_replace_checked(path, encoded, fingerprint)
     return backup_name

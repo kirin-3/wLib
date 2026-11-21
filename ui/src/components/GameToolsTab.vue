@@ -28,6 +28,7 @@ import {
   toolProgressPercent,
 } from "../utils/gameTools";
 import { unityActions, unityWarnings, switchWarning } from "../utils/unityTools";
+import { formatLabel } from "../utils/rpgmSaveEditor";
 import { notify, notifyError } from "../utils/toast";
 import RpgmSaveEditor from "./modals/RpgmSaveEditor.vue";
 
@@ -60,6 +61,12 @@ const versionsLoaded = ref(false);
 const versionLoading = ref(false);
 const versionWarnings = ref<string[]>([]);
 const removeUserData = ref(false);
+const saveSlots = ref<RpgmSaveSlot[]>([]);
+const saveSlotsLoaded = ref(false);
+const saveSlotsError = ref("");
+const editorFile = ref("");
+const editorOpen = ref(false);
+let saveSlotsToken = 0;
 
 // True when polling belongs to a run that was already going before the tab loaded.
 const resumedRun = ref(false);
@@ -174,6 +181,11 @@ watch(
       versionLoading.value = false;
       versionWarnings.value = [];
       removeUserData.value = false;
+      saveSlots.value = [];
+      saveSlotsLoaded.value = false;
+      saveSlotsError.value = "";
+      editorOpen.value = false;
+      editorFile.value = "";
       loadedFor = null;
     }
     if (active && loadedFor !== gameId) {
@@ -188,13 +200,6 @@ const isBusy = computed(() => busy.value !== "");
 const renpy = computed(() => tools.value?.renpy ?? null);
 const rpgm = computed(() => tools.value?.rpgm ?? null);
 const rgss = computed(() => tools.value?.rgss ?? null);
-
-const saveSlots = ref<RpgmSaveSlot[]>([]);
-const saveSlotsLoaded = ref(false);
-const saveSlotsError = ref("");
-const editorFile = ref("");
-const editorOpen = ref(false);
-let saveSlotsToken = 0;
 
 const loadSaveSlots = async (): Promise<void> => {
   const token = ++saveSlotsToken;
@@ -215,10 +220,12 @@ const loadSaveSlots = async (): Promise<void> => {
   }
 };
 
+const hasSaveEditor = computed(() => Boolean(tools.value && ((props.engine === "rpgm" && rpgm.value) || (props.engine === "rgss" && rgss.value))));
+
 watch(
-  () => [props.gameId, props.active, !!rpgm.value] as const,
-  ([, active, hasRpgm]) => {
-    if (active && hasRpgm) void loadSaveSlots();
+  () => [props.gameId, props.active, hasSaveEditor.value] as const,
+  ([, active, supported]) => {
+    if (active && supported) void loadSaveSlots();
   },
   { immediate: true },
 );
@@ -637,29 +644,6 @@ const useExtractedChecked = computed({
           {{ switchState.message }}
         </p>
       </section>
-
-      <section class="tools-card space-y-3" aria-labelledby="tools-saveeditor-title">
-        <span id="tools-saveeditor-title" class="text-sm font-medium block" style="color: var(--text-primary)">Save editor</span>
-        <p v-if="saveSlotsError" role="alert" class="text-xs" style="color: var(--danger-text)">{{ saveSlotsError }}</p>
-        <p v-else-if="saveSlotsLoaded && saveSlots.length === 0" class="text-xs" style="color: var(--text-muted)">No save files were found. Save in the game first.</p>
-        <ul v-else class="space-y-1">
-          <li v-for="slot in saveSlots" :key="slot.file" class="flex items-center gap-3">
-            <div class="flex-1 min-w-0">
-              <p class="text-sm" style="color: var(--text-primary)">
-                Slot {{ slot.slot }}<span v-if="slot.title" class="text-xs" style="color: var(--text-muted)"> · {{ slot.title }}</span>
-              </p>
-              <p class="text-xs" style="color: var(--text-muted)">
-                {{ formatSlotTime(slot.modified) }}<span v-if="slot.playtime"> · {{ slot.playtime }}</span>
-              </p>
-            </div>
-            <button type="button" class="tools-btn ui-action-btn" :disabled="isBusy" @click="openEditor(slot.file)">Open</button>
-          </li>
-        </ul>
-        <p class="text-[0.625rem]" style="color: var(--text-muted)">
-          Edit gold, items, actors, switches and variables. Saving needs the game closed, and the saves folder is backed up first.
-        </p>
-      </section>
-      <RpgmSaveEditor v-model="editorOpen" :game-id="gameId" :file="editorFile" @saved="loadSaveSlots" />
     </template>
 
     <template v-else-if="tools && engine === 'rgss' && rgss">
@@ -781,6 +765,31 @@ const useExtractedChecked = computed({
     </template>
 
     <p v-else-if="tools" class="text-xs" style="color: var(--text-muted)">No tools are available for this game.</p>
+
+    <template v-if="hasSaveEditor">
+      <section class="tools-card space-y-3" aria-labelledby="tools-saveeditor-title">
+        <span id="tools-saveeditor-title" class="text-sm font-medium block" style="color: var(--text-primary)">Save editor</span>
+        <p v-if="saveSlotsError" role="alert" class="text-xs" style="color: var(--danger-text)">{{ saveSlotsError }}</p>
+        <p v-else-if="saveSlotsLoaded && saveSlots.length === 0" class="text-xs" style="color: var(--text-muted)">No save files were found. Save in the game first.</p>
+        <ul v-else class="space-y-1">
+          <li v-for="slot in saveSlots" :key="slot.file" class="flex items-center gap-3">
+            <div class="flex-1 min-w-0">
+              <p class="text-sm" style="color: var(--text-primary)">
+                Slot {{ slot.slot }}<span v-if="slot.format" class="text-xs" style="color: var(--text-muted)"> · {{ formatLabel(slot.format) }}</span><span v-if="slot.title" class="text-xs" style="color: var(--text-muted)"> · {{ slot.title }}</span>
+              </p>
+              <p class="text-xs" style="color: var(--text-muted)">
+                {{ formatSlotTime(slot.modified) }}<span v-if="slot.playtime"> · {{ slot.playtime }}</span>
+              </p>
+            </div>
+            <button type="button" class="tools-btn ui-action-btn" :disabled="isBusy" @click="openEditor(slot.file)">Open</button>
+          </li>
+        </ul>
+        <p class="text-[0.625rem]" style="color: var(--text-muted)">
+          Edit gold, items, actors, switches and variables. Saving needs the game closed, and the saves are backed up first.
+        </p>
+      </section>
+      <RpgmSaveEditor v-model="editorOpen" :game-id="gameId" :file="editorFile" @saved="loadSaveSlots" />
+    </template>
 
     <p v-if="lastResult && !longRun" role="status" class="text-xs" style="color: var(--text-secondary)">{{ lastResult }}</p>
   </div>

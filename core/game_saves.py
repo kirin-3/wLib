@@ -923,6 +923,7 @@ def import_saves(
     keep: int | None,
     *,
     now: datetime | None = None,
+    backup_files: Sequence[str] | None = None,
 ) -> ImportInfo:
     """Merge `source` into `saves_dir`: same-named files are overwritten.
 
@@ -984,7 +985,13 @@ def import_saves(
             protect.add(rel_source.split(os.sep)[0])
         try:
             backup = backup_saves(
-                saves_dir, backups_root, game_id, keep, protect=protect, now=now
+                saves_dir,
+                backups_root,
+                game_id,
+                keep,
+                protect=protect,
+                now=now,
+                files=backup_files,
             )
         except NothingToBackUpError:
             backup = None

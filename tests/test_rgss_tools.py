@@ -26,6 +26,7 @@ from core.rgss_tools import (
     extract_archives,
     inspect_state,
     parse_rgss_header,
+    read_entry,
     read_rgss_index,
     set_use_extracted,
     write_entry,
@@ -749,3 +750,32 @@ def test_differs_is_size_only(tmp_path: Path) -> None:
     state = inspect_state(str(game))
     assert state["missing"] == 0
     assert state["differs"] == 1
+
+
+def test_read_entry_hit_miss_cap_and_backup(tmp_path: Path) -> None:
+    game = make_rgss_game(tmp_path)
+    payload = b"\x04\x08" + b"X" * 100
+    build_rgss_v3(
+        game / "Game.rgss3a",
+        [
+            ("Data\\Items.rvdata2", payload),
+            ("Data/Big.rvdata2", b"B" * 200),
+        ],
+    )
+
+    # Case-insensitive and slash-normalized hit
+    assert read_entry(str(game), "data/items.rvdata2", 1024) == payload
+    assert read_entry(str(game), "DATA\\ITEMS.RVDATA2", 1024) == payload
+    # Miss
+    assert read_entry(str(game), "Data/Missing.rvdata2", 1024) is None
+    # Size cap enforced
+    assert read_entry(str(game), "Data/Big.rvdata2", 100) is None
+    assert read_entry(str(game), "Data/Big.rvdata2", 200) == b"B" * 200
+
+    # Backup-named archive (.wlib-backup) is still readable
+    backup_game = make_rgss_game(tmp_path, "BackupGame")
+    build_rgss_v1(
+        backup_game / "Game.rgssad.wlib-backup",
+        [("Data/System.rxdata", b"xp-system-bytes")],
+    )
+    assert read_entry(str(backup_game), "data/system.rxdata", 1024) == b"xp-system-bytes"
