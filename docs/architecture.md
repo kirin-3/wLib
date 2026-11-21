@@ -80,7 +80,7 @@ flowchart TD
 | App shell and bridge | `main.py`, `core/api.py`, `core/api_mixins/`, `core/database.py`, `core/host_platform.py` |
 | Library migration and sync | `core/library_backup.py`, `core/library_sync.py`, `core/external_import.py`, `core/litedb.py`, `core/backup_format.py` |
 | Game files and library tools | `core/archive_install.py`, `core/game_scan.py`, `core/game_saves.py`, `core/game_attachments.py`, `core/game_covers.py` |
-| Mod tools | `core/game_tools.py`, `core/renpy_tools.py`, `core/rpgm_tools.py`, `core/unity_tools.py` |
+| Mod tools | `core/game_tools.py`, `core/renpy_tools.py`, `core/rpgm_tools.py`, `core/rgss_tools.py`, `core/unity_tools.py` |
 | Launching and updates | `core/launcher.py`, `core/game_sandbox.py`, `core/umu.py`, `core/umu_launch_wrapper.py`, `core/desktop_notify.py` |
 | Built-in web player | `core/web_launch.py`, `core/web_player.py`, `core/web_video.py`, `core/api_mixins/web_media.py` |
 | Scraping, catalog, and extension bridge | `core/scraper.py`, `core/f95zone.py`, `core/catalog.py`, `core/catalog_format.py`, `core/game_lookup.py`, `core/store_links.py`, `core/extension_server.py`, `core/extension_bridge.py`, `core/extension_ws.py` |

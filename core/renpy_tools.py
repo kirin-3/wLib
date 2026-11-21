@@ -14,7 +14,6 @@ import codecs
 import io
 import os
 import pickle
-import re
 import shutil
 import zlib
 from collections.abc import Mapping, Sequence
@@ -26,8 +25,11 @@ from core.game_tools import (
     CancelFn,
     GameToolError,
     ProgressFn,
+    check_free_space,
     create_temp_file,
-    format_bytes,
+    export_root,
+    resolve_destination,
+    validate_output_folder,
 )
 
 URM_ARCHIVE_NAME = "0x52_urm.rpa"
@@ -38,7 +40,6 @@ SCRIPT_EXTENSIONS = (".rpy", ".rpyc", ".rpym", ".rpymc")
 MAX_INDEX_BYTES = 64 * 1024 * 1024
 HEADER_PEEK = 128
 SUPPORTED_MAGICS = ("RPA-2.0", "RPA-3.0", "RPA-3.2")
-_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
 
 
 # ── Console ──
@@ -355,78 +356,6 @@ def list_archives(game_folder: str) -> list[dict[str, object]]:
 # ── Extraction ──
 
 
-def is_inside(parent: str, child: str) -> bool:
-    try:
-        return os.path.commonpath([parent, child]) == parent
-    except ValueError:
-        return False
-
-
-def validate_output_folder(game_folder: str, output: str) -> str:
-    """The real path of an existing absolute folder outside the game folder."""
-    if not output or not os.path.isabs(output):
-        raise GameToolError("Choose an output folder")
-    if not os.path.isdir(output):
-        raise GameToolError("The output folder does not exist")
-    real_output = os.path.realpath(output)
-    if is_inside(os.path.realpath(game_folder), real_output):
-        raise GameToolError(
-            "Choose a folder outside the game folder, or extract into the game folder"
-        )
-    return real_output
-
-
-def safe_relative_parts(name: str) -> list[str] | None:
-    """Path parts of an archive entry name, or None when it is unsafe."""
-    normalized = name.replace("\\", "/")
-    if not normalized or "\0" in normalized:
-        return None
-    if normalized.startswith("/") or _DRIVE_PREFIX.match(normalized):
-        return None
-    parts = [part for part in normalized.split("/") if part not in ("", ".")]
-    if not parts or ".." in parts:
-        return None
-    return parts
-
-
-def _destination(root: str, root_real: str, name: str) -> str | None:
-    parts = safe_relative_parts(name)
-    if parts is None:
-        return None
-    destination = os.path.join(root, *parts)
-    # Resolves a symlink planted in the target as well as `..` tricks.
-    if not is_inside(root_real, os.path.realpath(os.path.dirname(destination))):
-        return None
-    return destination
-
-
-def _export_root(
-    output_real: str, game_real: str, stem: str, used_targets: set[str]
-) -> str:
-    """The folder under `output_real` that one archive is exported into.
-
-    A name already taken in this run, a symlink, or a folder that resolves
-    outside the output folder or overlaps the game folder is passed over for
-    the next `<stem>_<n>` name, so the export never writes into the game.
-    """
-    target = stem
-    counter = 2
-    while True:
-        if target not in used_targets:
-            root = os.path.join(output_real, target)
-            root_real = os.path.realpath(root)
-            if (
-                not os.path.islink(root)
-                and is_inside(output_real, root_real)
-                and not is_inside(game_real, root_real)
-                and not is_inside(root_real, game_real)
-            ):
-                used_targets.add(target)
-                return root
-        target = f"{stem}_{counter}"
-        counter += 1
-
-
 class _Cancelled(Exception):
     pass
 
@@ -462,38 +391,6 @@ class _Task:
     entry: RpaEntry
     destination: str
     display: str
-
-
-def _nearest_existing(path: str) -> str:
-    current = os.path.abspath(path)
-    while not os.path.exists(current):
-        parent = os.path.dirname(current)
-        if parent == current:
-            break
-        current = parent
-    return current
-
-
-def _check_free_space(tasks: list[_Task]) -> None:
-    needed: dict[int, tuple[int, str]] = {}
-    for task in tasks:
-        anchor = _nearest_existing(os.path.dirname(task.destination))
-        try:
-            device = os.stat(anchor).st_dev
-        except OSError:
-            continue
-        total, _path = needed.get(device, (0, anchor))
-        needed[device] = (total + task.entry.size, anchor)
-    for total, anchor in needed.values():
-        try:
-            free = shutil.disk_usage(anchor).free
-        except OSError:
-            continue
-        if free < total:
-            raise GameToolError(
-                f"Not enough free space: need {format_bytes(total)}, "
-                + f"have {format_bytes(free)}."
-            )
 
 
 def extract_archives(
@@ -540,7 +437,7 @@ def extract_archives(
         skipped_invalid += index.skipped_invalid
         if mode == "folder":
             stem = os.path.basename(name)[: -len(".rpa")] or "archive"
-            root = _export_root(output_real, game_real, stem, used_targets)
+            root = export_root(output_real, game_real, stem, used_targets)
         else:
             # Ren'Py resolves archive entries against `game/`, wherever under
             # it the archive sits (`game/patch/x.rpa` holds `images/a.png`
@@ -548,7 +445,7 @@ def extract_archives(
             root = game_root
         root_real = os.path.realpath(root)
         for entry in index.entries:
-            destination = _destination(root, root_real, entry.name)
+            destination = resolve_destination(root, root_real, entry.name)
             if destination is None:
                 skipped_unsafe += 1
                 continue
@@ -562,7 +459,10 @@ def extract_archives(
                 planned.add(destination)
             tasks.append(_Task(path, entry, destination, entry.name))
 
-    _check_free_space(tasks)
+    check_free_space(
+        ((task.destination, task.entry.size) for task in tasks),
+        disk_usage=shutil.disk_usage,
+    )
 
     files = written_bytes = failed = 0
     was_cancelled = False

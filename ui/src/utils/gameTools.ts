@@ -4,6 +4,7 @@ import type {
   RenpyArchive,
   RenpyConsoleState,
   RenpyExtractMode,
+  RgssToolsState,
   RpgmToolsState,
   UrmStatusResponse,
 } from "../services/api";
@@ -91,6 +92,44 @@ export const getUseDecryptedState = (state: RpgmToolsState, busy: boolean): Tool
   if (state.encrypted === 0) return { enabled: false, message: "This game's assets are not encrypted." };
   if (state.missing > 0) {
     return { enabled: false, message: `Decrypt ${state.missing} more asset${state.missing === 1 ? "" : "s"} first.` };
+  }
+  return { enabled: true, message: "" };
+};
+
+export const getRgssExtractState = (
+  state: RgssToolsState,
+  mode: RenpyExtractMode,
+  output: string,
+  busy: boolean,
+): ToolActionState => {
+  if (busy) return { enabled: false, message: "A tool is running. Please wait." };
+  if (state.archives.length === 0) {
+    return { enabled: false, message: "This game has no archive to extract." };
+  }
+  if (!state.archives.some((archive) => archive.supported)) {
+    return { enabled: false, message: "None of the archives are in a format wLib can read." };
+  }
+  if (mode === "folder" && !output.trim()) {
+    return { enabled: false, message: "Choose an output folder first." };
+  }
+  return { enabled: true, message: "" };
+};
+
+// Turning the switch off is always allowed; turning it on needs every archive supported and every entry extracted.
+export const getRgssUseExtractedState = (state: RgssToolsState, busy: boolean): ToolActionState => {
+  if (busy) return { enabled: false, message: "A tool is running. Please wait." };
+  if (state.use_extracted) return { enabled: true, message: "" };
+  if (state.archives.length === 0) {
+    return { enabled: false, message: "This game has no archive to switch." };
+  }
+  if (state.archives.some((archive) => !archive.supported)) {
+    return { enabled: false, message: "Cannot switch while an unsupported archive is present." };
+  }
+  if (state.missing > 0) {
+    return {
+      enabled: false,
+      message: `Extract ${state.missing} more file${state.missing === 1 ? "" : "s"} into the game folder first.`,
+    };
   }
   return { enabled: true, message: "" };
 };

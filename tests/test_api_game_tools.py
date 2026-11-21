@@ -10,6 +10,7 @@ from core.api import Api
 from core.database import add_game, init_db
 from core.game_tools import detect_engine, game_tool_folder
 from test_renpy_tools import build_rpa
+from test_rgss_tools import build_rgss_v3
 from test_rpgm_tools import KEY, PNG, encrypt, system_json
 
 
@@ -66,6 +67,40 @@ def test_detect_engine_variants(tmp_path):
     with pytest.raises(ValueError):
         _ = game_tool_folder({"exe_path": ""})
     assert game_tool_folder({"exe_path": str(renpy / "game.sh")}) == str(renpy)
+
+
+def test_detect_engine_rgss_variants(tmp_path):
+    # VX Ace with archive
+    vxace = tmp_path / "VXAce"
+    vxace.mkdir()
+    (vxace / "Game.rgss3a").write_bytes(b"RGSSAD\x00\x03")
+    assert detect_engine(str(vxace)) == "rgss"
+
+    # XP after switch (backup archive + Data/Scripts.rxdata)
+    xp_switched = tmp_path / "XP"
+    (xp_switched / "Data").mkdir(parents=True)
+    (xp_switched / "Game.RGSSAD.wlib-backup").write_bytes(b"RGSSAD\x00\x01")
+    (xp_switched / "Data" / "Scripts.rxdata").write_bytes(b"scripts")
+    assert detect_engine(str(xp_switched)) == "rgss"
+
+    # Loose scripts only (case-insensitive)
+    loose = tmp_path / "LooseRGSS"
+    (loose / "data").mkdir(parents=True)
+    (loose / "data" / "scripts.rvdata2").write_bytes(b"scripts")
+    assert detect_engine(str(loose)) == "rgss"
+
+    # MV game with a stray .rgss3a stays "rpgm"
+    mv, _ = mv_game(tmp_path)
+    (mv / "Stray.rgss3a").write_bytes(b"RGSSAD\x00\x03")
+    assert detect_engine(str(mv)) == "rpgm"
+
+    # RPG Maker 2003 folder has no engine
+    rm2k3 = tmp_path / "RM2003"
+    rm2k3.mkdir()
+    (rm2k3 / "RPG_RT.exe").touch()
+    (rm2k3 / "RPG_RT.ldb").write_bytes(b"ldb")
+    (rm2k3 / "RPG_RT.lmt").write_bytes(b"lmt")
+    assert detect_engine(str(rm2k3)) == ""
 
 
 # ── 1.3 Support ──
@@ -450,3 +485,110 @@ def test_unity_install_api_result_and_mismatch(tmp_path, monkeypatch):
     assert (folder / "winhttp.dll").exists()
     assert api.uninstall_bepinex(game_id, {"remove_user_data": False})["success"] is True
     assert api.restore_bepinex(game_id)["success"] is True
+
+
+# ── RGSS API ──
+
+
+def rgss_game(tmp_path: Path) -> tuple[Path, int]:
+    folder = tmp_path / "VXAce"
+    folder.mkdir()
+    (folder / "Game.ini").write_text("[Game]\nTitle=VXAce\n", encoding="utf-8")
+    build_rgss_v3(
+        folder / "Game.rgss3a",
+        [
+            ("Data\\Scripts.rvdata2", b"scripts"),
+            ("Graphics\\Pictures\\title.png", b"png123"),
+        ],
+    )
+    exe = folder / "Game.exe"
+    exe.touch()
+    game_id = add_game("VXAce", str(exe))
+    assert game_id is not None
+    return folder, game_id
+
+
+def test_rgss_api_state_extract_and_switch(tmp_path):
+    api = Api()
+    folder, game_id = rgss_game(tmp_path)
+
+    assert api.get_game_tool_support(game_id) == {"success": True, "engine": "rgss"}
+    tools = api.get_game_tools(game_id)
+    assert tools["success"] is True
+    assert tools["engine"] == "rgss"
+    state = tools["rgss"]
+    assert state["missing"] == 2
+    assert state["differs"] == 0
+    assert state["use_extracted"] is False
+    assert state["backup"] is False
+    assert state["archives"][0]["name"] == "Game.rgss3a"
+    assert state["archives"][0]["format"] == "RGSSAD v3"
+    assert state["archives"][0]["supported"] is True
+    assert state["archives"][0]["entries"] == 2
+
+    # Switch refuses before extraction
+    refused = api.set_rgss_use_extracted(game_id, True)
+    assert refused["success"] is False
+    assert "2" in str(refused["error"])
+
+    # Folder extraction leaves game untouched
+    out = tmp_path / "rip"
+    out.mkdir()
+    folder_res = api.extract_rgss_archives(
+        game_id, {"mode": "folder", "output": str(out)}
+    )
+    assert folder_res["success"] is True
+    assert folder_res["files"] == 2
+    assert "Extracted 2 file(s)" in str(folder_res["message"])
+    assert (out / "Game" / "Data" / "Scripts.rvdata2").read_bytes() == b"scripts"
+    assert not (folder / "Data" / "Scripts.rvdata2").exists()
+
+    # In-place extraction writes into game folder
+    in_place = api.extract_rgss_archives(game_id, {"mode": "in_place"})
+    assert in_place["success"] is True
+    assert in_place["files"] == 2
+    assert (folder / "Data" / "Scripts.rvdata2").read_bytes() == b"scripts"
+
+    # Switch on and off
+    on = api.set_rgss_use_extracted(game_id, True)
+    assert on == {"success": True, "use_extracted": True}
+    assert (folder / "Game.rgss3a.wlib-backup").is_file()
+    assert not (folder / "Game.rgss3a").exists()
+    assert api.get_game_tools(game_id)["rgss"]["use_extracted"] is True
+
+    off = api.set_rgss_use_extracted(game_id, False)
+    assert off == {"success": True, "use_extracted": False}
+    assert (folder / "Game.rgss3a").is_file()
+    assert not (folder / "Game.rgss3a.wlib-backup").exists()
+
+
+def test_rgss_api_refusals(tmp_path, monkeypatch):
+    api = Api()
+    folder, game_id = rgss_game(tmp_path)
+    _, renpy_id = renpy_game(tmp_path)
+
+    # Wrong engine refusal
+    wrong_extract = api.extract_rgss_archives(renpy_id, {"mode": "in_place"})
+    assert wrong_extract["success"] is False
+    assert "RPG Maker XP/VX/VX Ace" in str(wrong_extract["error"])
+    wrong_switch = api.set_rgss_use_extracted(renpy_id, True)
+    assert wrong_switch["success"] is False
+    assert "RPG Maker XP/VX/VX Ace" in str(wrong_switch["error"])
+
+    # Non-boolean enabled refusal
+    bad_bool = api.set_rgss_use_extracted(game_id, "yes")
+    assert bad_bool["success"] is False
+    assert "boolean" in str(bad_bool["error"]).lower()
+    assert api.set_rgss_use_extracted(game_id, 1)["success"] is False
+
+    # Running-game refusal
+    _ = api.extract_rgss_archives(game_id, {"mode": "in_place"})
+    monkeypatch.setattr(api, "get_running_games", lambda: [game_id])
+    running_extract = api.extract_rgss_archives(game_id, {"mode": "in_place"})
+    assert running_extract["success"] is False
+    assert "Close the game" in str(running_extract["error"])
+    running_switch = api.set_rgss_use_extracted(game_id, True)
+    assert running_switch["success"] is False
+    assert "Close the game" in str(running_switch["error"])
+    assert (folder / "Game.rgss3a").is_file()
+    assert not (folder / "Game.rgss3a.wlib-backup").exists()

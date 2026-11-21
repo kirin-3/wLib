@@ -387,16 +387,18 @@ test("browser mock game tools report support and advance progress across polls",
     const game = (id, engine) => ({ id, title: `G${id}`, engine, exe_path: `/g/${id}/run.sh` });
     localStorage.setItem(
       "wlib-mock-games",
-      JSON.stringify([game(1, "Ren'Py"), game(2, "RPGM"), game(3, "Unity")]),
+      JSON.stringify([game(1, "Ren'Py"), game(2, "RPGM"), game(3, "Unity"), game(4, "RPGM VX Ace")]),
     );
 
     assert.equal((await api.getGameToolSupport(1)).engine, "renpy");
     assert.equal((await api.getGameToolSupport(2)).engine, "rpgm");
     assert.equal((await api.getGameToolSupport(3)).engine, "unity");
+    assert.equal((await api.getGameToolSupport(4)).engine, "rgss");
     assert.equal((await api.getGameToolSupport(99)).success, false);
     assert.equal((await api.getGameTools(1)).renpy.archives.length, 2);
     assert.equal((await api.getGameTools(2)).rpgm.missing, 12);
     assert.equal((await api.getGameTools(3)).unity.build.backend, "il2cpp");
+    assert.equal((await api.getGameTools(4)).rgss.missing, 120);
     assert.equal((await api.listBepinexVersions(3)).recommended.major, 6);
 
     assert.equal((await api.setRenpyConsole(1, true, true)).state, "developer");
@@ -424,6 +426,14 @@ test("browser mock game tools report support and advance progress across polls",
     assert.equal(done.decrypted, 12);
     assert.equal((await api.setRpgmUseDecrypted(2, true)).use_decrypted, true);
     assert.equal((await api.getGameTools(2)).rpgm.use_decrypted, true);
+
+    assert.equal((await api.setRgssUseExtracted(4, true)).success, false);
+    assert.equal((await api.extractRgssArchives(4, { mode: "folder" })).success, false);
+    const rgssDone = await api.extractRgssArchives(4, { mode: "in_place" });
+    assert.equal(rgssDone.files, 8);
+    assert.equal((await api.setRgssUseExtracted(4, true)).use_extracted, true);
+    assert.equal((await api.getGameTools(4)).rgss.use_extracted, true);
+    assert.equal((await api.setRgssUseExtracted(4, false)).use_extracted, false);
   } finally {
     await server.close();
     delete globalThis.window;

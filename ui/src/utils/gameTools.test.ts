@@ -8,6 +8,8 @@ import {
   getDecryptState,
   getExtractState,
   getResumableToolAction,
+  getRgssExtractState,
+  getRgssUseExtractedState,
   getUrmToggleState,
   getUseDecryptedState,
   keySourceLabel,
@@ -22,6 +24,17 @@ const rpgm = (overrides = {}) => ({
   missing: 10,
   key_source: "system" as const,
   use_decrypted: false,
+  backup: false,
+  ...overrides,
+});
+
+const rgss = (overrides = {}) => ({
+  archives: [
+    { name: "Game.rgss3a", size: 1048576, format: "RGSSAD v3", supported: true, entries: 12 },
+  ],
+  missing: 12,
+  differs: 0,
+  use_extracted: false,
   backup: false,
   ...overrides,
 });
@@ -103,4 +116,43 @@ test("console hint and key label", () => {
   assert.equal(keySourceLabel("system"), "Key read from System.json");
   assert.match(keySourceLabel("recovered"), /recovered/);
   assert.equal(keySourceLabel(""), "No key found");
+});
+
+test("rgss extract availability", () => {
+  assert.equal(getRgssExtractState(rgss(), "folder", "/out", false).enabled, true);
+  assert.equal(getRgssExtractState(rgss(), "in_place", "", false).enabled, true);
+  assert.match(getRgssExtractState(rgss(), "folder", " ", false).message, /output folder/);
+  assert.match(getRgssExtractState(rgss({ archives: [], missing: 0 }), "in_place", "", false).message, /no archive/);
+  assert.match(
+    getRgssExtractState(
+      rgss({ archives: [{ name: "Bad.rgss3a", size: 10, format: "", supported: false, entries: 0 }] }),
+      "in_place",
+      "",
+      false,
+    ).message,
+    /format/,
+  );
+  assert.match(getRgssExtractState(rgss(), "folder", "/out", true).message, /running/);
+});
+
+test("rgss use-extracted switch availability", () => {
+  assert.match(getRgssUseExtractedState(rgss(), false).message, /Extract 12 more files/);
+  assert.match(getRgssUseExtractedState(rgss({ missing: 1 }), false).message, /Extract 1 more file /);
+  assert.equal(getRgssUseExtractedState(rgss({ missing: 0 }), false).enabled, true);
+  assert.equal(getRgssUseExtractedState(rgss({ missing: 5, use_extracted: true }), false).enabled, true);
+  assert.equal(getRgssUseExtractedState(rgss({ missing: 0 }), true).enabled, false);
+  assert.match(getRgssUseExtractedState(rgss({ archives: [], missing: 0 }), false).message, /no archive/);
+  assert.match(
+    getRgssUseExtractedState(
+      rgss({
+        missing: 0,
+        archives: [
+          { name: "Good.rgss3a", size: 100, format: "RGSSAD v3", supported: true, entries: 1 },
+          { name: "Bad.rgss3a", size: 10, format: "", supported: false, entries: 0 },
+        ],
+      }),
+      false,
+    ).message,
+    /unsupported/,
+  );
 });

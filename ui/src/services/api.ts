@@ -1450,7 +1450,7 @@ export interface UrmStatusResponse extends ApiBasicResponse {
   source_configured?: boolean;
 }
 
-export type GameToolEngine = "renpy" | "rpgm" | "unity" | "";
+export type GameToolEngine = "renpy" | "rpgm" | "rgss" | "unity" | "";
 export type RenpyConsoleState = "off" | "on" | "developer";
 export type RenpyExtractMode = "folder" | "in_place";
 export type RpgmKeySource = "system" | "recovered" | "";
@@ -1483,6 +1483,23 @@ export interface RpgmToolsState {
   backup: boolean;
 }
 
+export interface RgssArchive {
+  name: string;
+  size: number;
+  // "RGSSAD v1", "RGSSAD v3", or "" when unsupported
+  format: string;
+  supported: boolean;
+  entries: number;
+}
+
+export interface RgssToolsState {
+  archives: RgssArchive[];
+  missing: number;
+  differs: number;
+  use_extracted: boolean;
+  backup: boolean;
+}
+
 export interface UnityBuild { platform: "windows" | "linux"; data_folder: string; backend: "mono" | "il2cpp" | ""; arch: "x86" | "x64" | ""; version: string }
 export interface BepInExInstalled { version: string; major: number; backend: "mono" | "il2cpp"; complete: boolean; managed_by_wlib: boolean }
 export interface UnityToolsState { build: UnityBuild; platform: "windows" | "linux"; installed: BepInExInstalled | null; has_backup: boolean; unity_libs: boolean }
@@ -1493,6 +1510,7 @@ export interface GameToolsResponse extends ApiBasicResponse {
   engine?: GameToolEngine;
   renpy?: RenpyToolsState;
   rpgm?: RpgmToolsState;
+  rgss?: RgssToolsState;
   unity?: UnityToolsState;
 }
 
@@ -1510,6 +1528,11 @@ export interface RenpyExtractOptions {
   output?: string;
 }
 
+export interface RgssExtractOptions {
+  mode: "folder" | "in_place";
+  output?: string;
+}
+
 export interface GameToolResult extends ApiBasicResponse {
   message?: string;
   warning?: string;
@@ -1522,6 +1545,8 @@ export interface GameToolResult extends ApiBasicResponse {
   skipped?: number;
   skipped_scripts?: number;
   skipped_existing?: number;
+  skipped_unsafe?: number;
+  skipped_invalid?: number;
   failed?: number;
   unsupported?: string[];
   // decryption
@@ -1529,6 +1554,8 @@ export interface GameToolResult extends ApiBasicResponse {
   already?: number;
   key_source?: RpgmKeySource;
   use_decrypted?: boolean;
+  // rgss switch
+  use_extracted?: boolean;
 }
 
 export interface SettingsResponse extends GamescopeSettings {
@@ -2095,6 +2122,14 @@ class ApiService {
 
   async setRpgmUseDecrypted(gameId: number, enabled: boolean): Promise<GameToolResult> {
     return this.invoke<GameToolResult>("set_rpgm_use_decrypted", gameId, enabled);
+  }
+
+  async extractRgssArchives(gameId: number, options: RgssExtractOptions): Promise<GameToolResult> {
+    return this.invoke<GameToolResult>("extract_rgss_archives", gameId, options);
+  }
+
+  async setRgssUseExtracted(gameId: number, enabled: boolean): Promise<GameToolResult> {
+    return this.invoke<GameToolResult>("set_rgss_use_extracted", gameId, enabled);
   }
 
   async getGameToolStatus(gameId: number): Promise<GameToolStatus> {

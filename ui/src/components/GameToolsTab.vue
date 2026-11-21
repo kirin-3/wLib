@@ -19,6 +19,8 @@ import {
   getDecryptState,
   getExtractState,
   getResumableToolAction,
+  getRgssExtractState,
+  getRgssUseExtractedState,
   getUrmToggleState,
   getUseDecryptedState,
   keySourceLabel,
@@ -185,6 +187,7 @@ watch(
 const isBusy = computed(() => busy.value !== "");
 const renpy = computed(() => tools.value?.renpy ?? null);
 const rpgm = computed(() => tools.value?.rpgm ?? null);
+const rgss = computed(() => tools.value?.rgss ?? null);
 
 const saveSlots = ref<RpgmSaveSlot[]>([]);
 const saveSlotsLoaded = ref(false);
@@ -284,6 +287,12 @@ const extractState = computed(() =>
 );
 const decryptState = computed(() => (rpgm.value ? getDecryptState(rpgm.value, isBusy.value) : null));
 const switchState = computed(() => (rpgm.value ? getUseDecryptedState(rpgm.value, isBusy.value) : null));
+const rgssExtractState = computed(() =>
+  rgss.value ? getRgssExtractState(rgss.value, extractMode.value, outputFolder.value, isBusy.value) : null,
+);
+const rgssSwitchState = computed(() =>
+  rgss.value ? getRgssUseExtractedState(rgss.value, isBusy.value) : null,
+);
 const urmState = computed(() => (renpy.value ? getUrmToggleState(renpy.value.urm, isBusy.value) : null));
 
 const progressInput = computed(() => ({
@@ -379,6 +388,21 @@ const toggleUseDecrypted = async () => {
   if (result) await load(props.gameId, true);
 };
 
+const extractRgss = async () => {
+  const mode = extractMode.value;
+  const output = outputFolder.value;
+  const result = await run("extract", (id) =>
+    api.extractRgssArchives(id, mode === "folder" ? { mode, output } : { mode }),
+  );
+  if (result) await load(props.gameId, true);
+};
+
+const toggleUseExtracted = async () => {
+  const enabled = !(rgss.value?.use_extracted ?? false);
+  const result = await run("switch", (id) => api.setRgssUseExtracted(id, enabled));
+  if (result) await load(props.gameId, true);
+};
+
 const cancel = async () => {
   if (cancelling.value) return;
   cancelling.value = true;
@@ -419,6 +443,10 @@ const consoleChecked = computed({
 const useDecryptedChecked = computed({
   get: () => !!rpgm.value?.use_decrypted,
   set: () => void toggleUseDecrypted(),
+});
+const useExtractedChecked = computed({
+  get: () => !!rgss.value?.use_extracted,
+  set: () => void toggleUseExtracted(),
 });
 </script>
 
@@ -632,6 +660,97 @@ const useDecryptedChecked = computed({
         </p>
       </section>
       <RpgmSaveEditor v-model="editorOpen" :game-id="gameId" :file="editorFile" @saved="loadSaveSlots" />
+    </template>
+
+    <template v-else-if="tools && engine === 'rgss' && rgss">
+      <section class="tools-card space-y-3" aria-labelledby="tools-rgss-title">
+        <span id="tools-rgss-title" class="text-sm font-medium block" style="color: var(--text-primary)">RPG Maker XP / VX / VX Ace</span>
+        <p v-if="!rgss.archives.length" class="text-xs" style="color: var(--text-muted)">This game has no archive to extract.</p>
+        <template v-else>
+          <ul class="space-y-1">
+            <li
+              v-for="(archive, index) in rgss.archives"
+              :key="`${archive.name}-${index}`"
+              class="flex items-center gap-2 text-xs"
+              style="color: var(--text-secondary)"
+            >
+              <span class="flex-1 min-w-0 truncate font-mono" :title="archive.name">{{ archive.name }}</span>
+              <span :style="{ color: archive.supported ? 'var(--text-muted)' : 'var(--warning-text)' }">
+                {{ archive.supported ? archive.format : "Unsupported" }}
+              </span>
+              <span style="color: var(--text-muted)">{{ formatToolBytes(archive.size) }}</span>
+            </li>
+          </ul>
+
+          <!-- Relative keeps the absolute sr-only legend inside the dialog's scroll body. -->
+          <fieldset class="relative space-y-2" :disabled="isBusy">
+            <legend class="sr-only">Where to extract</legend>
+            <label class="flex items-center gap-2 text-xs" style="color: var(--text-secondary)">
+              <input v-model="extractMode" type="radio" value="folder" name="rgss-extract-mode" />
+              Extract to a folder (the game is not changed)
+            </label>
+            <div v-if="extractMode === 'folder'" class="flex items-center gap-2 pl-5">
+              <button type="button" class="tools-btn disabled:opacity-50" :disabled="isBusy" @click="chooseOutput">
+                Choose output folder…
+              </button>
+              <span
+                class="flex-1 min-w-0 truncate text-xs font-mono"
+                style="color: var(--text-muted)"
+                :title="outputFolder"
+              >{{ outputFolder || "No folder chosen" }}</span>
+            </div>
+            <label class="flex items-center gap-2 text-xs" style="color: var(--text-secondary)">
+              <input v-model="extractMode" type="radio" value="in_place" name="rgss-extract-mode" />
+              Extract into the game folder
+            </label>
+            <p v-if="extractMode === 'in_place'" class="text-[0.625rem] pl-5" style="color: var(--text-muted)">
+              Writes every file (including scripts and data) into the game folder without overwriting existing loose files. Archives are kept.
+            </p>
+          </fieldset>
+
+          <div class="flex items-center gap-3">
+            <button
+              type="button"
+              class="tools-btn ui-action-btn disabled:opacity-50"
+              :disabled="!rgssExtractState?.enabled"
+              @click="extractRgss"
+            >
+              Extract
+            </button>
+            <p v-if="rgssExtractState?.message && !isBusy" role="status" class="text-xs" style="color: var(--text-muted)">
+              {{ rgssExtractState.message }}
+            </p>
+          </div>
+        </template>
+      </section>
+
+      <section v-if="rgss.archives.length" class="tools-card space-y-2" aria-labelledby="tools-rgss-switch-title">
+        <div class="flex items-center justify-between gap-3">
+          <span id="tools-rgss-switch-title" class="text-sm font-medium" style="color: var(--text-primary)">Use extracted files in-game</span>
+          <label class="relative inline-flex items-center" :class="rgssSwitchState?.enabled ? 'cursor-pointer' : 'cursor-not-allowed'">
+            <input
+              v-model="useExtractedChecked"
+              type="checkbox"
+              class="sr-only peer"
+              aria-label="Use extracted files in-game"
+              :disabled="!rgssSwitchState?.enabled"
+            />
+            <div class="ui-toggle"></div>
+          </label>
+        </div>
+        <p v-if="rgss.archives.some((archive) => archive.supported)" class="text-xs" style="color: var(--text-secondary)">
+          {{ rgss.missing === 0 ? "All archived files have loose copies in the game folder." : `${rgss.missing} archived ${rgss.missing === 1 ? "file has" : "files have"} no loose copy yet.` }}
+        </p>
+        <p v-if="rgss.differs > 0" class="text-xs" style="color: var(--warning-text)">
+          {{ rgss.differs }} loose {{ rgss.differs === 1 ? "file differs" : "files differ" }} from the archive. The game will load {{ rgss.differs === 1 ? "it" : "them" }} in place of the archive {{ rgss.differs === 1 ? "copy" : "copies" }} while the switch is on.
+        </p>
+        <p class="text-xs" style="color: var(--text-muted)">
+          Renames each archive to <code>&lt;name&gt;.wlib-backup</code> so the game loads the loose files instead. Turning it off renames them back.
+        </p>
+        <p v-if="rgssSwitchState?.message && !isBusy" role="status" class="text-xs" style="color: var(--text-muted)">
+          {{ rgssSwitchState.message }}
+        </p>
+      </section>
     </template>
 
     <template v-else-if="tools && engine === 'unity' && unity">

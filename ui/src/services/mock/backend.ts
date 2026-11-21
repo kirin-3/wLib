@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { defaultDownloadSite, downloadSites, lcActive, normalizeLcThreadUrl, updateCheckUrl } from "../../utils/lewdcorner.ts";
-import type { ApiErrorResult, ArchiveInstallStatus, BepInExInstalled, DownloadSite, BulkUpdateResultItem, CompanionTool, CompanionToolInput, GameRecord, GameToolEngine, GameToolsResponse, LaunchMode, LaunchTarget, LibraryBackupSection, LocaleEmulatorStatus, LibrarySyncStatus, PlaySession, RenpyConsoleState, RenpyExtractOptions, StoreLink, UpdateStatusResponse } from "../api";
+import type { ApiErrorResult, ArchiveInstallStatus, BepInExInstalled, DownloadSite, BulkUpdateResultItem, CompanionTool, CompanionToolInput, GameRecord, GameToolEngine, GameToolsResponse, LaunchMode, LaunchTarget, LibraryBackupSection, LocaleEmulatorStatus, LibrarySyncStatus, PlaySession, RenpyConsoleState, RenpyExtractOptions, RgssExtractOptions, StoreLink, UpdateStatusResponse } from "../api";
 import { LAUNCH_MODE_OPTIONS } from "../../utils/launchMode";
 import { hasAvailableUpdate, isUpdateSkipped, normalizeVersion } from "../../utils/libraryGames";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../../utils/platformPolicy";
@@ -82,6 +82,8 @@ export class MockBackend {
   _mockRenpyConsole = new Map<number, RenpyConsoleState>();
   _mockRpgmDecrypted = new Set<number>();
   _mockRpgmUseDecrypted = new Set<number>();
+  _mockRgssExtracted = new Set<number>();
+  _mockRgssUseExtracted = new Set<number>();
   _mockBepinex = new Map<number, BepInExInstalled>();
   _mockBepinexBackup = new Map<number, BepInExInstalled | null>();
   _mockArchiveStatus: ArchiveInstallStatus = { running: false, stage: "", done: 0, total: 0 };
@@ -100,8 +102,10 @@ export class MockBackend {
   });
 
   _mockToolEngine(gameId: number): GameToolEngine {
-    const engine = readMockGames().find((game) => game.id === gameId)?.engine ?? "";
+    const game = readMockGames().find((item) => item.id === gameId);
+    const engine = game?.engine ?? "";
     if (/ren.?py/i.test(engine)) return "renpy";
+    if (/rgss|xp|vx/i.test(engine) || /rgss|vx.?ace/i.test(game?.exe_path ?? "")) return "rgss";
     if (/rpg/i.test(engine)) return "rpgm";
     if (/unity/i.test(engine)) return "unity";
     return "";
@@ -111,7 +115,7 @@ export class MockBackend {
   _mockToolGuard(gameId: number, engine: GameToolEngine): string {
     if (!readMockGames().some((game) => game.id === gameId)) return "Game not found";
     if (this._mockToolEngine(gameId) !== engine) {
-      const label = { renpy: "Ren'Py", rpgm: "RPG Maker MV/MZ", unity: "Unity" }[engine as "renpy" | "rpgm" | "unity"] ?? engine;
+      const label = { renpy: "Ren'Py", rpgm: "RPG Maker MV/MZ", rgss: "RPG Maker XP/VX/VX Ace", unity: "Unity" }[engine as "renpy" | "rpgm" | "rgss" | "unity"] ?? engine;
       return `This game is not a ${label} game`;
     }
     if (this._mockRunningGames.has(gameId)) return "Close the game before using its tools";
@@ -175,6 +179,24 @@ export class MockBackend {
         },
       };
     }
+    if (engine === "rgss") {
+      const extracted = this._mockRgssExtracted.has(gameId);
+      const useExtracted = this._mockRgssUseExtracted.has(gameId);
+      return {
+        success: true,
+        mock: true,
+        engine,
+        rgss: {
+          archives: [
+            { name: "Game.rgss3a", size: 84934656, format: "RGSSAD v3", supported: true, entries: 120 },
+          ],
+          missing: extracted ? 0 : 120,
+          differs: extracted ? 2 : 0,
+          use_extracted: useExtracted,
+          backup: useExtracted,
+        },
+      };
+    }
     if (engine === "unity") return { success: true, mock: true, engine, unity: {
       platform: "windows", build: { platform: "windows", data_folder: "Game_Data", backend: "il2cpp", arch: "x64", version: "2022.3.21" },
       installed: this._mockBepinex.get(gameId) ?? null, unity_libs: this._mockBepinex.has(gameId), has_backup: this._mockBepinexBackup.has(gameId),
@@ -230,7 +252,7 @@ export class MockBackend {
           message: `Decrypted ${run.done} file(s)${run.cancelled ? "; cancelled" : ""}`,
         };
       }
-      default: {
+      case "set_rpgm_use_decrypted": {
         const error = this._mockToolGuard(gameId, "rpgm");
         if (error) return fail(error);
         const enabled = args[1] === true;
@@ -241,6 +263,46 @@ export class MockBackend {
         else this._mockRpgmUseDecrypted.delete(gameId);
         return { success: true, mock: true, use_decrypted: enabled };
       }
+      case "extract_rgss_archives": {
+        const error = this._mockToolGuard(gameId, "rgss");
+        if (error) return fail(error);
+        const options = (args[1] ?? {}) as Partial<RgssExtractOptions>;
+        if (options.mode !== "in_place" && !(options.output && options.output.startsWith("/"))) {
+          return fail("Choose an output folder");
+        }
+        const run = await this._runMockTool(gameId, "extract", 8);
+        if (options.mode === "in_place" && run.done === 8) {
+          this._mockRgssExtracted.add(gameId);
+        }
+        return {
+          success: true,
+          mock: true,
+          files: run.done,
+          bytes: run.done * 1048576,
+          skipped: 0,
+          skipped_existing: 0,
+          skipped_unsafe: 0,
+          skipped_invalid: 0,
+          failed: 0,
+          unsupported: [],
+          cancelled: run.cancelled,
+          message: `Extracted ${run.done} file(s)${run.cancelled ? "; cancelled" : ""}`,
+        };
+      }
+      case "set_rgss_use_extracted": {
+        const error = this._mockToolGuard(gameId, "rgss");
+        if (error) return fail(error);
+        if (typeof args[1] !== "boolean") return fail("Enabled must be a boolean");
+        const enabled = args[1];
+        if (enabled && !this._mockRgssExtracted.has(gameId)) {
+          return fail("120 file(s) still need extracting first");
+        }
+        if (enabled) this._mockRgssUseExtracted.add(gameId);
+        else this._mockRgssUseExtracted.delete(gameId);
+        return { success: true, mock: true, use_extracted: enabled };
+      }
+      default:
+        return fail(`Unknown tool action '${method}'`);
     }
   }
 
@@ -586,6 +648,8 @@ export class MockBackend {
       case "extract_renpy_archives":
       case "decrypt_rpgm_assets":
       case "set_rpgm_use_decrypted":
+      case "extract_rgss_archives":
+      case "set_rgss_use_extracted":
         return this._mockGameToolAction(method, args);
       case "get_game_tool_status": {
         const run = this._mockToolRuns.get(Number(args[0]));

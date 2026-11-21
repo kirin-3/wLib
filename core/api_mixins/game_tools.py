@@ -207,6 +207,7 @@ class GameToolsMixin(ApiBase):
     def get_game_tools(self, game_id: object = None) -> dict[str, object]:
         from core.game_tools import (
             ENGINE_RENPY,
+            ENGINE_RGSS,
             ENGINE_RPGM,
             ENGINE_UNITY,
             detect_engine,
@@ -235,6 +236,14 @@ class GameToolsMixin(ApiBase):
                     "success": True,
                     "engine": engine,
                     "renpy": self._renpy_tools_state(coerced_id, folder),
+                }
+            if engine == ENGINE_RGSS:
+                from core import rgss_tools
+
+                return {
+                    "success": True,
+                    "engine": engine,
+                    "rgss": rgss_tools.inspect_state(folder),
                 }
             root = rpgm_data_root(folder) if engine == ENGINE_RPGM else None
             if root is not None:
@@ -267,7 +276,12 @@ class GameToolsMixin(ApiBase):
             return {"success": False, "error": "Game not found"}
         coerced_id, folder, exe_path = game
         if detect_engine(folder, exe_path) != engine:
-            label = {"renpy": "Ren'Py", "rpgm": "RPG Maker MV/MZ", "unity": "Unity"}.get(engine, engine)
+            label = {
+                "renpy": "Ren'Py",
+                "rpgm": "RPG Maker MV/MZ",
+                "rgss": "RPG Maker XP/VX/VX Ace",
+                "unity": "Unity",
+            }.get(engine, engine)
             return {"success": False, "error": f"This game is not a {label} game"}
         try:
             with self._tool_run(coerced_id, action):
@@ -475,6 +489,52 @@ class GameToolsMixin(ApiBase):
             return {"use_decrypted": rpgm_tools.read_use_decrypted(root)}
 
         return self._run_game_tool(game_id, "rpgm", "switch", body)
+
+    def extract_rgss_archives(
+        self, game_id: object = None, options: object = None
+    ) -> dict[str, object]:
+        from core import rgss_tools
+        from core.game_tools import format_bytes
+
+        opts = cast(dict[str, object], options) if isinstance(options, dict) else {}
+        mode = str(opts.get("mode") or "folder")
+        output = str(opts.get("output") or "")
+
+        def body(
+            folder: str, progress: ProgressFn, cancelled: CancelFn
+        ) -> dict[str, object]:
+            result = rgss_tools.extract_archives(
+                folder, mode, output, progress, cancelled
+            )
+            parts = [
+                f"Extracted {result['files']} file(s) "
+                + f"({format_bytes(int(str(result['bytes'])))})"
+            ]
+            if result["skipped"]:
+                parts.append(f"skipped {result['skipped']}")
+            if result["failed"]:
+                parts.append(f"{result['failed']} failed")
+            unsupported = cast(list[str], result["unsupported"])
+            if unsupported:
+                parts.append("unsupported: " + ", ".join(unsupported))
+            if result["cancelled"]:
+                parts.append("cancelled")
+            return {**result, "message": "; ".join(parts)}
+
+        return self._run_game_tool(game_id, "rgss", "extract", body)
+
+    def set_rgss_use_extracted(
+        self, game_id: object = None, enabled: object = None
+    ) -> dict[str, object]:
+        from core import rgss_tools
+
+        if not isinstance(enabled, bool):
+            return {"success": False, "error": "Enabled must be a boolean"}
+
+        def body(folder: str, _p: ProgressFn, _c: CancelFn) -> dict[str, object]:
+            return {"use_extracted": rgss_tools.set_use_extracted(folder, enabled)}
+
+        return self._run_game_tool(game_id, "rgss", "switch", body)
 
     def browse_urm_file(self, start_path: str = "") -> str:
         # pywebview validates every filter label against [\w ]+, so the label

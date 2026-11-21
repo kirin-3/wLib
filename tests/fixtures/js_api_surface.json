@@ -161,6 +161,10 @@
     "game_id",
     "options"
   ],
+  "extract_rgss_archives": [
+    "game_id",
+    "options"
+  ],
   "find_download_offers": [],
   "find_rpdl_torrents": [
     "game_id",
@@ -525,6 +529,10 @@
     "game_id",
     "enabled",
     "developer"
+  ],
+  "set_rgss_use_extracted": [
+    "game_id",
+    "enabled"
   ],
   "set_rpgm_use_decrypted": [
     "game_id",
