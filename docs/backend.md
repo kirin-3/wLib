@@ -458,11 +458,31 @@ waits for those helpers. Stop terminates the outer bwrap process group and skips
 host wineserver. Automatic Cheat Engine injection, when enabled, runs inside
 that same sandbox after its usual delay. A sandboxed RPGMaker Linux runner
 launch starts the runner by its real path (`os.path.realpath`), because the
-sandbox binds only the runner's real folder (`game_sandbox.runtime_folder()`)
+sandbox mounts only the runner's real folder (`game_sandbox.runtime_folder()`)
 and a symlink such as `~/.local/bin/rpgmaker-linux` does not exist there.
-A sandboxed plain Wine launch with an absolute Wine path does the same: the
-game and Cheat Engine run the Wine target, not a symlink such as
-`~/.local/bin/wine`. The supervisor first writes `.wlib-sandbox-started` in the
+Because the upstream runner replaces `www`, `package.json` and root-file
+symlinks inside its NW.js version folder on each launch, `build_bwrap_argv`
+mounts that `runner_root` (checked with `check_readonly_mounts` after
+`readonly_paths`) through `game_sandbox.runner_root_mounts()`: when
+`game_sandbox.runner_overlay_supported(bwrap, root)` succeeds (probed through
+`host_command` on the real runner root, cached by `(bwrap, root)` and cleared
+by `get_sandbox_status(recheck=True)`), it uses `--overlay-src <root> --tmp-overlay <root>`
+so writes stay private to the sandbox and disappear on exit; when overlayfs is
+unavailable (logged once), it falls back to `--ro-bind <root> <root>` plus a
+`--tmpfs` over each `<root>/nwjs/<version>` folder with every non-symlink entry
+other than `www` and `package.json` bound back read-only. The tmpfs mounts give every
+version folder the same new modification time, so in the fallback
+`game_sandbox.runner_fallback_nwjs_path()` sets `NWJSPATH` to the folder the
+runner picks on the host (newest by modification time, like its `ls -t`), unless
+the command has `--nwjsversion`, `--chooselatestnwjs` or `--nwjspath` or the
+environment already sets `NWJSPATH` (the runner refuses those together). Because the sandbox
+exposes no FUSE device, a sandboxed runner launch whose final argv (after
+`%command%` substitution) selects `--mounttype cicpoffs` is refused before any
+process starts with `code: "rpgmaker_cicpoffs_sandbox"` (unsandboxed launches
+keep `--mounttype cicpoffs`).
+A sandboxed plain Wine launch with an absolute Wine path does the same for its
+binary path: the game and Cheat Engine run the Wine target, not a symlink such
+as `~/.local/bin/wine`. The supervisor first writes `.wlib-sandbox-started` in the
 sandbox home (`game_sandbox.SANDBOX_STARTED_NAME`; the launcher deletes it before
 each launch). When bwrap exits with a nonzero status before that file appears
 (checked for up to five seconds), the launch fails instead of starting playtime

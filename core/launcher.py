@@ -57,6 +57,20 @@ def wrap_performance_tools(
     return [*(tool for tool in tools if os.path.basename(tool) not in existing), *cmd]
 
 
+def _uses_cicpoffs_mount(command: Sequence[str]) -> bool:
+    """Whether an RPGMaker Linux runner argv selects the cicpoffs FUSE mount."""
+    for index, arg in enumerate(command):
+        if arg == "--mounttype=cicpoffs":
+            return True
+        if (
+            arg == "--mounttype"
+            and index + 1 < len(command)
+            and command[index + 1] == "cicpoffs"
+        ):
+            return True
+    return False
+
+
 def gamescope_skip_reason(
     *, windows: bool, browser_launch: bool, flatpak_player: bool, user_args: list[str]
 ) -> str:
@@ -1861,6 +1875,7 @@ class Launcher:
             kill_info: tuple[str, dict[str, str]] | None = None,
             cwd_override: str | None = None,
             runtime_paths: tuple[str, ...] = (),
+            runner_root: str = "",
             wine_context: WineContext | None = None,
             umu_run: bool = False,
             writable_paths: tuple[str, ...] = (),
@@ -2056,6 +2071,7 @@ class Launcher:
                         cwd=effective_cwd,
                         prefix=mount_prefix,
                         readonly_paths=readonly,
+                        runner_root=runner_root,
                         environment=env_vars,
                         nixos=host_nixos,
                         system_links=host_links,
@@ -2462,19 +2478,31 @@ class Launcher:
                     runner_game_dir = parent_dir
             runner_path = runner_status["path"]
             if sandboxed:
-                # The sandbox binds only the runner's real folder (runtime_folder
+                # The sandbox mounts only the runner's real folder (runtime_folder
                 # resolves symlinks), so a symlink such as ~/.local/bin/<runner>
                 # does not exist there. Run the target instead.
                 runner_path = os.path.realpath(runner_path)
             base_cmd = [runner_path, "--gamepath", runner_game_dir]
 
             command = build_command(base_cmd, args)
+            if sandboxed and _uses_cicpoffs_mount(command):
+                return {
+                    "success": False,
+                    "code": "rpgmaker_cicpoffs_sandbox",
+                    "error": (
+                        "The RPGMaker Linux runner's cicpoffs mount (--mounttype cicpoffs) "
+                        "does not work in the sandbox. Remove --mounttype cicpoffs from "
+                        "the launch arguments, or turn off Run in sandbox for this game."
+                    ),
+                }
             print(f"Executing via RPGMaker Linux runner: {' '.join(command)}")
             return execute_process(
                 command,
                 build_host_tool_env(env),
                 cwd_override=runner_game_dir,
-                runtime_paths=(game_sandbox.runtime_folder(runner_path),),
+                runner_root=game_sandbox.runtime_folder(runner_path)
+                if sandboxed
+                else "",
             )
 
         def execute_web_player() -> dict[str, object]:

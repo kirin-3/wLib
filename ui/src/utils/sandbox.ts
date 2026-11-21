@@ -27,7 +27,10 @@ export const networkSwitchState = (player: WebPlayer, platform: string, sandboxE
   return { disabled: false, note: 'In-game online features, including online translation, stop working.' };
 };
 
+const SANDBOX_SETTINGS_CODES = ['sandbox_missing', 'sandbox_unusable', 'network_block_unavailable', 'network_block_needs_sandbox', 'proton_missing_offline'];
+const SANDBOX_INFO_CODES = ['prefix_in_use', 'rpgmaker_cicpoffs_sandbox'];
+
 export const sandboxLaunchError = (code: string | undefined, message: string | undefined) => {
-  if (!['sandbox_missing', 'sandbox_unusable', 'network_block_unavailable', 'network_block_needs_sandbox', 'proton_missing_offline', 'prefix_in_use'].includes(code || '')) return null;
-  return { message: message || 'The game could not be launched.', openSettings: code !== 'prefix_in_use' };
+  if (!code || (!SANDBOX_SETTINGS_CODES.includes(code) && !SANDBOX_INFO_CODES.includes(code))) return null;
+  return { message: message || 'The game could not be launched.', openSettings: SANDBOX_SETTINGS_CODES.includes(code) };
 };

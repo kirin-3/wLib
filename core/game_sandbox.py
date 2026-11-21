@@ -8,7 +8,7 @@ import glob
 import os
 import shlex
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from threading import Lock
 from typing import Literal, TypedDict, cast
 from http.client import HTTPResponse
@@ -152,6 +152,7 @@ class SandboxStatus(TypedDict):
 
 
 _probe_cache: dict[tuple[str, str], SandboxStatus] = {}
+_overlay_probe_cache: dict[tuple[str, str], bool] = {}
 _probe_lock = Lock()
 
 
@@ -170,6 +171,7 @@ def get_sandbox_status(
     with _probe_lock:
         if recheck:
             _probe_cache.clear()
+            _overlay_probe_cache.clear()
         result = _probe_cache.get(key)
         if result is None:
             result = _probe(*key)
@@ -291,6 +293,149 @@ def _probe(host: str, custom: str) -> SandboxStatus:
         return result
     result["status"] = "ready"
     return result
+
+
+def runner_overlay_supported(bwrap: str, root: str) -> bool:
+    """Whether bubblewrap can mount `root` under a temporary writable overlay.
+
+    Probes on the host (via `host_command`) using the real `root`, because
+    overlayfs support depends on that folder's filesystem. Caches by
+    `(bwrap, root)` until the next `get_sandbox_status(recheck=True)`.
+    """
+    if not bwrap or not root:
+        return False
+    key = (bwrap, root)
+    with _probe_lock:
+        cached = _overlay_probe_cache.get(key)
+        if cached is not None:
+            return cached
+        reason = ""
+        supported = False
+        try:
+            probe = subprocess.run(
+                host_command(
+                    [
+                        bwrap,
+                        *BWRAP_NAMESPACE_OPTIONS,
+                        "--ro-bind",
+                        "/",
+                        "/",
+                        "--overlay-src",
+                        root,
+                        "--tmp-overlay",
+                        root,
+                        "true",
+                    ]
+                ),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if probe.returncode == 0:
+                supported = True
+            else:
+                reason = probe.stderr.strip() or f"exit status {probe.returncode}"
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            reason = str(exc)
+        if not supported:
+            print(
+                f"[wLib] Runner overlay unavailable for {root!r}, using fallback: {reason!r}"
+            )
+        if len(_overlay_probe_cache) >= 16:
+            del _overlay_probe_cache[next(iter(_overlay_probe_cache))]
+        _overlay_probe_cache[key] = supported
+        return supported
+
+
+# Version-folder entries the RPGMaker Linux runner replaces on every launch.
+# In the fallback (no overlayfs), leaving them out lets the runner create them
+# inside the version folder's tmpfs without hitting EBUSY on a bind mount.
+_RUNNER_EPHEMERAL_ENTRIES = frozenset({"www", "package.json"})
+
+
+def runner_root_mounts(
+    root: str,
+    bwrap: str = "bwrap",
+    *,
+    overlay: bool | None = None,
+) -> list[str]:
+    """bwrap mount arguments for the RPGMaker Linux runner's root folder.
+
+    Uses a temporary writable overlay when supported; otherwise binds `root`
+    read-only and puts a writable tmpfs over each `<root>/nwjs/<version>`
+    folder with its non-symlink, non-ephemeral entries bound back read-only.
+    """
+    use_overlay = runner_overlay_supported(bwrap, root) if overlay is None else overlay
+    if use_overlay:
+        return ["--overlay-src", root, "--tmp-overlay", root]
+    argv = ["--ro-bind", root, root]
+    nwjs_dir = os.path.join(root, "nwjs")
+    try:
+        with os.scandir(nwjs_dir) as entries:
+            version_entries = sorted(entries, key=lambda entry: entry.name)
+    except OSError:
+        return argv
+    for version in version_entries:
+        try:
+            if version.is_symlink() or not version.is_dir(follow_symlinks=False):
+                continue
+        except OSError:
+            continue
+        argv += ["--tmpfs", version.path]
+        try:
+            with os.scandir(version.path) as entries:
+                children = sorted(entries, key=lambda entry: entry.name)
+        except OSError:
+            continue
+        for child in children:
+            try:
+                if child.is_symlink() or child.name in _RUNNER_EPHEMERAL_ENTRIES:
+                    continue
+            except OSError:
+                continue
+            argv += ["--ro-bind", child.path, child.path]
+    return argv
+
+
+# Runner arguments that choose the NW.js folder. The runner refuses each of
+# them together with NWJSPATH.
+_RUNNER_VERSION_ARGS = frozenset({"--nwjsversion", "--chooselatestnwjs", "--nwjspath"})
+
+
+def runner_fallback_nwjs_path(
+    root: str, command: Sequence[str], environment: Mapping[str, str]
+) -> str:
+    """The NW.js folder the runner would pick on the host, for the fallback.
+
+    Without a version argument the runner picks the newest folder in
+    `<root>/nwjs/` by modification time (`ls -t`). The fallback's tmpfs mounts
+    give every version folder the same new time, so the runner could pick
+    another version than on the host. Pin the host's choice with NWJSPATH,
+    unless the user chose a folder (arguments or NWJSPATH) themselves.
+    """
+    if environment.get("NWJSPATH") or any(
+        arg.split("=", 1)[0] in _RUNNER_VERSION_ARGS for arg in command
+    ):
+        return ""
+    folders: list[tuple[int, str, str]] = []
+    try:
+        with os.scandir(os.path.join(root, "nwjs")) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+                        continue
+                    stat = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                folders.append((stat.st_mtime_ns, entry.name, entry.path))
+    except OSError:
+        return ""
+    if not folders:
+        return ""
+    # `ls -t`: newest first; equal times sort by name.
+    newest = max(time for time, _name, _path in folders)
+    return min((name, path) for time, name, path in folders if time == newest)[1]
 
 
 # D-Bus and accessibility bus helpers that a game or a library can start in
@@ -470,6 +615,7 @@ def build_bwrap_argv(
     cwd: str,
     prefix: str = "",
     readonly_paths: tuple[str, ...] = (),
+    runner_root: str = "",
     environment: dict[str, str] | None = None,
     nixos: bool = False,
     system_links: Mapping[str, str] | None = None,
@@ -483,7 +629,11 @@ def build_bwrap_argv(
     gamescope: bool = False,
     mangohud: MangoHudMounts | None = None,
 ) -> list[str]:
-    """Pure argv builder; optional host paths are handled by bubblewrap's try flags.
+    """Build bubblewrap argv; optional host paths are handled by try flags.
+
+    `runner_root` mounts the RPGMaker Linux runner's folder through
+    `runner_root_mounts()` (a temporary writable overlay, or read-only with
+    writable version-folder tmpfs mounts when overlayfs is unavailable).
 
     `mangohud` holds the read-only (source, destination) pairs from
     `mangohud_mounts()`; pass it only when MangoHud is in effect for the launch.
@@ -493,7 +643,9 @@ def build_bwrap_argv(
     `GAMESCOPE_BIND_SHIM` adds gamescope's own display when bwrap starts.
     """
     env = environment or {}
-    check_readonly_mounts(readonly_paths, home)
+    check_readonly_mounts(
+        (*readonly_paths, runner_root) if runner_root else readonly_paths, home
+    )
     check_writable_mounts(writable_paths, home)
     argv = [bwrap, *BWRAP_NAMESPACE_OPTIONS]
     if network:
@@ -583,6 +735,14 @@ def build_bwrap_argv(
         argv += ["--setenv", key, home + suffix]
     for path in readonly_paths:
         argv += ["--ro-bind", path, path]
+    if runner_root:
+        overlay = runner_overlay_supported(bwrap, runner_root)
+        argv += runner_root_mounts(runner_root, bwrap=bwrap, overlay=overlay)
+        nwjs_path = (
+            "" if overlay else runner_fallback_nwjs_path(runner_root, command, env)
+        )
+        if nwjs_path:
+            argv += ["--setenv", "NWJSPATH", nwjs_path]
     # After the sandbox-home bind, so the configuration folder lands in the
     # game's own ~/.config. Every pair is optional on the host.
     for source, destination in mangohud or ():

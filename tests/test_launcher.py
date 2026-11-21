@@ -2227,6 +2227,7 @@ def test_sandbox_wraps_every_linux_mode(monkeypatch, tmp_path, mode, exe):
         "get_sandbox_status",
         lambda: {"status": "ready", "path": "/usr/bin/bwrap"},
     )
+    monkeypatch.setattr(game_sandbox, "runner_overlay_supported", lambda _b, _r: True)
     launcher = Launcher()
     monkeypatch.setattr(
         launcher,
@@ -2719,6 +2720,7 @@ def test_sandbox_wraps_html_target_outside_browser_modes(
         "get_sandbox_status",
         lambda: {"status": "ready", "path": "/usr/bin/bwrap"},
     )
+    monkeypatch.setattr(game_sandbox, "runner_overlay_supported", lambda _b, _r: True)
     launcher = Launcher()
     monkeypatch.setattr(
         launcher,
@@ -3936,6 +3938,7 @@ def test_sandboxed_runner_symlink_runs_real_path(monkeypatch, tmp_path):
         "get_sandbox_status",
         lambda: {"status": "ready", "path": "/usr/bin/bwrap"},
     )
+    monkeypatch.setattr(game_sandbox, "runner_overlay_supported", lambda _b, _r: True)
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
         result = Launcher().launch(
             str(game), game_id=33, sandbox_enabled=True, launch_mode="rpgmaker_linux"
@@ -3944,9 +3947,185 @@ def test_sandboxed_runner_symlink_runs_real_path(monkeypatch, tmp_path):
     argv = popen.call_args.args[0]
     assert argv[-3:] == [str(runner), "--gamepath", str(game.parent)]
     assert str(link) not in argv
-    triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
+    quads = [argv[i : i + 4] for i in range(len(argv) - 3)]
     folder = str(tmp_path / "nwjs")
-    assert ["--ro-bind", folder, folder] in triples
+    assert ["--overlay-src", folder, "--tmp-overlay", folder] in quads
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
+@pytest.mark.parametrize("overlay", [True, False])
+def test_sandboxed_rpgmaker_runner_mounts_runner_root(monkeypatch, tmp_path, overlay):
+    from core import game_sandbox
+
+    home = tmp_path / "home"
+    home.mkdir()
+    runner_root = tmp_path / "nwjs"
+    pkg_dir = runner_root / "packagefiles"
+    pkg_dir.mkdir(parents=True)
+    runner = pkg_dir / "nwjsstart-cicpoffs.sh"
+    runner.write_text("#!/bin/sh\n")
+    runner.chmod(0o755)
+    version = runner_root / "nwjs" / "0.86.0"
+    version.mkdir(parents=True)
+    (version / "nw").write_text("binary")
+    (version / "package.json").write_text("{}")
+    (version / "www").symlink_to("/games/old/www")
+    game = tmp_path / "games" / "Game.exe"
+    game.parent.mkdir()
+    game.touch()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "",
+    )
+    monkeypatch.setattr(
+        game_sandbox,
+        "get_sandbox_status",
+        lambda: {"status": "ready", "path": "/usr/bin/bwrap"},
+    )
+    monkeypatch.setattr(
+        game_sandbox, "runner_overlay_supported", lambda _b, _r: overlay
+    )
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch(
+            str(game), game_id=34, sandbox_enabled=True, launch_mode="rpgmaker_linux"
+        )
+    assert result["success"], result
+    argv = popen.call_args.args[0]
+    triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
+    quads = [argv[i : i + 4] for i in range(len(argv) - 3)]
+    pairs = [argv[i : i + 2] for i in range(len(argv) - 1)]
+    root = str(runner_root)
+    if overlay:
+        assert ["--overlay-src", root, "--tmp-overlay", root] in quads
+        assert ["--ro-bind", root, root] not in triples
+    else:
+        assert ["--ro-bind", root, root] in triples
+        assert ["--tmpfs", str(version)] in pairs
+        assert ["--ro-bind", str(version / "nw"), str(version / "nw")] in triples
+        assert str(version / "www") not in argv
+        assert str(version / "package.json") not in argv
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
+def test_unsandboxed_rpgmaker_runner_argv_unchanged(monkeypatch, tmp_path):
+    from core import game_sandbox
+
+    runner_root = tmp_path / "nwjs"
+    pkg_dir = runner_root / "packagefiles"
+    pkg_dir.mkdir(parents=True)
+    runner = pkg_dir / "nwjsstart-cicpoffs.sh"
+    runner.write_text("#!/bin/sh\n")
+    runner.chmod(0o755)
+    game = tmp_path / "games" / "Game.exe"
+    game.parent.mkdir()
+    game.touch()
+    probe = MagicMock()
+    monkeypatch.setattr(game_sandbox, "runner_overlay_supported", probe)
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "",
+    )
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch(
+            str(game),
+            "%command% --nwjsversion 0.40.0",
+            game_id=35,
+            sandbox_enabled=False,
+            launch_mode="rpgmaker_linux",
+        )
+    assert result["success"], result
+    assert popen.call_args.args[0] == [
+        str(runner),
+        "--gamepath",
+        str(game.parent),
+        "--nwjsversion",
+        "0.40.0",
+    ]
+    probe.assert_not_called()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
+@pytest.mark.parametrize(
+    "launch_args",
+    [
+        "%command% --mounttype cicpoffs",
+        "--mounttype cicpoffs",
+        "%command% --mounttype=cicpoffs",
+    ],
+)
+def test_sandboxed_rpgmaker_runner_refuses_cicpoffs(monkeypatch, tmp_path, launch_args):
+    from core import game_sandbox
+
+    home = tmp_path / "home"
+    home.mkdir()
+    runner = tmp_path / "nwjs" / "packagefiles" / "nwjsstart-cicpoffs.sh"
+    runner.parent.mkdir(parents=True)
+    runner.write_text("#!/bin/sh\n")
+    runner.chmod(0o755)
+    game = tmp_path / "games" / "Game.exe"
+    game.parent.mkdir()
+    game.touch()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "",
+    )
+    monkeypatch.setattr(
+        game_sandbox,
+        "get_sandbox_status",
+        lambda: {"status": "ready", "path": "/usr/bin/bwrap"},
+    )
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch(
+            str(game),
+            launch_args,
+            game_id=36,
+            sandbox_enabled=True,
+            launch_mode="rpgmaker_linux",
+        )
+    assert result["success"] is False
+    assert result["code"] == "rpgmaker_cicpoffs_sandbox"
+    assert "cicpoffs" in str(result["error"]).lower()
+    assert "sandbox" in str(result["error"]).lower()
+    popen.assert_not_called()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
+def test_unsandboxed_rpgmaker_runner_allows_cicpoffs(monkeypatch, tmp_path):
+    runner = tmp_path / "nwjs" / "packagefiles" / "nwjsstart-cicpoffs.sh"
+    runner.parent.mkdir(parents=True)
+    runner.write_text("#!/bin/sh\n")
+    runner.chmod(0o755)
+    game = tmp_path / "games" / "Game.exe"
+    game.parent.mkdir()
+    game.touch()
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "",
+    )
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch(
+            str(game),
+            "%command% --mounttype cicpoffs",
+            game_id=37,
+            sandbox_enabled=False,
+            launch_mode="rpgmaker_linux",
+        )
+    assert result["success"], result
+    assert popen.call_args.args[0] == [
+        str(runner),
+        "--gamepath",
+        str(game.parent),
+        "--mounttype",
+        "cicpoffs",
+    ]
 
 
 @pytest.mark.skipif(

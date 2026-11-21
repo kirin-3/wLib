@@ -12,9 +12,11 @@ from core import game_sandbox as sandbox
 @pytest.fixture(autouse=True)
 def clean_probe(monkeypatch):
     sandbox._probe_cache.clear()
+    sandbox._overlay_probe_cache.clear()
     monkeypatch.setattr(sandbox, "get_setting", lambda _: "")
     yield
     sandbox._probe_cache.clear()
+    sandbox._overlay_probe_cache.clear()
 
 
 def test_linux_missing(monkeypatch):
@@ -1166,3 +1168,357 @@ def test_bwrap_mangohud_binds_follow_home_and_readonly():
         ["true"], game_dir="/games", home="/home/u", sandbox_home="/s", cwd="/games"
     )
     assert not any(arg.startswith("/sys/class") for arg in plain)
+
+
+def test_runner_overlay_supported_success_caches_and_uses_host_command(monkeypatch):
+    monkeypatch.setattr(
+        sandbox, "host_command", lambda cmd: ["flatpak-spawn", "--host", *cmd]
+    )
+    run = Mock(return_value=Mock(returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr(sandbox.subprocess, "run", run)
+
+    assert sandbox.runner_overlay_supported("/usr/bin/bwrap", "/opt/nwjs") is True
+    assert sandbox.runner_overlay_supported("/usr/bin/bwrap", "/opt/nwjs") is True
+    assert run.call_count == 1
+    assert run.call_args.args[0] == [
+        "flatpak-spawn",
+        "--host",
+        "/usr/bin/bwrap",
+        *sandbox.BWRAP_NAMESPACE_OPTIONS,
+        "--ro-bind",
+        "/",
+        "/",
+        "--overlay-src",
+        "/opt/nwjs",
+        "--tmp-overlay",
+        "/opt/nwjs",
+        "true",
+    ]
+    assert run.call_args.kwargs["timeout"] == 10
+
+    # A different root or bwrap path gets its own cache entry.
+    assert sandbox.runner_overlay_supported("/usr/bin/bwrap", "/mnt/nwjs") is True
+    assert sandbox.runner_overlay_supported("/alt/bwrap", "/opt/nwjs") is True
+    assert run.call_count == 3
+
+
+def test_runner_overlay_supported_failure_logs_once_and_caches(monkeypatch, capsys):
+    run = Mock(
+        return_value=Mock(
+            returncode=1, stdout="", stderr="Unknown option --overlay-src\n"
+        )
+    )
+    monkeypatch.setattr(sandbox.subprocess, "run", run)
+
+    assert sandbox.runner_overlay_supported("/usr/bin/bwrap", "/opt/nwjs") is False
+    first_log = capsys.readouterr().out
+    assert "Runner overlay unavailable" in first_log
+    assert "Unknown option --overlay-src" in first_log
+
+    assert sandbox.runner_overlay_supported("/usr/bin/bwrap", "/opt/nwjs") is False
+    assert run.call_count == 1
+    assert capsys.readouterr().out == ""
+
+
+def test_runner_overlay_supported_clears_on_sandbox_recheck(monkeypatch):
+    monkeypatch.setattr(sandbox, "host_which", lambda _: "/usr/bin/bwrap")
+    overlay_results = iter(
+        [
+            Mock(returncode=1, stdout="", stderr="overlay failed"),
+            Mock(returncode=0, stdout="", stderr=""),
+        ]
+    )
+
+    def fake_run(cmd, **_kwargs):
+        if "--overlay-src" in cmd:
+            return next(overlay_results)
+        return Mock(returncode=0, stdout="bubblewrap 0.13.1", stderr="")
+
+    run = Mock(side_effect=fake_run)
+    monkeypatch.setattr(sandbox.subprocess, "run", run)
+
+    assert sandbox.runner_overlay_supported("/usr/bin/bwrap", "/opt/nwjs") is False
+    assert sandbox.runner_overlay_supported("/usr/bin/bwrap", "/opt/nwjs") is False
+    assert sum(1 for call in run.call_args_list if "--overlay-src" in call.args[0]) == 1
+
+    sandbox.get_sandbox_status(platform="linux", recheck=True)
+    assert sandbox.runner_overlay_supported("/usr/bin/bwrap", "/opt/nwjs") is True
+    assert sum(1 for call in run.call_args_list if "--overlay-src" in call.args[0]) == 2
+
+
+def test_runner_root_mounts_overlay(monkeypatch, tmp_path):
+    root = str(tmp_path / "nwjs")
+    monkeypatch.setattr(sandbox, "runner_overlay_supported", lambda _b, _r: True)
+    assert sandbox.runner_root_mounts(root, bwrap="/usr/bin/bwrap") == [
+        "--overlay-src",
+        root,
+        "--tmp-overlay",
+        root,
+    ]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need Linux")
+def test_runner_root_mounts_fallback(monkeypatch, tmp_path):
+    root = tmp_path / "nwjs"
+    v1 = root / "nwjs" / "0.40.0"
+    v2 = root / "nwjs" / "0.86.0"
+    (v1 / "locales").mkdir(parents=True)
+    (v1 / "nw").write_text("binary")
+    (v1 / "package.json").write_text("{}")
+    (v1 / "www").symlink_to("/games/other/www")
+    (v1 / "Game.exe").symlink_to("/games/other/Game.exe")
+    v2.mkdir(parents=True)
+    (v2 / "nw").write_text("binary")
+    (v2 / "www").mkdir()  # even a real directory named www is left out
+    (root / "nwjs" / "README.txt").write_text("ignore non-dir")
+    (root / "nwjs" / "latest").symlink_to(v2)
+
+    monkeypatch.setattr(sandbox, "runner_overlay_supported", lambda _b, _r: False)
+    args = sandbox.runner_root_mounts(str(root), bwrap="/usr/bin/bwrap")
+    assert args == [
+        "--ro-bind",
+        str(root),
+        str(root),
+        "--tmpfs",
+        str(v1),
+        "--ro-bind",
+        str(v1 / "locales"),
+        str(v1 / "locales"),
+        "--ro-bind",
+        str(v1 / "nw"),
+        str(v1 / "nw"),
+        "--tmpfs",
+        str(v2),
+        "--ro-bind",
+        str(v2 / "nw"),
+        str(v2 / "nw"),
+    ]
+
+
+def test_runner_root_mounts_fallback_without_nwjs_dir(monkeypatch, tmp_path):
+    root = tmp_path / "runner"
+    root.mkdir()
+    monkeypatch.setattr(sandbox, "runner_overlay_supported", lambda _b, _r: False)
+    assert sandbox.runner_root_mounts(str(root), bwrap="/usr/bin/bwrap") == [
+        "--ro-bind",
+        str(root),
+        str(root),
+    ]
+
+
+def test_bwrap_runner_root_follows_readonly_paths(monkeypatch, tmp_path):
+    runner = tmp_path / "nwjs"
+    version = runner / "nwjs" / "0.86.0"
+    version.mkdir(parents=True)
+    (version / "nw").write_text("bin")
+    home = str(tmp_path / "home")
+    game_dir = str(tmp_path / "games")
+
+    monkeypatch.setattr(sandbox, "runner_overlay_supported", lambda _b, _r: True)
+    argv = sandbox.build_bwrap_argv(
+        ["true"],
+        game_dir=game_dir,
+        home=home,
+        sandbox_home=str(tmp_path / "sandbox"),
+        cwd=game_dir,
+        readonly_paths=("/extra-ro",),
+        runner_root=str(runner),
+    )
+    triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
+    quads = [argv[i : i + 4] for i in range(len(argv) - 3)]
+    ro_idx = triples.index(["--ro-bind", "/extra-ro", "/extra-ro"])
+    overlay_idx = quads.index(
+        ["--overlay-src", str(runner), "--tmp-overlay", str(runner)]
+    )
+    game_idx = triples.index(["--bind", game_dir, game_dir])
+    assert ro_idx < overlay_idx < game_idx
+
+    monkeypatch.setattr(sandbox, "runner_overlay_supported", lambda _b, _r: False)
+    fallback_argv = sandbox.build_bwrap_argv(
+        ["true"],
+        game_dir=game_dir,
+        home=home,
+        sandbox_home=str(tmp_path / "sandbox"),
+        cwd=game_dir,
+        readonly_paths=("/extra-ro",),
+        runner_root=str(runner),
+    )
+    fb_triples = [fallback_argv[i : i + 3] for i in range(len(fallback_argv) - 2)]
+    fb_pairs = [fallback_argv[i : i + 2] for i in range(len(fallback_argv) - 1)]
+    fb_ro = fb_triples.index(["--ro-bind", "/extra-ro", "/extra-ro"])
+    fb_root = fb_triples.index(["--ro-bind", str(runner), str(runner)])
+    fb_tmpfs = fb_pairs.index(["--tmpfs", str(version)])
+    fb_nw = fb_triples.index(["--ro-bind", str(version / "nw"), str(version / "nw")])
+    fb_game = fb_triples.index(["--bind", game_dir, game_dir])
+    assert fb_ro < fb_root < fb_tmpfs < fb_nw < fb_game
+
+
+@pytest.mark.parametrize("bad_root", ["/home/u", "/home", "/"])
+def test_bwrap_runner_root_refuses_home_exposure(monkeypatch, bad_root):
+    probe = Mock()
+    monkeypatch.setattr(sandbox, "runner_overlay_supported", probe)
+    with pytest.raises(ValueError, match="whole home folder"):
+        _ = sandbox.build_bwrap_argv(
+            ["true"],
+            game_dir="/games",
+            home="/home/u",
+            sandbox_home="/sandbox",
+            cwd="/games",
+            runner_root=bad_root,
+        )
+    probe.assert_not_called()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
+@pytest.mark.parametrize("use_overlay", [True, False])
+def test_bwrap_runner_root_integration(monkeypatch, tmp_path, use_overlay):
+    import shlex
+    import shutil
+
+    bwrap = shutil.which("bwrap")
+    unshare = shutil.which("unshare")
+    if not bwrap or not unshare:
+        pytest.skip("bubblewrap/user namespace tools unavailable")
+    probe = subprocess.run([unshare, "-Ur", "true"], capture_output=True)
+    if probe.returncode:
+        pytest.skip("unprivileged user namespaces unavailable")
+
+    runner_root = tmp_path / "runner"
+    version_dir = runner_root / "nwjs" / "0.86.0"
+    (version_dir / "locales").mkdir(parents=True)
+    (version_dir / "locales" / "en-US.pak").write_text("pak-ok")
+    nw = version_dir / "nw"
+    nw.write_text(
+        "#!/bin/sh\n"
+        "set -e\n"
+        'printf "%s|%s|%s|%s\\n" '
+        '"$(cat www/index.html)" '
+        '"$(cat package.json)" '
+        '"$(cat root.txt)" '
+        '"$(cat locales/en-US.pak)"\n'
+    )
+    nw.chmod(0o755)
+    (version_dir / "www").symlink_to("/nonexistent/previous-game/www")
+    (version_dir / "package.json").write_text('{"main":"old"}')
+    (version_dir / "stale-link").symlink_to("/nonexistent/stale")
+
+    game = tmp_path / "game"
+    (game / "www").mkdir(parents=True)
+    (game / "www" / "index.html").write_text("selected-game")
+    (game / "root.txt").write_text("root-ok")
+    sandbox_home = tmp_path / "home"
+    sandbox_home.mkdir()
+
+    if use_overlay:
+        if not sandbox.runner_overlay_supported(bwrap, str(runner_root)):
+            pytest.skip("bubblewrap overlay unavailable on this host")
+    else:
+        monkeypatch.setattr(sandbox, "runner_overlay_supported", lambda _b, _r: False)
+
+    script = (
+        f"set -e; cd {shlex.quote(str(version_dir))}; "
+        'for f in *; do [ -L "$f" ] && rm -f "$f"; done; '
+        f"rm -rf www && ln -s {shlex.quote(str(game / 'www'))} www; "
+        f"ln -s {shlex.quote(str(game / 'root.txt'))} root.txt; "
+        'printf \'{"main":"www/index.html"}\' > package.json; '
+        "./nw"
+    )
+    argv = sandbox.build_bwrap_argv(
+        ["sh", "-c", script],
+        game_dir=str(game),
+        home=os.path.expanduser("~"),
+        sandbox_home=str(sandbox_home),
+        cwd=str(game),
+        runner_root=str(runner_root),
+        bwrap=bwrap,
+    )
+    if use_overlay:
+        assert "--tmp-overlay" in argv
+    else:
+        assert "--tmp-overlay" not in argv
+        assert "--tmpfs" in argv
+
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert (
+        result.stdout.strip()
+        == 'selected-game|{"main":"www/index.html"}|root-ok|pak-ok'
+    )
+
+    # Host runner tree must be completely unchanged.
+    assert (version_dir / "www").is_symlink()
+    assert os.readlink(version_dir / "www") == "/nonexistent/previous-game/www"
+    assert (version_dir / "package.json").read_text() == '{"main":"old"}'
+    assert (version_dir / "stale-link").is_symlink()
+    assert os.readlink(version_dir / "stale-link") == "/nonexistent/stale"
+    assert not (version_dir / "root.txt").exists()
+    assert not (version_dir / "root.txt").is_symlink()
+
+
+def _runner_versions(tmp_path, times):
+    root = tmp_path / "runner"
+    for name, mtime in times.items():
+        folder = root / "nwjs" / name
+        folder.mkdir(parents=True)
+        os.utime(folder, ns=(mtime, mtime))
+    return root
+
+
+def test_runner_fallback_nwjs_path_picks_newest_like_ls_t(tmp_path):
+    root = _runner_versions(
+        tmp_path, {"nwjs-v0.112.0": 1_000, "nwjs-v0.99.0": 2_000, "sdk": 500}
+    )
+    (root / "nwjs" / "link").symlink_to(root / "nwjs" / "sdk")
+    os.utime(root / "nwjs" / "link", ns=(9_000, 9_000), follow_symlinks=False)
+
+    assert sandbox.runner_fallback_nwjs_path(str(root), ["runner"], {}) == str(
+        root / "nwjs" / "nwjs-v0.99.0"
+    )
+
+
+def test_runner_fallback_nwjs_path_breaks_ties_by_name(tmp_path):
+    root = _runner_versions(tmp_path, {"b": 1_000, "a": 1_000})
+
+    assert sandbox.runner_fallback_nwjs_path(str(root), [], {}) == str(
+        root / "nwjs" / "a"
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "environment"),
+    [
+        (["runner", "--nwjsversion", "0.40.0"], {}),
+        (["runner", "--chooselatestnwjs"], {}),
+        (["runner", "--nwjspath", "/x"], {}),
+        (["runner"], {"NWJSPATH": "/user/choice"}),
+    ],
+)
+def test_runner_fallback_nwjs_path_respects_user_choice(tmp_path, command, environment):
+    root = _runner_versions(tmp_path, {"a": 1_000})
+
+    assert sandbox.runner_fallback_nwjs_path(str(root), command, environment) == ""
+
+
+def test_runner_fallback_nwjs_path_without_versions(tmp_path):
+    assert sandbox.runner_fallback_nwjs_path(str(tmp_path), [], {}) == ""
+
+
+@pytest.mark.parametrize("overlay", [True, False])
+def test_bwrap_runner_root_pins_nwjs_folder_only_in_fallback(
+    monkeypatch, tmp_path, overlay
+):
+    root = _runner_versions(tmp_path, {"old": 1_000, "new": 2_000})
+    monkeypatch.setattr(sandbox, "runner_overlay_supported", lambda _b, _r: overlay)
+
+    argv = sandbox.build_bwrap_argv(
+        ["runner", "--gamepath", "/games"],
+        game_dir="/games",
+        home=str(tmp_path / "home"),
+        sandbox_home=str(tmp_path / "sandbox"),
+        cwd="/games",
+        runner_root=str(root),
+    )
+
+    pinned = ["--setenv", "NWJSPATH", str(root / "nwjs" / "new")]
+    triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
+    assert (pinned in triples) is not overlay
