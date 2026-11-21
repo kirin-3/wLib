@@ -92,6 +92,7 @@ def _run_ruby(script: str, save_path: Path) -> dict[str, object]:
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     return cast(dict[str, object], json.loads(proc.stdout))
 
