@@ -44,7 +44,7 @@ Backend changes are validated through `.github/workflows/python-checks.yml`, whi
 - The workflow runs on pull requests, pushes to `master`, and manual dispatches on Ubuntu and Windows runners.
 - It targets Python 3.12, matching the supported backend development toolchain and the GitHub Actions build environment.
 - The Ubuntu job runs `bash scripts/check-python-clean.sh`, which creates a fresh virtual environment from `uv.lock` (`uv sync --locked`).
-- The clean check executes `ruff`, `basedpyright`, `scripts/smoke_backend.py`, and the full `pytest` suite.
+- The clean check executes `ruff check`, `ruff format --check`, `basedpyright`, `scripts/smoke_backend.py`, and the full `pytest` suite.
 - The Windows job creates `.venv` with `uv sync --locked` and runs those tools directly in PowerShell; the Bash wrappers assume Linux virtual-environment paths.
 - The Windows job also runs frontend unit tests, typecheck, and production build with Python 3.12 and Node 22. For local development, use Node 22.12+ to meet both Vite and unit-test requirements.
 

@@ -39,6 +39,9 @@ echo "==> Python version"
 echo "==> ruff"
 "$RUFF_BIN" check .
 
+echo "==> ruff format"
+"$RUFF_BIN" format --check .
+
 echo "==> basedpyright"
 # pyrightconfig expects <venvPath>/.venv; the clean check builds it in a temp dir.
 "$BASEDPYRIGHT_BIN" ${BASEDPYRIGHT_VENV_PATH:+--venvpath "$BASEDPYRIGHT_VENV_PATH"}

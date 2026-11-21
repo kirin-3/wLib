@@ -104,7 +104,7 @@ For frontend-only work, run `npm run dev` in `ui/` and open it in a normal brows
 We maintain a suite of automated tests and use strict lint and type-checking rules. **Please run these before submitting a PR.**
 
 ### Python Code
-We use `pytest` for testing, `basedpyright` for backend type checking, and `ruff` for linting (`ruff check`). The project does not use a code formatter, so do not run `black` or `ruff format` on the code: they would reformat hundreds of unrelated files. The backend currently keeps project-wide checking at `recommended` and opts the main runtime files into `strict`, so new backend changes should keep both the strict subset and the empty baseline green. `ruff` is configured repo-wide for tracked Python files, including helper scripts and tests.
+We use `pytest` for testing, `basedpyright` for backend type checking, and `ruff` for linting (`ruff check`) and formatting (`ruff format`). Run `ruff format .` before you commit Python changes; CI fails when `ruff format --check .` finds a file to change. Do not use `black` or another formatter. The backend currently keeps project-wide checking at `recommended` and opts the main runtime files into `strict`, so new backend changes should keep both the strict subset and the empty baseline green. `ruff` is configured repo-wide for tracked Python files, including helper scripts and tests.
 ```bash
 # Run all tests
 pytest
@@ -117,9 +117,12 @@ basedpyright
 
 # Run repo-wide Python linting
 ruff check .
+
+# Format Python code (CI runs `ruff format --check .`)
+ruff format .
 ```
 
-These tool commands work in Bash and PowerShell with an active `.venv`. For the smoke check, use the platform instructions below. Linux contributors can run the whole suite with `bash scripts/check-python.sh`, or recreate a clean Python 3.12 environment with `bash scripts/check-python-clean.sh`. Those wrappers use Linux virtual-environment paths; on Windows, run `ruff check .`, `basedpyright`, `pytest`, and the isolated smoke check directly.
+These tool commands work in Bash and PowerShell with an active `.venv`. For the smoke check, use the platform instructions below. Linux contributors can run the whole suite with `bash scripts/check-python.sh`, or recreate a clean Python 3.12 environment with `bash scripts/check-python-clean.sh`. Those wrappers use Linux virtual-environment paths; on Windows, run `ruff check .`, `ruff format --check .`, `basedpyright`, `pytest`, and the isolated smoke check directly.
 
 ### Smoke Backend Test
 

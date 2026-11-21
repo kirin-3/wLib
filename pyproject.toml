@@ -61,6 +61,11 @@ exclude = [
 ]
 force-exclude = true
 
+[tool.ruff.format]
+# Ruff's default style (double quotes, 88 columns). CI runs
+# `ruff format --check .`; repo files must stay LF.
+line-ending = "lf"
+
 [tool.ruff.lint]
 # Whole rule groups are selected. Ruff is pinned in uv.lock, so
 # new rules in these groups arrive only with a deliberate Ruff upgrade, and that

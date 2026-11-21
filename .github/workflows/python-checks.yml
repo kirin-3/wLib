@@ -128,6 +128,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           . .venv\Scripts\Activate.ps1
           ruff check .
+          ruff format --check .
           basedpyright
           pytest
           python scripts/smoke_backend.py
