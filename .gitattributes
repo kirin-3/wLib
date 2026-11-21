@@ -1,0 +1,4 @@
+# Keep every text file LF on all platforms. CI runs `ruff format --check`
+# with line-ending = "lf", and a Windows checkout with core.autocrlf would
+# otherwise turn files into CRLF.
+* text=auto eol=lf
