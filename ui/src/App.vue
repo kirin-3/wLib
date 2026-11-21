@@ -13,6 +13,7 @@ import { updateCheckRunning } from "./composables/useUpdateCheckState";
 import { dispatchController } from "./utils/controllerActions";
 import { useRoute, useRouter } from "vue-router";
 import {
+  IconBrandDiscord,
   IconBrandGithub,
   IconCloud,
   IconDatabaseExport,
@@ -764,6 +765,18 @@ onUnmounted(() => {
             aria-label="View Source on GitHub"
           >
             <IconBrandGithub :size="18" aria-hidden="true" />
+          </a>
+
+          <a
+            v-if="!navCollapsed"
+            href="https://thekirin.net/discord"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="nav-link footer-icon flex items-center justify-center rounded-lg p-2"
+            title="Join the Discord"
+            aria-label="Join the Discord"
+          >
+            <IconBrandDiscord :size="18" aria-hidden="true" />
           </a>
 
           <a
