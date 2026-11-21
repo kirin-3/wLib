@@ -7,6 +7,7 @@ import hashlib
 import io
 import os
 import stat
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -22,6 +23,11 @@ from core.rpgmaker_runner import (
     resolve_auto_runtime,
     runner_engine,
     runner_install_dir,
+)
+
+# The runner is Linux-only. These tests use HOME, POSIX paths and exec bits.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32", reason="RPGMaker Linux runner is Linux-only"
 )
 
 

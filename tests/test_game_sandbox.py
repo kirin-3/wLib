@@ -1464,6 +1464,7 @@ def _runner_versions(tmp_path, times):
     return root
 
 
+@pytest.mark.skipif(os.name == "nt", reason="needs POSIX symlink times")
 def test_runner_fallback_nwjs_path_picks_newest_like_ls_t(tmp_path):
     root = _runner_versions(
         tmp_path, {"nwjs-v0.112.0": 1_000, "nwjs-v0.99.0": 2_000, "sdk": 500}
