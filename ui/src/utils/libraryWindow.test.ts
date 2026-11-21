@@ -6,6 +6,7 @@ import {
   INITIAL_WINDOW,
   measuredPitch,
   MIN_BUFFER_ROWS,
+  nextMetrics,
   renderWindow,
   sameWindow,
   steadyMetrics,
@@ -125,4 +126,49 @@ test("the pitch is measured from the first card of the first and last row", () =
   assert.equal(measuredPitch(10, 10, 1, 300, 16), 316);
   assert.equal(measuredPitch(0, 0, 0, 300, 16), 0);
   assert.equal(measuredPitch(100, 196, 3, 48, 0), 48);
+});
+
+test("a new pitch is taken only after a layout change or a column change", () => {
+  const old = { columns: 6, pitch: 300 };
+  assert.equal(nextMetrics(old, { columns: 6, pitch: 340 }, false), old);
+  assert.deepEqual(nextMetrics(old, { columns: 6, pitch: 340 }, true), { columns: 6, pitch: 340 });
+  assert.deepEqual(nextMetrics(old, { columns: 5, pitch: 340 }, false), { columns: 5, pitch: 340 });
+  assert.deepEqual(nextMetrics(null, old, false), old);
+});
+
+// Rows of different heights, like grid cards with and without a developer line.
+// Each pass measures the pitch from the rendered rows, as LibraryView does.
+const settlePasses = (heights: number[], view: { top: number; height: number }, update: typeof nextMetrics) => {
+  const gap = 16;
+  const columns = 3;
+  const total = heights.length * columns;
+  const tops = heights.map((_, row) => heights.slice(0, row).reduce((sum, height) => sum + height + gap, 0));
+  let metrics: ReturnType<typeof nextMetrics> | null = null;
+  let shown = renderWindow(total, metrics, view);
+  let remeasure = true;
+  for (let pass = 1; pass <= 50; pass += 1) {
+    const firstRow = shown.start / columns;
+    const rows = Math.ceil((shown.end - shown.start) / columns);
+    const lastRow = firstRow + rows - 1;
+    const pitch = measuredPitch(tops[firstRow] ?? 0, tops[lastRow] ?? 0, rows, heights[firstRow] ?? 0, gap);
+    metrics = update(metrics, { columns, pitch }, remeasure);
+    remeasure = false;
+    const next = renderWindow(total, metrics, view);
+    if (sameWindow(next, shown)) return pass;
+    shown = next;
+  }
+  return Infinity;
+};
+
+test("rows of different heights do not make the window move without end", () => {
+  const heights = Array.from({ length: 200 }, (_, row) => [268, 276, 300, 306, 308][(row * 7) % 5] ?? 300);
+  const alwaysRemeasure: typeof nextMetrics = (previous, measured) => steadyMetrics(previous, measured);
+  let loopedBefore = false;
+  for (let top = 0; top < 40000; top += 150) {
+    const view = { top, height: 900 };
+    assert.ok(settlePasses(heights, view, nextMetrics) <= 2, `top ${top}`);
+    if (settlePasses(heights, view, alwaysRemeasure) === Infinity) loopedBefore = true;
+  }
+  // The old rule (a new pitch after every window move) loops for some of these positions.
+  assert.ok(loopedBefore);
 });

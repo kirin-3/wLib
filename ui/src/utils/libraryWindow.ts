@@ -101,6 +101,16 @@ export const sameWindow = (a: RenderWindow, b: RenderWindow): boolean =>
 export const steadyMetrics = (previous: WindowMetrics | null, next: WindowMetrics): WindowMetrics =>
   previous && previous.columns === next.columns && Math.abs(previous.pitch - next.pitch) <= 1 ? previous : next;
 
+/**
+ * The metrics after a measurement. Grid cards differ in height, so the pitch
+ * measured from the rendered rows depends on which rows the window holds. A
+ * new pitch is taken only when `remeasure` is set (the layout changed) or the
+ * column count changed. If a window move could change the pitch, the new pitch
+ * could move the window back, and the two would trigger each other without end.
+ */
+export const nextMetrics = (previous: WindowMetrics | null, measured: WindowMetrics, remeasure: boolean): WindowMetrics =>
+  !previous || remeasure || previous.columns !== measured.columns ? steadyMetrics(previous, measured) : previous;
+
 /** Column count from a computed `grid-template-columns` value ("220px 220px …"). */
 export const gridColumnCount = (template: string): number => {
   const tracks = template.trim() === "none" ? [] : template.trim().split(/\s+/).filter(Boolean);

@@ -18,9 +18,9 @@ import {
   FOCUS_HOLD_MS,
   gridColumnCount,
   measuredPitch,
+  nextMetrics,
   renderWindow,
   sameWindow,
-  steadyMetrics,
   type RenderWindow,
   type WindowMetrics,
   type WindowView,
@@ -805,6 +805,9 @@ const windowScroller = () => (layoutMode.value === "list" ? listScroller.value :
 // The grid div or the list tbody, whichever layout is shown.
 const windowContainer = ref<HTMLElement | null>(null);
 let windowMetrics: WindowMetrics | null = null;
+// Set when the layout changes; only then is the pitch taken again (see nextMetrics).
+let pitchStale = true;
+let measuredWidth = -1;
 const shownWindow = shallowRef<RenderWindow>(renderWindow(0, null, { top: 0, height: 0 }));
 let windowView: WindowView = { top: 0, height: 0 };
 // The focused card's game: its rows stay in the page while focus is near the screen.
@@ -824,6 +827,10 @@ const measureWindow = () => {
     updateWindow();
     return;
   }
+  if (container.clientWidth !== measuredWidth) {
+    measuredWidth = container.clientWidth;
+    pitchStale = true;
+  }
   const style = getComputedStyle(container);
   const columns = layoutMode.value === "list" ? 1 : gridColumnCount(style.gridTemplateColumns);
   const items = container.querySelectorAll<HTMLElement>(":scope > [data-game-id]");
@@ -835,7 +842,10 @@ const measureWindow = () => {
     const rows = Math.ceil(items.length / columns);
     const lastRowTop = items[(rows - 1) * columns]?.getBoundingClientRect().top ?? first.top;
     const pitch = measuredPitch(toCssPx(first.top), toCssPx(lastRowTop), rows, toCssPx(first.height), Number.parseFloat(style.rowGap) || 0);
-    if (pitch > 0) windowMetrics = steadyMetrics(windowMetrics, { columns, pitch });
+    if (pitch > 0) {
+      windowMetrics = nextMetrics(windowMetrics, { columns, pitch }, pitchStale);
+      pitchStale = false;
+    }
   }
   const origin = toCssPx(container.getBoundingClientRect().top - scroller.getBoundingClientRect().top) - scroller.clientTop + scroller.scrollTop;
   windowView = { top: scroller.scrollTop - origin, height: scroller.clientHeight };
@@ -846,8 +856,13 @@ const renderedGames = computed(() => {
   const list = filteredGames.value;
   return start === 0 && end >= list.length ? list : list.slice(start, end);
 });
-// Measure again after the shown cards change: the pitch and the columns come from them.
-watch([filteredGames, layoutMode, cardSize, shownWindow], measureWindow, { flush: "post" });
+// Measure again after the shown cards change: the columns and the position come
+// from them. The pitch is taken again only after a layout change.
+watch([filteredGames, layoutMode, cardSize], () => {
+  pitchStale = true;
+  measureWindow();
+}, { flush: "post" });
+watch(shownWindow, measureWindow, { flush: "post" });
 let windowResize: ResizeObserver | null = null;
 watch([libraryScroller, listScroller, windowContainer], (elements) => {
   windowResize?.disconnect();
