@@ -80,6 +80,58 @@ def test_packaged_launcher_resolves_data_dir_like_python(
 
 
 @pytest.mark.skipif(sys.platform == "win32" or BASH is None, reason="bash launcher")
+def test_wlib_sh_installs_the_pyproject_dependencies(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    shutil.copy2(REPOSITORY_ROOT / "wlib.sh", project / "wlib.sh")
+    shutil.copy2(REPOSITORY_ROOT / "pyproject.toml", project / "pyproject.toml")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("dirname", "mkdir"):
+        executable = shutil.which(tool)
+        assert executable is not None
+        (bin_dir / tool).symlink_to(executable)
+    (bin_dir / "python3").symlink_to(sys.executable)
+
+    # An existing venv whose pip records the requirements and then fails, so
+    # the launcher stops before it builds the frontend or starts the app.
+    venv_bin = project / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "activate").write_text(f'PATH="{venv_bin}:$PATH"\n', encoding="utf-8")
+    (venv_bin / "python").symlink_to(sys.executable)
+    fake_pip = venv_bin / "pip"
+    fake_pip.write_text(
+        "#!/bin/sh\n"
+        'while [ "$#" -gt 0 ]; do\n'
+        f'  if [ "$1" = -r ]; then "{sys.executable}" -c '
+        f"'import shutil, sys; shutil.copy(sys.argv[1], sys.argv[2])' \"$2\" "
+        f'"{project / "seen-requirements.txt"}"; exit 1; fi\n'
+        "  shift\n"
+        "done\n",
+        encoding="utf-8",
+    )
+    fake_pip.chmod(0o755)
+
+    result = subprocess.run(
+        [BASH, str(project / "wlib.sh")],
+        cwd=project,
+        env={"PATH": str(bin_dir), "HOME": str(tmp_path / "home")},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "Failed to install Python dependencies" in result.stdout
+    seen = (project / "seen-requirements.txt").read_text(encoding="utf-8").splitlines()
+    assert "PyQt6==6.11.0" in seen
+    assert "Pillow>=10.0.0; sys_platform == 'win32'" in seen
+    assert not any(line.startswith(("basedpyright", "pytest", "ruff")) for line in seen)
+
+
+@pytest.mark.skipif(sys.platform == "win32" or BASH is None, reason="bash launcher")
 def test_wlib_sh_rejects_python_older_than_312(tmp_path):
     project = tmp_path / "project"
     project.mkdir()

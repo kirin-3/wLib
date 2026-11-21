@@ -17,7 +17,7 @@ WINDOWS_PACKAGING = REPOSITORY_ROOT / "packaging" / "windows"
 
 def test_windows_resource_and_build_inputs_exist():
     required = (
-        REPOSITORY_ROOT / "requirements-windows.txt",
+        REPOSITORY_ROOT / "uv.lock",
         WINDOWS_PACKAGING / "wlib.spec",
         WINDOWS_PACKAGING / "wLib.wxs",
         WINDOWS_PACKAGING / "wlib.ico",

@@ -3,6 +3,7 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -58,31 +59,25 @@ def test_release_version_check(tmp_path):
     assert check.problems("v1.0.1", root) == []
 
 
-def _pins(path: Path) -> dict[str, str]:
-    pins: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.split("#", 1)[0].strip().rstrip("\\").strip()
-        if "==" in line and not line.startswith("-"):
-            name, version = line.split("==", 1)
-            pins[name.strip().lower().replace("_", "-")] = version.strip()
-    return pins
+def _name(text: str) -> str:
+    return text.strip().lower().replace("_", "-").replace(".", "-")
 
 
-@pytest.mark.parametrize(
-    "lock",
-    [
-        "requirements.lock",
-        "requirements-dev.lock",
-        "requirements-windows.lock",
-        "requirements-dev-windows.lock",
-    ],
-)
-def test_lock_files_keep_the_exact_pins(lock):
-    # Bumping a pin in requirements.txt without regenerating the locks (see
+def test_lock_file_keeps_the_exact_pins():
+    # Bumping a pin in pyproject.toml without running `uv lock` (see
     # docs/build.md) would build releases with the old version.
-    wanted = _pins(ROOT / "requirements.txt")
-    locked = _pins(ROOT / lock)
-    assert wanted, "requirements.txt has no exact pins"
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    wanted: dict[str, str] = {}
+    for requirement in project["project"]["dependencies"]:
+        specifier = requirement.split(";", 1)[0]
+        if "==" in specifier:
+            name, version = specifier.split("==", 1)
+            wanted[_name(name)] = version.strip()
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked = {_name(package["name"]): package.get("version") for package in lock["package"]}
+    assert wanted, "pyproject.toml has no exact pins"
     for name, version in wanted.items():
-        assert locked.get(name) == version, f"{lock}: {name} {locked.get(name)} != {version}"
-    assert all("--hash=" in text for text in [(ROOT / lock).read_text(encoding="utf-8")])
+        assert locked.get(name) == version, f"uv.lock: {name} {locked.get(name)} != {version}"
+    for package in lock["package"]:
+        for wheel in package.get("wheels", []):
+            assert wheel.get("hash", "").startswith("sha256:"), package["name"]

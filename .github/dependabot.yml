@@ -1,10 +1,9 @@
 # Low-noise Dependabot setup: at most one npm PR and one Actions PR a month.
 #
-# Python is not listed on purpose. The hashed `requirements*.lock` files come
-# from `uv pip compile` (see docs/build.md), and Dependabot cannot regenerate
-# them. Its PRs would bump `requirements*.txt` alone, break the lock check in
-# tests/test_release_version.py, and could split the four PyQt6 pins that must
-# move together. Refresh the Python locks by hand instead.
+# Python (uv) is not listed on purpose. Dependabot's uv support does not update
+# uv.lock reliably, always raises the lower bounds in pyproject.toml, and could
+# split the four PyQt6 pins that must move together. Refresh uv.lock by hand
+# instead (see docs/build.md).
 version: 2
 
 updates:

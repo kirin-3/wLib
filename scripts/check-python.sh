@@ -7,7 +7,6 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
-PIP_BIN="${PIP_BIN:-pip}"
 BASEDPYRIGHT_BIN="${BASEDPYRIGHT_BIN:-basedpyright}"
 RUFF_BIN="${RUFF_BIN:-ruff}"
 PYTEST_BIN="${PYTEST_BIN:-pytest}"
@@ -30,16 +29,12 @@ require_tool() {
 }
 
 require_tool "$PYTHON_BIN"
-require_tool "$PIP_BIN"
 require_tool "$BASEDPYRIGHT_BIN"
 require_tool "$RUFF_BIN"
 require_tool "$PYTEST_BIN"
 
 echo "==> Python version"
 "$PYTHON_BIN" --version
-
-echo "==> Installed pip"
-"$PIP_BIN" --version
 
 echo "==> ruff"
 "$RUFF_BIN" check .

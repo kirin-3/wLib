@@ -1,3 +1,51 @@
+# The dependencies of wLib. uv.lock pins every package with hashes for Linux
+# x86_64 and Windows x64; CI and release builds install it with
+# `uv sync --locked`. After a change here, run `uv lock` (see docs/build.md).
+[project]
+name = "wlib"
+# Not the app version: APP_VERSION in core/app_version.py is the single source.
+version = "0.0.0"
+# CI and releases use 3.12 (.python-version); wlib.sh accepts a newer system Python.
+requires-python = ">=3.12"
+dependencies = [
+  "pywebview[qt]>=5.0",
+  # PyQt6-WebEngine ships its Qt binaries separately from PyQt6 and lags behind
+  # its releases. Unpinned, the resolver pairs a newer Qt core with an older
+  # WebEngine and QtWebEngineCore fails to load ("procedure could not be found"
+  # on Windows). Bump all four together, to versions built for the same Qt
+  # release.
+  "PyQt6==6.11.0",
+  "PyQt6-Qt6==6.11.2",
+  "PyQt6-WebEngine==6.11.0",
+  "PyQt6-WebEngine-Qt6==6.11.2",
+  "libtorrent==2.1.1",
+  "pyinstaller>=6.0.0",
+  "certifi>=2024.0.0",
+  "cryptography>=44.0.0",
+  "Pillow>=10.0.0; sys_platform == 'win32'",
+]
+
+[dependency-groups]
+dev = [
+  "basedpyright>=1.31.3",
+  "pytest",
+  "ruff",
+]
+
+[tool.uv]
+# wLib is an app, not an installable package.
+package = false
+# Lock only the platforms that wLib ships for, and fail the lock when a package
+# has no wheel for one of them.
+environments = [
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+required-environments = [
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 88
@@ -14,7 +62,7 @@ exclude = [
 force-exclude = true
 
 [tool.ruff.lint]
-# Whole rule groups are selected. Ruff is pinned in requirements-dev.lock, so
+# Whole rule groups are selected. Ruff is pinned in uv.lock, so
 # new rules in these groups arrive only with a deliberate Ruff upgrade, and that
 # upgrade must fix any new findings.
 select = ["E4", "E7", "E9", "F", "B", "UP"]

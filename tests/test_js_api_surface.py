@@ -30,7 +30,7 @@ def _isolated_data(tmp_path, monkeypatch):
 def walk(obj: object) -> dict[str, list[str]]:
     """Copy of ``get_functions`` in PyWebView 6.2.1 ``webview/util.py`` (inside ``inject_pywebview``).
 
-    Check this copy when the ``pywebview`` version in ``requirements*.txt`` changes.
+    Check this copy when the ``pywebview`` version in ``uv.lock`` changes.
     """
     seen: list[int] = []
     functions: dict[str, list[str]] = {}

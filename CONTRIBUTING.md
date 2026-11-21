@@ -41,24 +41,24 @@ On Windows, Qt selects its native platform and renderer. Diagnostics are written
 ### Setup
 
 #### 1. Python Backend
-Set up a `.venv` virtual environment with Python 3.12 and install the development dependencies:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/). It creates a `.venv` virtual environment with Python 3.12 (from `.python-version`; uv downloads it when it is missing) and installs the locked dependencies, including the development tools:
 
 **Linux:**
 
 ```bash
-python3.12 -m venv .venv
+uv sync
 source .venv/bin/activate
-python -m pip install -r requirements-dev.txt
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-py -3.12 -m venv .venv
+uv sync
 .\.venv\Scripts\Activate.ps1
 python --version  # should report Python 3.12.x
-python -m pip install -r requirements-dev.txt -r requirements-windows.txt
 ```
+
+To add or update a dependency, edit `pyproject.toml` and run `uv lock`; see [Locked dependencies](docs/build.md#locked-dependencies).
 
 If PowerShell blocks `Activate.ps1`, call `.\.venv\Scripts\python.exe` and the other tools in `.venv\Scripts\` directly instead of activating the environment.
 
@@ -101,10 +101,10 @@ For frontend-only work, run `npm run dev` in `ui/` and open it in a normal brows
 
 ## 🧪 Testing and Linting
 
-We maintain a suite of automated tests and use strict formatting rules. **Please run these before submitting a PR.**
+We maintain a suite of automated tests and use strict lint and type-checking rules. **Please run these before submitting a PR.**
 
 ### Python Code
-We use `pytest` for testing, `basedpyright` for backend type checking, and `ruff` for formatting and linting. `black` is available for local formatting but is not enforced in CI. The backend currently keeps project-wide checking at `recommended` and opts the main runtime files into `strict`, so new backend changes should keep both the strict subset and the empty baseline green. `ruff` is configured repo-wide for tracked Python files, including helper scripts and tests.
+We use `pytest` for testing, `basedpyright` for backend type checking, and `ruff` for linting (`ruff check`). The project does not use a code formatter, so do not run `black` or `ruff format` on the code: they would reformat hundreds of unrelated files. The backend currently keeps project-wide checking at `recommended` and opts the main runtime files into `strict`, so new backend changes should keep both the strict subset and the empty baseline green. `ruff` is configured repo-wide for tracked Python files, including helper scripts and tests.
 ```bash
 # Run all tests
 pytest
@@ -116,10 +116,6 @@ pytest tests/test_database.py -v
 basedpyright
 
 # Run repo-wide Python linting
-ruff check .
-
-# Format and lint code
-black .
 ruff check .
 ```
 

@@ -359,8 +359,7 @@ cd ui && npm ci && npm run build && cd ..
 ```powershell
 git clone https://github.com/kirin-3/wLib.git
 Set-Location wLib
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
+uv sync --no-dev   # needs uv: https://docs.astral.sh/uv/
 Set-Location ui; npm ci; npm run build; Set-Location ..
 .\.venv\Scripts\python.exe main.py
 ```

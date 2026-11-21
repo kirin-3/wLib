@@ -2,20 +2,23 @@
 
 `libtorrent==2.1.1` is the torrent engine for RPDL downloads. Only the `wlib --torrent-helper` child process imports it, so the app runs without it and torrent downloads then report that they are unavailable. Its wheels are one statically linked module (OpenSSL and Boost included) with type stubs, for Linux x86_64 (manylinux2014) and Windows x64. `scripts/build.sh` collects it with `--collect-all "libtorrent"`, `packaging/windows/wlib.spec` with `collect_all("libtorrent")`, and the Nix environment uses `libtorrent-rasterbar`. The AUR, Flatpak and native packages repackage the PyInstaller folder, so they carry the bundled copy. `python scripts/smoke_backend.py` starts the helper and checks that it answers `hello` and exits when its stdin closes.
 
-`cryptography>=44.0.0` is a runtime dependency for library backup and sync encryption. Linux `scripts/build.sh` collects the package with `--collect-all`; the Windows script uses `packaging/windows/wlib.spec`, which collects its data, modules, and native binaries. `main.py --smoke-test` imports the AEAD module to verify packaging. AUR metadata and its PKGBUILD template include `python-cryptography`. Rebuild the Linux test image when requirements change.
+`cryptography>=44.0.0` is a runtime dependency for library backup and sync encryption. Linux `scripts/build.sh` collects the package with `--collect-all`; the Windows script uses `packaging/windows/wlib.spec`, which collects its data, modules, and native binaries. `main.py --smoke-test` imports the AEAD module to verify packaging. AUR metadata and its PKGBUILD template include `python-cryptography`.
 
 ## Locked dependencies
 
-`requirements*.txt` state what wLib needs; the `.lock` files pin every package with hashes and are what CI, release builds and the test image install (`pip install --require-hashes -r ...`). `wlib.sh` keeps using `requirements.txt`, since a user's system Python varies. After changing a requirements file, regenerate the locks:
+[uv](https://docs.astral.sh/uv/) manages the Python dependencies. `pyproject.toml` states what wLib needs: `[project].dependencies` for the app (Pillow only on Windows) and the `dev` dependency group for `basedpyright`, `pytest` and `ruff`. `uv.lock` pins every package with hashes for Linux x86_64 and Windows x64 (`[tool.uv].environments`); the lock fails when a package has no wheel for one of them. `.python-version` selects Python 3.12.
+
+CI and release builds install the lock with `uv sync --locked`, which stops when `pyproject.toml` and `uv.lock` do not agree. Builds add `--no-dev --inexact`, so they skip the dev tools but keep them in a developer's `.venv`. CI uses the uv version pinned in the `setup-uv` steps and the Python from `setup-python` (`UV_PYTHON_DOWNLOADS=never`). `wlib.sh` installs the `pyproject.toml` ranges with pip instead, since a user's system Python varies.
+
+After changing a dependency in `pyproject.toml`, update the lock:
 
 ```bash
-uv pip compile requirements.txt --python-version 3.12 --python-platform x86_64-manylinux_2_35 --generate-hashes --no-header -o requirements.lock
-uv pip compile requirements-dev.txt --python-version 3.12 --python-platform x86_64-manylinux_2_35 --generate-hashes --no-header -o requirements-dev.lock
-uv pip compile requirements-windows.txt --python-version 3.12 --python-platform windows --generate-hashes --no-header -o requirements-windows.lock
-uv pip compile requirements-dev.txt --python-version 3.12 --python-platform windows --generate-hashes --no-header -o requirements-dev-windows.lock
+uv lock                          # keep the other pins
+uv lock --upgrade-package ruff   # move one package forward
+uv lock --upgrade                # move every package forward
 ```
 
-The Linux platform is `manylinux_2_35` (Ubuntu 22.04, the CI runner), because the pinned Qt wheels need glibc 2.34 or newer. `tests/test_release_version.py` fails when a lock no longer has an exact pin from `requirements.txt`.
+The pinned Qt wheels need glibc 2.34 or newer, so Linux builds run on Ubuntu 22.04 (the CI runner) or newer. `tests/test_release_version.py` fails when `uv.lock` no longer has an exact pin from `pyproject.toml`.
 
 ## Bundled Ruffle
 
@@ -30,8 +33,6 @@ The built-in web game player runs Flash with Ruffle's self-hosted web build.
 
 The release workflow's first job runs `scripts/check-release-version.py <tag>` on tag pushes. It fails when the tag is not `v` + `APP_VERSION` from `core/app_version.py`, or when `extension/manifest.json` has the version the previous release tag shipped (AMO signs each version once). Manual dry runs skip it.
 
-The Linux test image includes `binutils` (PyInstaller's `objdump`), `curl` (appimagetool download), and `file` (AppImage assembly). Windows checkouts can contain CRLF shell files; normalize shell scripts in a temporary Linux source copy for packaging/clean checks. Keep Linux node_modules in the container or the named volume.
-
 wLib ships Linux artifacts through `scripts/build.sh` and Windows x64 artifacts through `scripts/build-windows.ps1`. Windows output is a portable ZIP plus a per-user MSI, both derived from one canonical PyInstaller onedir payload.
 
 The packaging pipeline integrates the Python backend, Vue frontend, bundled browser extension, release launcher, desktop file, icon, and license into one staged PyInstaller folder. Every release format is then produced from that same staged folder.
@@ -42,9 +43,9 @@ Backend changes are validated through `.github/workflows/python-checks.yml`, whi
 
 - The workflow runs on pull requests, pushes to `master`, and manual dispatches on Ubuntu and Windows runners.
 - It targets Python 3.12, matching the supported backend development toolchain and the GitHub Actions build environment.
-- The Ubuntu job runs `bash scripts/check-python-clean.sh`, which creates a fresh virtual environment and installs `requirements-dev.lock`.
+- The Ubuntu job runs `bash scripts/check-python-clean.sh`, which creates a fresh virtual environment from `uv.lock` (`uv sync --locked`).
 - The clean check executes `ruff`, `basedpyright`, `scripts/smoke_backend.py`, and the full `pytest` suite.
-- The Windows job creates `.venv` and runs those tools directly in PowerShell; the Bash wrappers assume Linux virtual-environment paths.
+- The Windows job creates `.venv` with `uv sync --locked` and runs those tools directly in PowerShell; the Bash wrappers assume Linux virtual-environment paths.
 - The Windows job also runs frontend unit tests, typecheck, and production build with Python 3.12 and Node 22. For local development, use Node 22.12+ to meet both Vite and unit-test requirements.
 
 ## Release Automation
@@ -70,15 +71,14 @@ WLIB_GDRIVE_CLIENT_SECRET=GOCSPX-your-secret DEV_MODE=1 python main.py
 
 ## Windows Build Pipeline (`scripts/build-windows.ps1`)
 
-Build on Windows x64 with 64-bit Python 3.12 and npm. The current Vite build needs Node 20.19+ or 22.12+; Node 22.12+ also supports the frontend unit tests. MSI builds additionally need the .NET SDK and WiX 6.0.2 on `PATH`. From the repository root in PowerShell:
+Build on Windows x64 with 64-bit Python 3.12, [uv](https://docs.astral.sh/uv/) and npm. The current Vite build needs Node 20.19+ or 22.12+; Node 22.12+ also supports the frontend unit tests. MSI builds additionally need the .NET SDK and WiX 6.0.2 on `PATH`. From the repository root in PowerShell:
 
 ```powershell
-py -3.12 -m venv .venv
 dotnet tool install --global wix --version 6.0.2
-.\scripts\build-windows.ps1 -Version 1.2.0 -Python .\.venv\Scripts\python.exe
+.\scripts\build-windows.ps1 -Version 1.2.0
 ```
 
-The script validates the MSI-compatible version, installs `requirements-windows.txt`, runs frontend typecheck/build, stages the common Chrome extension plus a supplied signed Firefox XPI (or an explicitly unsigned local fallback), and freezes `wLib.exe` with `packaging/windows/wlib.spec`. The onedir payload includes Qt WebEngine/PyWebView, certifi, Vue assets, and extension assets. Frozen `--smoke-test` runs against an isolated data directory without opening the UI or downloading external content.
+The script validates the MSI-compatible version, installs `uv.lock` into the project `.venv` (`uv sync --locked --no-dev --inexact`), runs frontend typecheck/build, stages the common Chrome extension plus a supplied signed Firefox XPI (or an explicitly unsigned local fallback), and freezes `wLib.exe` with `packaging/windows/wlib.spec`. The onedir payload includes Qt WebEngine/PyWebView, certifi, Vue assets, and extension assets. Frozen `--smoke-test` runs against an isolated data directory without opening the UI or downloading external content.
 
 Intermediate files are recreated under `build/windows/`; the canonical payload is `build/windows/frozen/wLib/`. Artifacts are written to `dist/windows/` by default:
 
@@ -91,7 +91,7 @@ Build options:
 | Option | Behavior |
 |--------|----------|
 | `-Version 1.2.0` | Three numeric parts without a `v` prefix; defaults to `APP_VERSION` in `core/app_version.py` when omitted |
-| `-Python <path>` | Python interpreter used for dependency installation and PyInstaller; defaults to `python` |
+| `-Python <path>` | Python interpreter that runs PyInstaller; needs `-SkipDependencies`. Defaults to `.venv\Scripts\python.exe`, which the script fills from `uv.lock` |
 | `-SignedFirefoxXpi <path>` | Bundles an existing signed Firefox XPI; omitting it creates an unsigned local fallback |
 | `-OutputDirectory <path>` | Overrides `dist/windows/` |
 | `-SkipDependencies` | Reuses already-installed Python dependencies |
@@ -281,7 +281,7 @@ The build prefers Flathub's `org.flatpak.Builder` when it is installed (the rele
 `flake.nix` exposes `packages.x86_64-linux.wlib` (also `default`) and `overlays.default`; the derivation is `nix/package.nix`. Unlike the other Linux formats it builds from source instead of repackaging the PyInstaller folder:
 
 - The Vue frontend builds with `buildNpmPackage` and Node 22. Dependencies come from `ui/package-lock.json` through `importNpmLock`, so there is no npm dependency hash to update when the lockfile changes.
-- The Python side is a `python3.withPackages` environment from nixpkgs (pywebview, QtPy, PyQt6, PyQt6-WebEngine, certifi, cryptography, libtorrent-rasterbar). Add any new runtime dependency in `requirements.txt` to that list too.
+- The Python side is a `python3.withPackages` environment from nixpkgs (pywebview, QtPy, PyQt6, PyQt6-WebEngine, certifi, cryptography, libtorrent-rasterbar). Add any new runtime dependency in `pyproject.toml` to that list too.
 - The version is read from `APP_VERSION` in `core/app_version.py`.
 - `bin/wlib` runs the shared `packaging/wlib-launcher` with `WLIB_APP_DIR` pointing at `share/wlib`. The launcher's `./wlib-bin` is a wrapper that runs `main.py` with the Python environment and the Qt wrapper environment, so GPU detection, crash guard, SSL setup and launch logging work as in the other formats.
 - Runtime tools (glxinfo, xdg-open, gdbus, 7zz, bsdtar, bubblewrap and, unless `withWine = false`, Wine and winetricks) are appended to `PATH`, so user-installed versions win.

@@ -2,7 +2,9 @@
 [CmdletBinding()]
 param(
     [string]$Version = "",
-    [string]$Python = "python",
+    # The Python that runs PyInstaller. By default the script fills the project
+    # .venv from uv.lock and uses it; a custom Python needs -SkipDependencies.
+    [string]$Python = "",
     [string]$SignedFirefoxXpi = "",
     [string]$OutputDirectory = "",
     [switch]$SkipDependencies,
@@ -19,6 +21,17 @@ if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $RepositoryRoot "dist\windows"
 }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
+
+# Check the options before the script deletes or builds anything.
+if ($Python -and -not $SkipDependencies) {
+    throw "-Python needs -SkipDependencies: the script installs the dependencies into the project .venv with uv."
+}
+if (-not $Python) {
+    $Python = Join-Path $RepositoryRoot ".venv\Scripts\python.exe"
+    if ($SkipDependencies -and -not (Test-Path -LiteralPath $Python)) {
+        throw "No project .venv: run 'uv sync --no-dev' first, or pass -Python with -SkipDependencies."
+    }
+}
 
 function Reset-WorkspaceDirectory([string]$Path) {
     $FullPath = [IO.Path]::GetFullPath($Path)
@@ -121,8 +134,12 @@ Reset-WorkspaceDirectory $BuildRoot
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 
 if (-not $SkipDependencies) {
-    Invoke-Checked "Install Windows Python dependencies" {
-        & $Python -m pip install --disable-pip-version-check --require-hashes -r (Join-Path $RepositoryRoot "requirements-windows.lock")
+    Push-Location $RepositoryRoot
+    try {
+        # --inexact keeps the dev tools in a developer's .venv.
+        Invoke-Checked "Install Windows Python dependencies" { uv sync --locked --no-dev --inexact }
+    } finally {
+        Pop-Location
     }
 }
 if (-not $SkipFrontend) {

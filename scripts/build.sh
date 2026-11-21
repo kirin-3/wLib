@@ -249,7 +249,14 @@ cd "$PROJECT_DIR"
 
 # ── Ensure PyInstaller & deps are available ──
 echo "📦 Installing Python dependencies for build..."
-pip install --require-hashes -r requirements.lock
+if ! command -v uv &>/dev/null; then
+    echo "uv is required to build wLib: https://docs.astral.sh/uv/" >&2
+    exit 1
+fi
+# --inexact keeps the dev tools in a developer's .venv.
+uv sync --locked --no-dev --inexact
+# shellcheck disable=SC1091
+source "${UV_PROJECT_ENVIRONMENT:-$PROJECT_DIR/.venv}/bin/activate"
 
 # ── Embed the Google Drive client secret (gitignored; removed after the build) ──
 GDRIVE_SECRET_MODULE="$PROJECT_DIR/core/_gdrive_secret.py"

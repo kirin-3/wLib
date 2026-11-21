@@ -6,46 +6,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
-resolve_python() {
-    local requested="${WLIB_PYTHON_BIN:-}"
-
-    if [[ -n "$requested" ]]; then
-        echo "$requested"
-        return
-    fi
-
-    for candidate in python3.12 python3; do
-        if ! command -v "$candidate" >/dev/null 2>&1; then
-            continue
-        fi
-
-        if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' 2>/dev/null; then
-            echo "$candidate"
-            return
-        fi
-    done
-
-    return 1
-}
-
-PYTHON_BIN="$(resolve_python)" || {
-    echo "Python 3.12 is required for clean backend verification." >&2
+if ! command -v uv >/dev/null 2>&1; then
+    echo "uv is required for clean backend verification: https://docs.astral.sh/uv/" >&2
     exit 1
-}
+fi
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 VENV_DIR="$WORK_DIR/.venv"
 
-echo "==> Creating clean Python 3.12 environment"
-"$PYTHON_BIN" -m venv "$VENV_DIR"
+echo "==> Creating clean Python 3.12 environment from uv.lock"
+# WLIB_PYTHON_BIN picks an interpreter; uv otherwise uses .python-version.
+UV_PROJECT_ENVIRONMENT="$VENV_DIR" uv sync --locked \
+    ${WLIB_PYTHON_BIN:+--python "$WLIB_PYTHON_BIN"}
 
-"$VENV_DIR/bin/python" --version
-"$VENV_DIR/bin/pip" install --upgrade pip
-"$VENV_DIR/bin/pip" install --require-hashes -r requirements-dev.lock
+"$VENV_DIR/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else "Python 3.12 is required for clean backend verification.")'
 
 PYTHON_BIN="$VENV_DIR/bin/python" \
-PIP_BIN="$VENV_DIR/bin/pip" \
 BASEDPYRIGHT_BIN="$VENV_DIR/bin/basedpyright" \
 BASEDPYRIGHT_VENV_PATH="$WORK_DIR" \
 RUFF_BIN="$VENV_DIR/bin/ruff" \

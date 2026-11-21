@@ -60,11 +60,14 @@ fi
 # Activate venv
 source "$VENV_DIR/bin/activate"
 
-# Install/update deps if needed
-if [ ! -f "$VENV_DIR/.deps_installed" ] || [ requirements.txt -nt "$VENV_DIR/.deps_installed" ]; then
+# Install/update deps if needed. They come from the pyproject.toml ranges, not
+# the uv.lock pins, because the system Python here may be newer than 3.12.
+if [ ! -f "$VENV_DIR/.deps_installed" ] || [ pyproject.toml -nt "$VENV_DIR/.deps_installed" ]; then
     echo "📥 Installing dependencies..."
     pip install --quiet --upgrade pip
-    if ! pip install --quiet -r requirements.txt; then
+    python -c 'import tomllib; print("\n".join(tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]))' \
+        > "$VENV_DIR/requirements.txt"
+    if ! pip install --quiet -r "$VENV_DIR/requirements.txt"; then
         echo "❌ Error: Failed to install Python dependencies."
         echo "   If PyGObject or PyQt failed to build, you may be missing system UI headers."
         echo "   Please install them via your distribution's package manager:"
