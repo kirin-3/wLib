@@ -19,13 +19,21 @@ def test_archive_install_keeps_valid_lewdcorner_screenshots(tmp_path: Path):
     thread = "https://lewdcorner.com/threads/24724/"
     first = "https://lewdcorner.com/attachments/first-png.123/"
     second = "https://images.example/second.png"
-    result = api.install_archive({
-        "archive_path": str(archive),
-        "title": "Game",
-        "version": "1",
-        "lc_url": thread,
-        "screenshots": [f" {first} ", first, "http://images.example/no.png", 123, second],
-    })
+    result = api.install_archive(
+        {
+            "archive_path": str(archive),
+            "title": "Game",
+            "version": "1",
+            "lc_url": thread,
+            "screenshots": [
+                f" {first} ",
+                first,
+                "http://images.example/no.png",
+                123,
+                second,
+            ],
+        }
+    )
 
     assert result["success"] is True, result
     game_id = result["game_id"]

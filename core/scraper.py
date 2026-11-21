@@ -136,7 +136,9 @@ def _f95_request_slot(*, background: bool = False) -> Generator[None]:
 
 
 def _run_paced_f95_request[T](
-    transport: Callable[[], T], *, background: bool = False,
+    transport: Callable[[], T],
+    *,
+    background: bool = False,
 ) -> T:
     """Run one F95 transport inside the global lock and minimum interval.
 
@@ -270,7 +272,8 @@ def _f95_get_via_extension(url: str) -> tuple[int, str]:
             response.status,
             signed_in,
             "Cloudflare challenge"
-            if signed_in is None and _CLOUDFLARE_CHALLENGE_RE.search(response.body[:65536])
+            if signed_in is None
+            and _CLOUDFLARE_CHALLENGE_RE.search(response.body[:65536])
             else "",
             via=response.via,
             tab_retry=response.tab_retry,
@@ -589,19 +592,11 @@ class Scraper:
                 if value:
                     candidates.append((match.start(), value))
             tag_name = re.match(r"<\s*([a-zA-Z0-9]+)", opening)
-            if (
-                tag_name
-                and tag_name.group(1).lower() == "img"
-                and "bbImage" in classes
-            ):
-                value = _attribute(opening, "data-src") or _attribute(
-                    opening, "src"
-                )
+            if tag_name and tag_name.group(1).lower() == "img" and "bbImage" in classes:
+                value = _attribute(opening, "data-src") or _attribute(opening, "src")
                 if value:
                     candidates.append((match.start(), value))
-        for match in re.finditer(
-            r"<a\b[^>]*>.*?</a>", wrapper, re.I | re.S
-        ):
+        for match in re.finditer(r"<a\b[^>]*>.*?</a>", wrapper, re.I | re.S):
             opening_end = match.group().find(">")
             opening = match.group()[: opening_end + 1] if opening_end != -1 else ""
             href = _attribute(opening, "href")
@@ -661,9 +656,7 @@ class Scraper:
         with _f95_request_slot():
             return self._fetch_with_fallback_locked(url)
 
-    def _fetch_with_fallback_locked(
-        self, url: str
-    ) -> tuple[int, str, str | None]:
+    def _fetch_with_fallback_locked(self, url: str) -> tuple[int, str, str | None]:
         global _prefer_extension_until
         now = time.monotonic()
         prefer_until = _prefer_extension_until
@@ -695,9 +688,7 @@ class Scraper:
                     status, body = _f95_get(url)
                 except _F95RequestError:
                     raise
-                issue = self._classify_page_issue(
-                    status, self._page_title(body), body
-                )
+                issue = self._classify_page_issue(status, self._page_title(body), body)
                 if issue and issue["code"] == "blocked":
                     _prefer_extension_until = (
                         time.monotonic() + _PREFER_EXTENSION_WINDOW_SECONDS
@@ -829,9 +820,7 @@ class Scraper:
         # requirement (download notes, or a reply asking about dead links)
         # without gating the page; ignore phrases that only occur in the head
         # or inside the starter post and replies.
-        login_scope = re.sub(
-            r"<head\b[^>]*>.*?</head>", "", page_html, flags=re.S
-        )
+        login_scope = re.sub(r"<head\b[^>]*>.*?</head>", "", page_html, flags=re.S)
         for post_class in ("message", "message-threadStarterPost"):
             post_bodies = [
                 body for _, body in _blocks(login_scope, "article", post_class)
@@ -949,9 +938,9 @@ class Scraper:
 
     def _starter_hides_attachments(self, html: str) -> bool:
         """True when the starter post hides attachments from guests."""
-        starter = next(
-            _blocks(html, "article", "message-threadStarterPost"), ("", "")
-        )[1]
+        starter = next(_blocks(html, "article", "message-threadStarterPost"), ("", ""))[
+            1
+        ]
         return "messageHide--attach" in starter
 
     def _starter_hides_links(self, html: str) -> bool:
@@ -990,22 +979,28 @@ class Scraper:
                     issue["code"], issue["error"], browser_fallback=fallback
                 )
             if status != 200:
-                return self._error(
-                    "scraper_error", f"F95Zone returned HTTP {status}"
-                )
+                return self._error("scraper_error", f"F95Zone returned HTTP {status}")
             from core.game_lookup import f95_thread_cover
 
             catalog_cover: str | None = None
             if fallback is None and (
                 self._starter_hides_links(html)
-                or (self._starter_hides_attachments(html) and not (catalog_cover := f95_thread_cover(thread_id)))
+                or (
+                    self._starter_hides_attachments(html)
+                    and not (catalog_cover := f95_thread_cover(thread_id))
+                )
             ):
                 html = self._reload_signed_in(
                     f"https://f95zone.to/threads/{thread_id}/", html
                 )
             result = self._extract_page(html)
             if result.get("success") and not result.get("cover_image"):
-                return {**result, "cover_image": catalog_cover if catalog_cover is not None else f95_thread_cover(thread_id)}
+                return {
+                    **result,
+                    "cover_image": catalog_cover
+                    if catalog_cover is not None
+                    else f95_thread_cover(thread_id),
+                }
             return result
         except _F95RequestError as exc:
             return self._error(exc.code, str(exc))
@@ -1161,7 +1156,10 @@ def f95_get_bytes(url: str, max_bytes: int) -> bytes:
     def transport() -> bytes:
         logging.getLogger(__name__).info("Downloading cover image")
         request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with cast(HTTPResponse, urlopen(request, timeout=30, context=ssl.create_default_context())) as response:
+        with cast(
+            HTTPResponse,
+            urlopen(request, timeout=30, context=ssl.create_default_context()),
+        ) as response:
             if response.status != 200:
                 raise ValueError("Cover request did not return HTTP 200")
             data = response.read(max_bytes + 1)
@@ -1171,6 +1169,7 @@ def f95_get_bytes(url: str, max_bytes: int) -> bytes:
             if length.isdigit() and int(length) != len(data):
                 raise ValueError("The cover download was cut off")
             return data
+
     return _run_paced_f95_request(transport, background=True)
 
 
@@ -1179,20 +1178,29 @@ def _fetch_lc_thread_download_links(url: str) -> dict[str, object]:
 
     thread = lewdcorner.normalize_thread_url(url)
     if not thread:
-        return {"success": False, "code": "invalid_url", "error": "Invalid LewdCorner thread URL"}
+        return {
+            "success": False,
+            "code": "invalid_url",
+            "error": "Invalid LewdCorner thread URL",
+        }
     try:
         response = extension_bridge.fetch(thread, site="lc")
     except (extension_bridge.BridgeFailed, extension_bridge.BridgeUnavailable):
         return {
-            "success": False, "code": "lc_extension_unavailable",
+            "success": False,
+            "code": "lc_extension_unavailable",
             "error": "Open a browser with the wLib extension and turn on its LewdCorner switch",
         }
     from core import lewdcorner_plus
 
-    lewdcorner_plus.note_thread_page(lewdcorner.extract_thread_id(thread), response.body, response.status)
+    lewdcorner_plus.note_thread_page(
+        lewdcorner.extract_thread_id(thread), response.body, response.status
+    )
     login = "Sign in to LewdCorner in your browser"
     try:
-        page = lewdcorner.parse_thread_page(response.body, response.status, for_downloads=True)
+        page = lewdcorner.parse_thread_page(
+            response.body, response.status, for_downloads=True
+        )
     except lewdcorner.LcUpdateError as exc:
         message = {
             "lc_login_required": login,
@@ -1206,7 +1214,9 @@ def _fetch_lc_thread_download_links(url: str) -> dict[str, object]:
     return {"success": True, **result}
 
 
-def fetch_thread_download_links(f95_url: str, site: lewdcorner.Site = "f95") -> dict[str, object]:
+def fetch_thread_download_links(
+    f95_url: str, site: lewdcorner.Site = "f95"
+) -> dict[str, object]:
     """Fetch fresh download links through the signed-in browser session."""
     if site == "lc":
         return _fetch_lc_thread_download_links(f95_url)
@@ -1215,13 +1225,27 @@ def fetch_thread_download_links(f95_url: str, site: lewdcorner.Site = "f95") -> 
 
     thread_id = extract_thread_id(f95_url)
     if not thread_id:
-        return {"success": False, "code": "invalid_url", "error": "Invalid F95Zone thread URL"}
+        return {
+            "success": False,
+            "code": "invalid_url",
+            "error": "Invalid F95Zone thread URL",
+        }
     if not extension_bridge.is_available():
-        return {"success": False, "code": "extension_unavailable", "error": "Open a browser with the wLib extension"}
+        return {
+            "success": False,
+            "code": "extension_unavailable",
+            "error": "Open a browser with the wLib extension",
+        }
     try:
-        status, html = _f95_get_via_extension(f"https://f95zone.to/threads/{thread_id}/")
+        status, html = _f95_get_via_extension(
+            f"https://f95zone.to/threads/{thread_id}/"
+        )
     except (extension_bridge.BridgeFailed, extension_bridge.BridgeUnavailable):
-        return {"success": False, "code": "extension_unavailable", "error": "Open a browser with the wLib extension and try again"}
+        return {
+            "success": False,
+            "code": "extension_unavailable",
+            "error": "Open a browser with the wLib extension and try again",
+        }
     except _F95RequestError as exc:
         # The 429 cooldown refuses the request before the extension sees it.
         return {"success": False, "code": exc.code, "error": str(exc)}
@@ -1230,21 +1254,40 @@ def fetch_thread_download_links(f95_url: str, site: lewdcorner.Site = "f95") -> 
     if issue:
         return {"success": False, **issue}
     if status != 200:
-        return {"success": False, "code": "scraper_error", "error": f"F95Zone returned HTTP {status}"}
+        return {
+            "success": False,
+            "code": "scraper_error",
+            "error": f"F95Zone returned HTTP {status}",
+        }
     result = parse_download_links(html)
     if not result["signed_in"]:
-        return {"success": False, "code": "login_required", "error": "Sign in to F95Zone in your browser"}
+        return {
+            "success": False,
+            "code": "login_required",
+            "error": "Sign in to F95Zone in your browser",
+        }
     builds = result["builds"]
     count = sum(len(build["mirrors"]) for build in builds)
-    logging.getLogger("wlib.scraper").info("Thread %s: found %d download links", thread_id, count)
+    logging.getLogger("wlib.scraper").info(
+        "Thread %s: found %d download links", thread_id, count
+    )
     return {"success": True, **result}
 
 
 def resolve_download_link(
-    url: str, host: str, on_progress: Callable[[str], None] | None = None,
-    cancel: threading.Event | None = None, *, site: lewdcorner.Site = "f95",
+    url: str,
+    host: str,
+    on_progress: Callable[[str], None] | None = None,
+    cancel: threading.Event | None = None,
+    *,
+    site: lewdcorner.Site = "f95",
 ) -> dict[str, object]:
     """Pace only the start of a browser resolve, not its user interaction."""
     return extension_bridge.resolve(
-        url, host, on_progress=on_progress, start=_run_paced_f95_request, cancel=cancel, site=site
+        url,
+        host,
+        on_progress=on_progress,
+        start=_run_paced_f95_request,
+        cancel=cancel,
+        site=site,
     )

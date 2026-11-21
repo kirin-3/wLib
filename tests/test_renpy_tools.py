@@ -178,13 +178,15 @@ def test_inflate_cap_and_truncation():
 @pytest.mark.parametrize("version", ["2.0", "3.0", "3.2"])
 def test_read_index_versions(tmp_path, version):
     archive = tmp_path / "a.rpa"
-    build_rpa(archive, {"a/b.png": b"hello", "c.txt": b"world"}, version, (0x1234, 0xFF))
+    build_rpa(
+        archive, {"a/b.png": b"hello", "c.txt": b"world"}, version, (0x1234, 0xFF)
+    )
     index = read_rpa_index(str(archive))
     assert index.magic == f"RPA-{version}"
     got = {}
     with open(archive, "rb") as file:
         for entry in index.entries:
-            (offset, length, prefix), = entry.segments
+            ((offset, length, prefix),) = entry.segments
             _ = file.seek(offset)
             got[entry.name] = prefix + file.read(length)
     assert got == {"a/b.png": b"hello", "c.txt": b"world"}
@@ -197,7 +199,7 @@ def test_python2_style_byte_names_and_prefix(tmp_path):
     archive = tmp_path / "p.rpa"
     build_rpa(archive, {"x.bin": b"BODY"}, prefixes={"x.bin": b"PRE"})
     entry = read_rpa_index(str(archive)).entries[0]
-    (offset, length, prefix), = entry.segments
+    ((offset, length, prefix),) = entry.segments
     assert prefix == b"PRE"
     assert length == 4  # the prefix is not counted in length (renpy/loader.py)
     assert entry.size == 7
@@ -349,7 +351,13 @@ def test_folder_mode_overwrites_and_rejects_output_inside_game(tmp_path):
     _ = extract_archives(str(game), "folder", str(out), no_progress, never)
     assert (out / "images" / "a.txt").read_bytes() == b"new"
 
-    for bad in (str(game / "game"), str(game), "relative", str(tmp_path / "missing"), ""):
+    for bad in (
+        str(game / "game"),
+        str(game),
+        "relative",
+        str(tmp_path / "missing"),
+        "",
+    ):
         with pytest.raises(GameToolError):
             _ = extract_archives(str(game), "folder", bad, no_progress, never)
 

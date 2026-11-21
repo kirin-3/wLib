@@ -56,9 +56,7 @@ def test_in_place_extract_keeps_an_existing_partial_name_file(tmp_path: Path):
     sibling = game / "game" / "image.png.wlib-partial"
     _ = sibling.write_bytes(b"user file")
 
-    result = renpy_tools.extract_archives(
-        str(game), "in_place", "", no_progress, never
-    )
+    result = renpy_tools.extract_archives(str(game), "in_place", "", no_progress, never)
 
     assert result["files"] == 1
     assert (game / "game" / "image.png").read_bytes() == b"new"
@@ -70,9 +68,7 @@ def test_extract_supports_long_multibyte_asset_names(tmp_path: Path):
     name = "絵" * 79 + ".png"
     build_rpa(game / "game" / "images.rpa", {name: b"image"})
 
-    result = renpy_tools.extract_archives(
-        str(game), "in_place", "", no_progress, never
-    )
+    result = renpy_tools.extract_archives(str(game), "in_place", "", no_progress, never)
 
     assert result["files"] == 1
     assert (game / "game" / name).read_bytes() == b"image"

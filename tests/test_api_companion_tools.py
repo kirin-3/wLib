@@ -21,7 +21,9 @@ def test_companion_api_roundtrip(tools_api, monkeypatch):
     api = tools_api
     patch_api_name(monkeypatch, "is_linux", lambda: True)
     game = db.add_game("Game", "/game.exe")
-    assert api.save_companion_tool({"name": "Helper", "kind": "command", "arguments": "helper"})["success"]
+    assert api.save_companion_tool(
+        {"name": "Helper", "kind": "command", "arguments": "helper"}
+    )["success"]
     tool = api.list_companion_tools()["tools"][0]
     tool_id = tool["id"]
     assert api.save_companion_tool({**tool, "name": "Renamed"})["success"]
@@ -30,11 +32,16 @@ def test_companion_api_roundtrip(tools_api, monkeypatch):
     assert "not shown" in api.launch_companion_tool(game, tool_id)["error"]
     assert api.set_game_companion_tool_override(game, tool_id, None)["success"]
     assert not api.get_game_companion_tools(game)["tools"][0]["overridden"]
-    api.launcher.launch_companion_tool.return_value = {"success": False, "error": "Renamed: game is not running"}
+    api.launcher.launch_companion_tool.return_value = {
+        "success": False,
+        "error": "Renamed: game is not running",
+    }
     assert "not running" in api.launch_companion_tool(game, tool_id)["error"]
     api.launcher.launch_companion_tool.return_value = {"success": True}
     assert api.launch_companion_tool(game, tool_id)["success"]
-    api.launcher.launch_companion_tool.assert_called_with(game, db.get_companion_tool(tool_id))
+    api.launcher.launch_companion_tool.assert_called_with(
+        game, db.get_companion_tool(tool_id)
+    )
     api.launcher.list_launchable_tools.return_value = [tool]
     assert api.list_launchable_companion_tools(game)["tools"] == [tool]
     assert not api.launch_companion_tool(game, 9999)["success"]

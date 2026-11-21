@@ -11,8 +11,14 @@ import pytest
 from core import extension_server as server_module
 from core import steam_runner
 
-PAYLOAD: dict[str, object] = {"gameId": 4, "prefix": "/p", "sandboxed": False,
-                              "umu": False, "blocked": False, "title": "G"}
+PAYLOAD: dict[str, object] = {
+    "gameId": 4,
+    "prefix": "/p",
+    "sandboxed": False,
+    "umu": False,
+    "blocked": False,
+    "title": "G",
+}
 
 
 class _Answer:
@@ -50,11 +56,14 @@ def test_no_wlib_listening_allows_the_launch(monkeypatch):
     assert steam_runner.launch_check(PAYLOAD) is None
 
 
-@pytest.mark.parametrize("outcome", [
-    TimeoutError("timed out"),
-    URLError(TimeoutError("timed out")),
-    ["not", "a", "dict"],
-])
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        TimeoutError("timed out"),
+        URLError(TimeoutError("timed out")),
+        ["not", "a", "dict"],
+    ],
+)
 def test_an_unanswered_check_refuses_the_launch(monkeypatch, outcome):
     _urlopen(monkeypatch, outcome)
     assert steam_runner.launch_check(PAYLOAD) == steam_runner.LAUNCH_CHECK_UNANSWERED
@@ -68,14 +77,19 @@ def test_window_answers_are_followed(monkeypatch):
     _urlopen(monkeypatch, {"success": False, "error": "Busy installing"})
     assert steam_runner.launch_check(PAYLOAD) == "Busy installing"
     body = BytesIO(b'{"success": false, "error": "wLib is still starting."}')
-    _urlopen(monkeypatch, HTTPError("http://127.0.0.1:8183/api/launch-check", 503, "x", Message(), body))
+    _urlopen(
+        monkeypatch,
+        HTTPError("http://127.0.0.1:8183/api/launch-check", 503, "x", Message(), body),
+    )
     assert steam_runner.launch_check(PAYLOAD) == "wLib is still starting."
 
 
 def test_check_before_the_api_exists_is_a_503(monkeypatch):
     monkeypatch.setattr(server_module, "api_ref", None)
     body = json.dumps(PAYLOAD).encode()
-    handler = server_module.ExtensionRequestHandler.__new__(server_module.ExtensionRequestHandler)
+    handler = server_module.ExtensionRequestHandler.__new__(
+        server_module.ExtensionRequestHandler
+    )
     handler.path = "/api/launch-check"
     headers = Message()
     headers["X-wLib-Extension"] = "1"

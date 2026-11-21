@@ -168,8 +168,13 @@ def test_host_command_flatpak_argv_shape(monkeypatch):
         cwd="/games",
     )
     assert argv[:7] == [
-        "env", "-u", "LD_LIBRARY_PATH",
-        "flatpak-spawn", "--host", "--watch-bus", "--directory=/games",
+        "env",
+        "-u",
+        "LD_LIBRARY_PATH",
+        "flatpak-spawn",
+        "--host",
+        "--watch-bus",
+        "--directory=/games",
     ]
     assert "--env=WINEPREFIX=/prefix" in argv
     assert argv[-2:] == ["wine", "/games/game.exe"]
@@ -218,7 +223,14 @@ def test_host_command_supervisor_wrapping(monkeypatch):
         env={"WINEPREFIX": "/prefix"},
         supervise=True,
     )
-    assert argv[:6] == ["env", "-u", "LD_LIBRARY_PATH", "flatpak-spawn", "--host", "--watch-bus"]
+    assert argv[:6] == [
+        "env",
+        "-u",
+        "LD_LIBRARY_PATH",
+        "flatpak-spawn",
+        "--host",
+        "--watch-bus",
+    ]
     sep = argv.index("--")
     inner = argv[sep + 1 :]
     assert inner[0:4] == ["sh", "-c", inner[2], "sh"]
@@ -271,13 +283,20 @@ def test_host_which_inside_flatpak_hit_and_miss(monkeypatch):
     with patch("subprocess.run", return_value=hit) as run:
         assert host_platform.host_which("wine") == "/usr/bin/wine"
         assert run.call_args.args[0][:6] == [
-            "env", "-u", "LD_LIBRARY_PATH", "flatpak-spawn", "--host", "sh",
+            "env",
+            "-u",
+            "LD_LIBRARY_PATH",
+            "flatpak-spawn",
+            "--host",
+            "sh",
         ]
         argv = run.call_args.args[0]
         assert argv[6] == "-lc"
         for folder in (
-            "$HOME/.local/bin", "$HOME/.nix-profile/bin",
-            "/nix/var/nix/profiles/default/bin", "/home/linuxbrew/.linuxbrew/bin",
+            "$HOME/.local/bin",
+            "$HOME/.nix-profile/bin",
+            "/nix/var/nix/profiles/default/bin",
+            "/home/linuxbrew/.linuxbrew/bin",
             "/run/current-system/sw/bin",
         ):
             assert folder in argv[7]

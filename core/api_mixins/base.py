@@ -2,6 +2,7 @@
 """Shared state and helpers for every ``Api`` mixin.
 
 ``ApiBase`` owns ``__init__`` and each method that two or more mixins use."""
+
 from __future__ import annotations
 
 import os
@@ -158,7 +159,9 @@ class ApiBase:
             print(f"[wLib] Torrent startup failed: {type(exc).__name__}")
         self.scraper: Scraper = hide_from_js(Scraper())
         self.launcher: Launcher = hide_from_js(Launcher())
-        self._download_queue: DownloadQueue = self._build_download_queue(download_manager)
+        self._download_queue: DownloadQueue = self._build_download_queue(
+            download_manager
+        )
         self._update_running: bool = False
         self._update_cancelled: bool = False
         self._update_outcome: str = "idle"
@@ -184,7 +187,9 @@ class ApiBase:
         if is_linux():
             from core.steam_runner import runner_pid
 
-            self.launcher.external_alive = lambda game_id: runner_pid(game_id) is not None
+            self.launcher.external_alive = lambda game_id: (
+                runner_pid(game_id) is not None
+            )
         from core.umu import UmuDownload, UmuRuntimePrepare
 
         self._umu_download: UmuDownload = UmuDownload()
@@ -204,7 +209,9 @@ class ApiBase:
         # Per-game mod tool run (extract/decrypt/switch), polled by the Tools tab.
         self._tool_status: dict[int, dict[str, object]] = {}
         self._tool_lock: threading.Lock = threading.Lock()
-        self._bepinex_cache: dict[tuple[str, str], tuple[float, list[dict[str, object]], list[str]]] = {}
+        self._bepinex_cache: dict[
+            tuple[str, str], tuple[float, list[dict[str, object]], list[str]]
+        ] = {}
         # Games with a save backup/import/restore in flight (one at a time per game).
         self._saves_busy: set[int] = set()
         # Subset of _saves_busy that writes into the saves folder (import/restore).
@@ -331,10 +338,18 @@ class ApiBase:
             if row is not None:
                 # Like the launcher, a WINEPREFIX= in the saved launch arguments
                 # wins over the prefix fields.
-                launch_prefix = launch_env_overrides(
-                    row.get("command_line_args"), row.get("launch_mode")
-                ).get("WINEPREFIX", "").strip()
-            if row is not None and not is_windows() and bool(row.get("sandbox_enabled")):
+                launch_prefix = (
+                    launch_env_overrides(
+                        row.get("command_line_args"), row.get("launch_mode")
+                    )
+                    .get("WINEPREFIX", "")
+                    .strip()
+                )
+            if (
+                row is not None
+                and not is_windows()
+                and bool(row.get("sandbox_enabled"))
+            ):
                 # The sandbox mounts the game's prefix read-write, so the game
                 # can plant DLLs or registry entries there. Prefix tools and
                 # installers run on the host without the sandbox and would run
@@ -414,12 +429,17 @@ class ApiBase:
             bundle_root = getattr(
                 sys,
                 "_MEIPASS",
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                os.path.dirname(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                ),
             )
             return os.path.join(bundle_root, "extension")
 
         return os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "extension"
+            os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            ),
+            "extension",
         )
 
     def _coerce_string_key_dict(self, payload: object) -> dict[str, object] | None:
@@ -895,8 +915,12 @@ class ApiBase:
 
         sources = lc_screenshot_sources()
         urls = [url for _lc_url, stored in sources for url in stored]
-        thread_ids = [lewdcorner.extract_thread_id(lc_url) for lc_url, _stored in sources]
-        for screens in lc_threads_screenshots([thread_id for thread_id in thread_ids if thread_id]).values():
+        thread_ids = [
+            lewdcorner.extract_thread_id(lc_url) for lc_url, _stored in sources
+        ]
+        for screens in lc_threads_screenshots(
+            [thread_id for thread_id in thread_ids if thread_id]
+        ).values():
             urls.extend(screens)
         return urls
 
@@ -929,7 +953,12 @@ class ApiBase:
         with self._lc_cover_refresh_lock:
             if self._lc_cover_refresh_timer is not None:
                 return
-            wait = max(0.0, self._lc_cover_refreshed_at + self.LC_COVER_REFRESH_SECONDS - time.monotonic())
+            wait = max(
+                0.0,
+                self._lc_cover_refreshed_at
+                + self.LC_COVER_REFRESH_SECONDS
+                - time.monotonic(),
+            )
 
             def run() -> None:
                 with self._lc_cover_refresh_lock:
@@ -1133,7 +1162,12 @@ class ApiBase:
         # The thread heading names the developer ("Title [v1] [Dev]").
         developer_value = split_thread_title(str(metadata.get("title") or ""))[2]
 
-        if not engine_value and not tags_value and not cover_value and not developer_value:
+        if (
+            not engine_value
+            and not tags_value
+            and not cover_value
+            and not developer_value
+        ):
             return 0
 
         import sqlite3
@@ -1189,7 +1223,10 @@ class ApiBase:
                     from core.f95_tags import merge_f95_tags, split_tags
 
                     merged, _, kept = merge_f95_tags(
-                        split_tags(tags_current) or [], [], split_tags(tags_value) or [], False
+                        split_tags(tags_current) or [],
+                        [],
+                        split_tags(tags_value) or [],
+                        False,
                     )
                     fields["tags"] = ", ".join(merged)
                     fields["f95_tags"] = tags_value
@@ -1284,7 +1321,9 @@ class ApiBase:
         # LC threads found nothing to read; check again now.
         self._start_lc_plus_detection("connect")
 
-    def _start_lc_plus_detection(self, trigger: Literal["settings", "connect", "check_now"]) -> None:
+    def _start_lc_plus_detection(
+        self, trigger: Literal["settings", "connect", "check_now"]
+    ) -> None:
         from core import lewdcorner_plus
 
         lewdcorner_plus.start(trigger)
@@ -1292,7 +1331,9 @@ class ApiBase:
     def _lc_plus_turned_on(self) -> None:
         """A detection found Plus: fill Premium LC threads in the background."""
         threading.Thread(
-            target=self._apply_lc_setting_change, kwargs={"turned_on": True}, daemon=True
+            target=self._apply_lc_setting_change,
+            kwargs={"turned_on": True},
+            daemon=True,
         ).start()
 
     def _apply_lc_setting_change(self, *, turned_on: bool) -> None:
@@ -1313,7 +1354,9 @@ class ApiBase:
         from core import lewdcorner
         from core.game_lookup import lc_partners
 
-        if not self._catalog_enabled() or not lewdcorner.setting_enabled(database.get_setting("lc_enabled")):
+        if not self._catalog_enabled() or not lewdcorner.setting_enabled(
+            database.get_setting("lc_enabled")
+        ):
             return 0
         partners = {f95: (lc, tier) for f95, lc, tier in lc_partners()}
         count = database.fill_lc_threads(partners)
@@ -1329,9 +1372,19 @@ class ApiBase:
         from core import lewdcorner
         from core.database import get_connection, get_setting, update_setting
         from core.f95zone import extract_thread_id
-        from core.game_lookup import combined_thread_entry, f95_thread_details, f95_thread_entries, lc_thread_entries
+        from core.game_lookup import (
+            combined_thread_entry,
+            f95_thread_details,
+            f95_thread_entries,
+            lc_thread_entries,
+        )
         from core.store_links import coerce_store_links, parse_store_link
-        from core.thread_details import BASELINE_COLUMN, LC_FILL_FIELDS, THREAD_DETAIL_FIELDS, merge_thread_details
+        from core.thread_details import (
+            BASELINE_COLUMN,
+            LC_FILL_FIELDS,
+            THREAD_DETAIL_FIELDS,
+            merge_thread_details,
+        )
 
         if not self._catalog_enabled():
             return 0
@@ -1340,15 +1393,30 @@ class ApiBase:
             return 0
         new_snapshot = get_setting(CATALOG_DETAILS_FILL_SETTING) != snapshot_sha
         lc_enabled = lewdcorner.setting_enabled(get_setting("lc_enabled"))
-        columns = ", ".join(("id", "title", "play_status", "f95_url", "lc_url", "lc_mode", "tags_user_edited",
-                             BASELINE_COLUMN, *THREAD_DETAIL_FIELDS, *LC_FILL_FIELDS,
-                             *database.THREAD_STATE_COLUMNS, database.THREAD_STATES_AT_COLUMN))
+        columns = ", ".join(
+            (
+                "id",
+                "title",
+                "play_status",
+                "f95_url",
+                "lc_url",
+                "lc_mode",
+                "tags_user_edited",
+                BASELINE_COLUMN,
+                *THREAD_DETAIL_FIELDS,
+                *LC_FILL_FIELDS,
+                *database.THREAD_STATE_COLUMNS,
+                database.THREAD_STATES_AT_COLUMN,
+            )
+        )
         where = "(f95_url != '' OR lc_url != '')"
         params: list[object] = []
         if not new_snapshot:
             wanted = sorted({int(game_id) for game_id in game_ids})
             marks = ",".join("?" for _ in wanted)
-            where += f" AND (lc_url != '' OR {BASELINE_COLUMN} IS NULL" + (f" OR id IN ({marks}))" if wanted else ")")
+            where += f" AND (lc_url != '' OR {BASELINE_COLUMN} IS NULL" + (
+                f" OR id IN ({marks}))" if wanted else ")"
+            )
             params.extend(wanted)
 
         changed = 0
@@ -1358,15 +1426,23 @@ class ApiBase:
             _ = conn.execute("BEGIN IMMEDIATE")
             rows = cast(
                 list[sqlite3.Row],
-                conn.execute(f"SELECT {columns} FROM games WHERE {where}", params).fetchall(),
+                conn.execute(
+                    f"SELECT {columns} FROM games WHERE {where}", params
+                ).fetchall(),
             )
-            games = [{str(key): cast(object, row[key]) for key in row.keys()} for row in rows]
+            games = [
+                {str(key): cast(object, row[key]) for key in row.keys()} for row in rows
+            ]
             f95_ids = [extract_thread_id(game.get("f95_url")) for game in games]
             lc_ids = [
-                lewdcorner.extract_thread_id(game.get("lc_url")) if lewdcorner.lc_active(game, lc_enabled) else ""
+                lewdcorner.extract_thread_id(game.get("lc_url"))
+                if lewdcorner.lc_active(game, lc_enabled)
+                else ""
                 for game in games
             ]
-            details = f95_thread_details([int(thread_id) for thread_id in f95_ids if thread_id.isdigit()])
+            details = f95_thread_details(
+                [int(thread_id) for thread_id in f95_ids if thread_id.isdigit()]
+            )
             lc_entries = lc_thread_entries(lc_ids)
             # Every F95 game: its catalog prefixes give the thread states.
             f95_entries = f95_thread_entries([f95 for f95 in f95_ids if f95])
@@ -1384,21 +1460,38 @@ class ApiBase:
                     for field in LC_FILL_FIELDS:
                         key = "coverImage" if field == "cover_image_path" else field
                         value = entry.get(key)
-                        if value is not None and (value != "" or field == "thread_completed"):
-                            combined[field] = int(bool(value)) if field == "thread_completed" else value
+                        if value is not None and (
+                            value != "" or field == "thread_completed"
+                        ):
+                            combined[field] = (
+                                int(bool(value))
+                                if field == "thread_completed"
+                                else value
+                            )
                     links = coerce_store_links(entry.get("links"))
                     if links:
-                        existing = cast(list[tuple[str, str, str, str]], conn.execute(
-                            "SELECT source, external_id, url, origin FROM game_links WHERE game_id = ?",
-                            (game_id,),
-                        ).fetchall())
-                        known = {(source, identity) for source, identity, _url, _origin in existing}
-                        if any((link["source"], link["id"]) not in known for link in links):
+                        existing = cast(
+                            list[tuple[str, str, str, str]],
+                            conn.execute(
+                                "SELECT source, external_id, url, origin FROM game_links WHERE game_id = ?",
+                                (game_id,),
+                            ).fetchall(),
+                        )
+                        known = {
+                            (source, identity)
+                            for source, identity, _url, _origin in existing
+                        }
+                        if any(
+                            (link["source"], link["id"]) not in known for link in links
+                        ):
                             page_links = [
-                                link for _source, _identity, url, origin in existing
+                                link
+                                for _source, _identity, url, origin in existing
                                 if origin == "page" and (link := parse_store_link(url))
                             ]
-                            database.replace_game_links(game_id, "page", [*page_links, *links], connection=conn)
+                            database.replace_game_links(
+                                game_id, "page", [*page_links, *links], connection=conn
+                            )
                             game_changed = True
 
                 updates = merge_thread_details(game, combined) if combined else {}
@@ -1409,14 +1502,19 @@ class ApiBase:
                     database.thread_states_from(f95_entries.get(f95_id, {})),
                     database.thread_states_from(lc_entry) if lc_entry else None,
                 )
-                state_fields, newly_abandoned = database.thread_state_fields(game, states)
+                state_fields, newly_abandoned = database.thread_state_fields(
+                    game, states
+                )
                 if newly_abandoned:
-                    abandoned.append({"id": game_id, "title": str(game.get("title") or "")})
+                    abandoned.append(
+                        {"id": game_id, "title": str(game.get("title") or "")}
+                    )
                 updates = {**updates, **state_fields}
                 if updates:
                     assignments = ", ".join(f"{column} = ?" for column in updates)
                     _ = conn.execute(
-                        f"UPDATE games SET {assignments} WHERE id = ?", (*updates.values(), game_id)
+                        f"UPDATE games SET {assignments} WHERE id = ?",
+                        (*updates.values(), game_id),
                     )
                 if game_changed or (updates and set(updates) != {BASELINE_COLUMN}):
                     changed += 1
@@ -1557,7 +1655,9 @@ class ApiBase:
                     continue
                 fields: dict[str, object] = {}
                 previous: dict[str, object] = {}
-                current_cover = str(cast(object, game["cover_image_path"]) or "").strip()
+                current_cover = str(
+                    cast(object, game["cover_image_path"]) or ""
+                ).strip()
                 if cover_value and current_cover != cover_value:
                     fields["cover_image_path"] = cover_value
                     previous["cover_image_path"] = current_cover
@@ -1686,9 +1786,19 @@ class ApiBase:
                 if has_completion:
                     completed = bool(metadata["thread_completed"])
                     was_completed = bool(cast(object, game["thread_completed"]))
-                    if was_completed and not completed and game["lc_url"] and lewdcorner.lc_active(
-                        {key: cast(object, game[key]) for key in ("lc_url", "f95_url", "lc_mode")},
-                        lewdcorner.setting_enabled(database.get_setting("lc_enabled")),
+                    if (
+                        was_completed
+                        and not completed
+                        and game["lc_url"]
+                        and lewdcorner.lc_active(
+                            {
+                                key: cast(object, game[key])
+                                for key in ("lc_url", "f95_url", "lc_mode")
+                            },
+                            lewdcorner.setting_enabled(
+                                database.get_setting("lc_enabled")
+                            ),
+                        )
                     ):
                         # Either active site can mark this game complete. Keep the
                         # flag while the last LC read had the Completed prefix, or
@@ -1813,9 +1923,7 @@ class ApiBase:
                 and int(str(game.get("id"))) in wanted_ids
             ]
         if game_ids is None or automatic or skip_archived:
-            all_games_raw = [
-                game for game in all_games_raw if not is_archived(game)
-            ]
+            all_games_raw = [game for game in all_games_raw if not is_archived(game)]
         games_with_url: list[GameRecord] = []
         from core.store_links import coerce_store_links
 
@@ -1825,7 +1933,11 @@ class ApiBase:
         for game in all_games_raw:
             game_id = game.get("id")
             url = game.get("f95_url")
-            if not refresh_info and isinstance(game_id, int) and lewdcorner.lc_active(game, lc_enabled):
+            if (
+                not refresh_info
+                and isinstance(game_id, int)
+                and lewdcorner.lc_active(game, lc_enabled)
+            ):
                 lc_games[game_id] = game
             elif isinstance(game_id, int) and not url and self._catalog_enabled():
                 ryuu_link = next(
@@ -1854,7 +1966,11 @@ class ApiBase:
                     "latest_version": str(game.get("latest_version") or ""),
                     "f95_latest_version": str(
                         game.get("f95_latest_version")
-                        or (game.get("latest_version") if not game.get("latest_site") else "")
+                        or (
+                            game.get("latest_version")
+                            if not game.get("latest_site")
+                            else ""
+                        )
                         or ""
                     ),
                     "skipped_version": str(game.get("skipped_version") or ""),
@@ -1863,7 +1979,9 @@ class ApiBase:
                 }
             )
 
-        lc_only = {game_id for game_id, game in lc_games.items() if not game.get("f95_url")}
+        lc_only = {
+            game_id for game_id, game in lc_games.items() if not game.get("f95_url")
+        }
 
         # Check-and-set in one critical section. _update_running stays True
         # until the worker exits (even after cancel), so runs never overlap.
@@ -1878,7 +1996,11 @@ class ApiBase:
             self._update_checked = 0
             # The callback fires after a game finishes, so show the game being checked now.
             self._update_current = (
-                "Reading LewdCorner" if lc_games else games_with_url[0]["title"] if games_with_url else ""
+                "Reading LewdCorner"
+                if lc_games
+                else games_with_url[0]["title"]
+                if games_with_url
+                else ""
             )
             self._update_results = []
             self._update_refresh_info = bool(refresh_info)
@@ -1891,7 +2013,8 @@ class ApiBase:
         }
         previous_latest_versions = {
             int(str(game["id"])): str(game.get("latest_version") or "")
-            for game in all_games_raw if isinstance(game.get("id"), int)
+            for game in all_games_raw
+            if isinstance(game.get("id"), int)
         }
 
         def run_checks() -> None:
@@ -1904,14 +2027,16 @@ class ApiBase:
                         game_id: lewdcorner.normalize_thread_url(game.get("lc_url"))
                         for game_id, game in lc_games.items()
                     }
-                    lc_catalog = lc_thread_entries([
-                        lewdcorner.extract_thread_id(url) for url in lc_urls.values()
-                    ])
+                    lc_catalog = lc_thread_entries(
+                        [lewdcorner.extract_thread_id(url) for url in lc_urls.values()]
+                    )
                     feed_read = lewdcorner_updates.FeedRead({})
                     feed_error: lewdcorner.LcUpdateError | None = None
                     if extension_bridge.is_available(site="lc"):
                         try:
-                            feed_read = lewdcorner_updates.read_feed(self._update_cancelled_now)
+                            feed_read = lewdcorner_updates.read_feed(
+                                self._update_cancelled_now
+                            )
                         except lewdcorner.LcUpdateError as exc:
                             feed_error = exc
                     feed = feed_read.items
@@ -1921,15 +2046,22 @@ class ApiBase:
                         url = lc_urls[game_id]
                         thread_id = lewdcorner.extract_thread_id(url)
                         result = lewdcorner_updates.check_thread(
-                            game_id, url, game.get("lc_latest_version"),
+                            game_id,
+                            url,
+                            game.get("lc_latest_version"),
                             lc_catalog.get(thread_id, {}),
-                            feed_item=feed.get(thread_id), feed_error=feed_error,
+                            feed_item=feed.get(thread_id),
+                            feed_error=feed_error,
                         )
                         lc_results[game_id] = result
                         if game_id in lc_only:
                             error_code = result.error.code if result.error else ""
                             current = result.game or game
-                            version = str(current.get("latest_version") or "") if not result.error else ""
+                            version = (
+                                str(current.get("latest_version") or "")
+                                if not result.error
+                                else ""
+                            )
                             entry: dict[str, object] = {
                                 "id": game_id,
                                 "title": str(game.get("title") or ""),
@@ -1940,8 +2072,13 @@ class ApiBase:
                                 "error_code": error_code,
                             }
                             with self._update_lock:
-                                if (result.version_checked or result.newly_finished or result.error) and not (
-                                    automatic and error_code == "lc_extension_unavailable"
+                                if (
+                                    result.version_checked
+                                    or result.newly_finished
+                                    or result.error
+                                ) and not (
+                                    automatic
+                                    and error_code == "lc_extension_unavailable"
                                 ):
                                     self._update_results.append(entry)
                                 self._update_checked += 1
@@ -1952,10 +2089,14 @@ class ApiBase:
                     return
 
                 urls = [game["f95_url"] for game in games_with_url]
-                f95_catalog = f95_thread_entries([extract_thread_id(url) for url in urls])
+                f95_catalog = f95_thread_entries(
+                    [extract_thread_id(url) for url in urls]
+                )
                 f95_checked = 0
                 with self._update_lock:
-                    self._update_current = games_with_url[0]["title"] if games_with_url else ""
+                    self._update_current = (
+                        games_with_url[0]["title"] if games_with_url else ""
+                    )
 
                 def check_callback(url: str, result: object) -> bool:
                     nonlocal f95_checked
@@ -2006,17 +2147,22 @@ class ApiBase:
                         remote_version = str(result_dict.get("version") or "").strip()
                         try:
                             stored = lewdcorner_updates.store_f95_version(
-                                game["id"], url, remote_version,
+                                game["id"],
+                                url,
+                                remote_version,
                                 f95_catalog.get(extract_thread_id(url), {}),
                                 fallback_states=lc_result.states if lc_result else None,
-                                page_read=database.thread_states_from(result_dict) is not None,
+                                page_read=database.thread_states_from(result_dict)
+                                is not None,
                             )
                             if stored is not None:
                                 saved, stored_abandoned = stored
                                 newly_abandoned = newly_abandoned or stored_abandoned
                                 current = saved
                                 winner = str(saved.get("latest_version") or "")
-                                wishlisted = not str(saved.get("exe_path") or "").strip()
+                                wishlisted = not str(
+                                    saved.get("exe_path") or ""
+                                ).strip()
                         except Exception as exc:
                             callback_error = f"Failed to save update data: {exc}"
                             callback_error_code = "db_write_failed"
@@ -2044,10 +2190,14 @@ class ApiBase:
                                 )
                                 thread_metadata = metadata
                                 if metadata and metadata.get("success"):
-                                    finished_ids = self._update_thread_edit_metadata_for_url(
-                                        url, metadata, abandoned_ids
+                                    finished_ids = (
+                                        self._update_thread_edit_metadata_for_url(
+                                            url, metadata, abandoned_ids
+                                        )
                                     )
-                                    newly_finished = newly_finished or game["id"] in finished_ids
+                                    newly_finished = (
+                                        newly_finished or game["id"] in finished_ids
+                                    )
                                     rating_previous.update(
                                         self._store_f95_rating_for_url(url, metadata)
                                     )
@@ -2068,7 +2218,9 @@ class ApiBase:
                             finished_ids = self._update_thread_edit_metadata_for_url(
                                 url, result_dict, abandoned_ids
                             )
-                            newly_finished = newly_finished or (wishlisted and game["id"] in finished_ids)
+                            newly_finished = newly_finished or (
+                                wishlisted and game["id"] in finished_ids
+                            )
                         except Exception:
                             pass
                         try:
@@ -2108,13 +2260,20 @@ class ApiBase:
 
                     note = ""
                     if lc_result:
-                        if callback_error and lc_result.version_checked and lc_result.game:
+                        if (
+                            callback_error
+                            and lc_result.version_checked
+                            and lc_result.game
+                        ):
                             note = callback_error
                             current = lc_result.game
                             winner = str(current.get("latest_version") or "")
-                            callback_error = callback_error_code = callback_browser_fallback = ""
+                            callback_error = callback_error_code = (
+                                callback_browser_fallback
+                            ) = ""
                         elif lc_result.error and not (
-                            automatic and lc_result.error.code == "lc_extension_unavailable"
+                            automatic
+                            and lc_result.error.code == "lc_extension_unavailable"
                         ):
                             note = str(lc_result.error)
 
@@ -2163,9 +2322,7 @@ class ApiBase:
 
                 with self._update_lock:
                     should_append_batch_error = (
-                        batch_error
-                        and f95_checked == 0
-                        and bool(games_with_url)
+                        batch_error and f95_checked == 0 and bool(games_with_url)
                     )
 
                 if should_append_batch_error:
@@ -2461,14 +2618,25 @@ class ApiBase:
             runner = resolve_codename(target["proton_path"])
             folder = runner if os.path.isdir(runner) else os.path.dirname(runner)
             if not os.path.isfile(os.path.join(folder, "protonfixes", "winetricks")):
-                raise ValueError("Pick GE-Proton or UMU-Proton with Winetricks installed.")
-            return build_umu_invocation("winetricks", prefix=target["base_prefix"], runner=runner, environment=env)
+                raise ValueError(
+                    "Pick GE-Proton or UMU-Proton with Winetricks installed."
+                )
+            return build_umu_invocation(
+                "winetricks",
+                prefix=target["base_prefix"],
+                runner=runner,
+                environment=env,
+            )
         path = host_which("winetricks")
         if not path:
-            raise ValueError("Winetricks is not installed. Install it first, then try again.")
+            raise ValueError(
+                "Winetricks is not installed. Install it first, then try again."
+            )
         return [path], env
 
-    def _prefix_tool_conflict(self, prefix: str, game_id: int | None = None) -> str | None:
+    def _prefix_tool_conflict(
+        self, prefix: str, game_id: int | None = None
+    ) -> str | None:
         # The caller holds _status_lock while reserving the game in Launcher.
         if game_id is not None:
             conflict = self._game_busy_reason(game_id)
@@ -2477,9 +2645,13 @@ class ApiBase:
         if not prefix:
             return None
         if self._prefix_tool_running() and prefix == self._prefix_tool_prefix:
-            return f"{self._prefix_tool_name} is open on this Wine prefix. Close it first."
+            return (
+                f"{self._prefix_tool_name} is open on this Wine prefix. Close it first."
+            )
         # winetricks and the RTP setups end with wineserver -k, which kills the game.
-        if (self._deps_install_status["running"] and prefix == self._deps_install_prefix) or (
+        if (
+            self._deps_install_status["running"] and prefix == self._deps_install_prefix
+        ) or (
             self._rtp_install_status["running"] and prefix == self._rtp_install_prefix
         ):
             return "A Wine runtime install is running on this prefix. Wait for it to finish."
@@ -2561,7 +2733,9 @@ class ApiBase:
             effective = override
         return coerced_id, row, effective, detected
 
-    def _game_files_busy_reason(self, game_id: int, *, ignore_move: bool = False) -> str | None:
+    def _game_files_busy_reason(
+        self, game_id: int, *, ignore_move: bool = False
+    ) -> str | None:
         """The uninstall or move that changes the game's folder, or None.
 
         Caller holds _status_lock. Takes no other Api lock, so the mod tool and
@@ -2589,7 +2763,9 @@ class ApiBase:
         if converter is not None:
             converter.kill()
 
-    def _game_busy_reason(self, game_id: int, *, ignore_move: bool = False) -> str | None:
+    def _game_busy_reason(
+        self, game_id: int, *, ignore_move: bool = False
+    ) -> str | None:
         """Why the game's files are in use by wLib, or None. Caller holds _status_lock.
 
         `ignore_move` leaves out the game's own move, for the move job itself.
@@ -2599,11 +2775,16 @@ class ApiBase:
             return files_busy
         with self._tool_lock:
             if game_id in self._tool_status:
-                return "A mod tool is changing this game's files. Wait for it to finish."
+                return (
+                    "A mod tool is changing this game's files. Wait for it to finish."
+                )
         with self._saves_busy_lock:
             if game_id in self._saves_writing:
                 return "Saves are being restored for this game. Wait for it to finish."
-        if self._archive_install_status["running"] and self._archive_install_game_id == game_id:
+        if (
+            self._archive_install_status["running"]
+            and self._archive_install_game_id == game_id
+        ):
             return "This game is being updated. Wait for the install to finish."
         return None
 
@@ -2694,7 +2875,9 @@ class ApiBase:
             # ValueError or OverflowError while they are read.
             info_hash = ""
         # Only a hex v1 hash is comparable; RPDL may also send base32 or v2 hashes.
-        hex_hash = info_hash.lower() if re.fullmatch(r"[0-9a-fA-F]{40}", info_hash) else ""
+        hex_hash = (
+            info_hash.lower() if re.fullmatch(r"[0-9a-fA-F]{40}", info_hash) else ""
+        )
         if hex_hash:
             try:
                 parsed_hash = parse_torrent(data).info_hash

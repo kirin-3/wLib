@@ -22,7 +22,9 @@ def setup_test_db(tmp_path, monkeypatch):
 def started(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        CatalogClient, "start_background", lambda self, force=False: calls.append(force) or True
+        CatalogClient,
+        "start_background",
+        lambda self, force=False: calls.append(force) or True,
     )
     return calls
 
@@ -44,7 +46,13 @@ def test_status_and_check_now(started):
     status = api.get_catalog_status()
     assert status["success"] is True and status["enabled"] is True
     assert status["installed"] is False
-    assert set(status) >= {"built_at", "sources", "last_check", "last_error", "checking"}
+    assert set(status) >= {
+        "built_at",
+        "sources",
+        "last_check",
+        "last_error",
+        "checking",
+    }
     result = api.check_catalog_now()
     assert result["success"] is True and result["started"] is True
     assert started[-1] is True
@@ -106,7 +114,9 @@ def test_startup_with_unreachable_catalog_does_not_block(monkeypatch, tmp_path):
     monkeypatch.undo()
     monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "wlib.db"))
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("WLIB_CATALOG_MANIFEST_URL", "http://127.0.0.1:9/v1/manifest.json")
+    monkeypatch.setenv(
+        "WLIB_CATALOG_MANIFEST_URL", "http://127.0.0.1:9/v1/manifest.json"
+    )
     began = time.monotonic()
     api = Api()
     assert time.monotonic() - began < 5
@@ -124,17 +134,40 @@ def test_game_screenshots_use_catalog_without_changing_library(started, monkeypa
 
     game_id = database.add_game("A", "", "https://f95zone.to/threads/123/")
     with database.get_connection() as conn:
-        conn.execute("UPDATE games SET screenshots = ? WHERE id = ?", (json.dumps(["https://stored/a"]), game_id))
+        conn.execute(
+            "UPDATE games SET screenshots = ? WHERE id = ?",
+            (json.dumps(["https://stored/a"]), game_id),
+        )
     before = database.get_game(game_id)
-    monkeypatch.setattr(game_lookup, "f95_thread_screenshots", lambda _: ["https://preview.f95zone.to/a"])
+    monkeypatch.setattr(
+        game_lookup,
+        "f95_thread_screenshots",
+        lambda _: ["https://preview.f95zone.to/a"],
+    )
     api = Api()
     result = api.get_game_screenshots(game_id)
-    assert result == {"success": True, "screenshots": [{"thumb": "https://preview.f95zone.to/a", "full": "https://attachments.f95zone.to/a"}], "source": "catalog", "in_catalog": True}
+    assert result == {
+        "success": True,
+        "screenshots": [
+            {
+                "thumb": "https://preview.f95zone.to/a",
+                "full": "https://attachments.f95zone.to/a",
+            }
+        ],
+        "source": "catalog",
+        "in_catalog": True,
+    }
     for value in ([], None):
-        monkeypatch.setattr(game_lookup, "f95_thread_screenshots", lambda _, value=value: value)
+        monkeypatch.setattr(
+            game_lookup, "f95_thread_screenshots", lambda _, value=value: value
+        )
         result = api.get_game_screenshots(game_id)
-        assert result["source"] == "library" and result["in_catalog"] == (value is not None)
-        assert result["screenshots"] == [{"thumb": "https://stored/a", "full": "https://stored/a"}]
+        assert result["source"] == "library" and result["in_catalog"] == (
+            value is not None
+        )
+        assert result["screenshots"] == [
+            {"thumb": "https://stored/a", "full": "https://stored/a"}
+        ]
     assert database.get_game(game_id) == before
     assert api.get_game_screenshots(-1)["success"] is False
 
@@ -142,19 +175,36 @@ def test_game_screenshots_use_catalog_without_changing_library(started, monkeypa
 def test_lc_only_game_gets_catalog_screenshots_as_local_addresses(started, monkeypatch):
     from core import database, game_covers, game_lookup
 
-    lc_shots = ["https://lewdcorner.com/attachments/a-png.1/", "https://lewdcorner.com/attachments/b-png.2/"]
+    lc_shots = [
+        "https://lewdcorner.com/attachments/a-png.1/",
+        "https://lewdcorner.com/attachments/b-png.2/",
+    ]
     game_id = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/")
-    monkeypatch.setattr(game_lookup, "lc_thread_screenshots", lambda thread_id: lc_shots if thread_id == "21" else None)
+    monkeypatch.setattr(
+        game_lookup,
+        "lc_thread_screenshots",
+        lambda thread_id: lc_shots if thread_id == "21" else None,
+    )
     api = Api()
     result = api.get_game_screenshots(game_id)
     local = [shot["full"] for shot in result["screenshots"]]
     assert all(u.startswith(game_covers.LC_IMAGE_ADDRESS) for u in local)
-    assert result == {"success": True, "screenshots": [{"thumb": u, "full": u} for u in local],
-                      "source": "catalog", "in_catalog": True}
+    assert result == {
+        "success": True,
+        "screenshots": [{"thumb": u, "full": u} for u in local],
+        "source": "catalog",
+        "in_catalog": True,
+    }
     assert [api.lc_image_keys.get(u.rsplit("/", 1)[1]) for u in local] == lc_shots
     assert "lewdcorner.com" not in json.dumps(result)
     # An F95 game with an inactive LC thread keeps its own list.
-    both = database.add_game("Both", "", "https://f95zone.to/threads/5/", lc_url="https://lewdcorner.com/threads/22/", lc_mode="off")
+    both = database.add_game(
+        "Both",
+        "",
+        "https://f95zone.to/threads/5/",
+        lc_url="https://lewdcorner.com/threads/22/",
+        lc_mode="off",
+    )
     monkeypatch.setattr(game_lookup, "f95_thread_screenshots", lambda _id: [])
     assert api.get_game_screenshots(both)["screenshots"] == []
 
@@ -163,8 +213,11 @@ def test_lc_screenshots_leave_out_images_the_extension_refuses(started, monkeypa
     from core import database, game_covers, game_lookup
 
     full = "https://lewdcorner.com/attachments/a-png.1/"
-    shots = ["https://lewdcorner.com/data/attachments/1/1-a.jpg?hash=x",
-             "https://lewdcorner.com/proxy.php?image=https%3A%2F%2Fexample.org%2Fa.png", full]
+    shots = [
+        "https://lewdcorner.com/data/attachments/1/1-a.jpg?hash=x",
+        "https://lewdcorner.com/proxy.php?image=https%3A%2F%2Fexample.org%2Fa.png",
+        full,
+    ]
     game_id = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/")
     monkeypatch.setattr(game_lookup, "lc_thread_screenshots", lambda _id: shots)
     api = Api()
@@ -228,7 +281,15 @@ def test_catalog_fill_follows_the_rating_rules(rating_catalog, monkeypatch):
     no_time = _rated_game(5, "3.0/5")
     zero = _rated_game(6)
     missing = _rated_game(7, "4.0/5 (5 reviews)")
-    for thread_id, rating in ((1, 4.3), (2, 4.6), (3, 4.6), (4, 4.62), (5, 3.5), (6, 0.0), (7, None)):
+    for thread_id, rating in (
+        (1, 4.3),
+        (2, 4.6),
+        (3, 4.6),
+        (4, 4.62),
+        (5, 3.5),
+        (6, 0.0),
+        (7, None),
+    ):
         add_thread(thread_id, rating)
 
     api = Api()

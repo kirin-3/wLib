@@ -42,7 +42,12 @@ class FakeSource:
 
 
 def _ryuu_row(post_id, title="T"):
-    return {"post_id": post_id, "title": title, "raw_title": title, "url": f"u{post_id}"}
+    return {
+        "post_id": post_id,
+        "title": title,
+        "raw_title": title,
+        "url": f"u{post_id}",
+    }
 
 
 def test_failing_source_is_recorded_and_others_still_update(tmp_path):
@@ -51,7 +56,10 @@ def test_failing_source_is_recorded_and_others_still_update(tmp_path):
     healthy = FakeSource("ryuugames", "ryuu_posts", "post_id")
     healthy.listed = [_ryuu_row(1)]
     ctx.catalog.upsert(
-        "dlsite_works", "product_id", [{"product_id": "RJ1", "title": "old", "url": "u"}], "2026-01-01T00:00:00Z"
+        "dlsite_works",
+        "product_id",
+        [{"product_id": "RJ1", "title": "old", "url": "u"}],
+        "2026-01-01T00:00:00Z",
     )
     result = run(
         ctx.catalog,
@@ -70,19 +78,33 @@ def test_failing_source_is_recorded_and_others_still_update(tmp_path):
     # The failing source's previous data stays.
     assert ctx.catalog.count("dlsite") == 1
     history = ctx.state.recent_runs()[0]["sources"]
-    assert {entry["source"]: entry["status"] for entry in history} == {"dlsite": "error", "ryuugames": "ok"}
+    assert {entry["source"]: entry["status"] for entry in history} == {
+        "dlsite": "error",
+        "ryuugames": "ok",
+    }
     assert ctx.state.source_status("dlsite")["last_error"]
     assert ctx.state.source_status("dlsite")["last_success_at"] is None
     assert healthy.calls[0] == "incremental" and "sweep" in healthy.calls
 
 
-def test_entries_missing_from_two_sweeps_are_marked_removed_and_cleared_on_return(tmp_path):
+def test_entries_missing_from_two_sweeps_are_marked_removed_and_cleared_on_return(
+    tmp_path,
+):
     ctx, clock = make_context(tmp_path, FakeTransport())
     source = FakeSource("ryuugames", "ryuu_posts", "post_id")
     sources = {"ryuugames": source}
 
     def sweep():
-        run(ctx.catalog, ctx.state, ctx.pacer, sources, ["ryuugames"], storage=None, work_dir=str(tmp_path), now=clock.iso)
+        run(
+            ctx.catalog,
+            ctx.state,
+            ctx.pacer,
+            sources,
+            ["ryuugames"],
+            storage=None,
+            work_dir=str(tmp_path),
+            now=clock.iso,
+        )
         clock.now += 86400
         return dict(rows(ctx.catalog, "SELECT post_id, removed_at FROM ryuu_posts"))
 
@@ -130,7 +152,9 @@ def test_cli_run_no_publish_ryuugames(tmp_path, capsys):
         sleep=clock.sleep,
     )
     assert code == 0
-    assert transport.requests and all("ryuugames.com" in request.url for request in transport.requests)
+    assert transport.requests and all(
+        "ryuugames.com" in request.url for request in transport.requests
+    )
     assert main(["--data-dir", str(tmp_path), "status"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["sources"]["ryuugames"]["rows"] == 3
@@ -146,7 +170,9 @@ def test_cli_publish_needs_credentials(tmp_path, monkeypatch):
 
 def test_cli_refuses_a_bad_proxy_setting(tmp_path, monkeypatch):
     monkeypatch.setenv("WLIB_CATALOG_DLSITE_PROXY", "socks5://127.0.0.1:1080")
-    code = main(["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "none"])
+    code = main(
+        ["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "none"]
+    )
     assert code == 2
 
 
@@ -188,14 +214,25 @@ def test_run_refuses_a_catalog_that_lost_most_of_a_source(tmp_path):
     ctx, clock = make_context(tmp_path, FakeTransport())
     storage = MemoryStorage()
     previous = {"sources": {"f95": {"count": 1000, "updated_at": None}}}
-    storage.put_bytes(MANIFEST_KEY, json.dumps(previous).encode(), "application/json", "")
+    storage.put_bytes(
+        MANIFEST_KEY, json.dumps(previous).encode(), "application/json", ""
+    )
     ctx.catalog.conn.execute(
         "INSERT INTO f95_threads (thread_id, title, url, first_seen, last_seen) "
         + "VALUES (1, 'Only one', 'https://f95zone.to/threads/1/', 'now', 'now')"
     )
     ctx.catalog.conn.commit()
 
-    result = run(ctx.catalog, ctx.state, ctx.pacer, {}, [], storage=storage, work_dir=str(tmp_path), now=clock.iso)
+    result = run(
+        ctx.catalog,
+        ctx.state,
+        ctx.pacer,
+        {},
+        [],
+        storage=storage,
+        work_dir=str(tmp_path),
+        now=clock.iso,
+    )
 
     assert result.publish_refused == "f95 dropped from 1000 to 1 rows"
     assert json.loads(storage.objects[MANIFEST_KEY]["data"]) == previous
@@ -209,7 +246,17 @@ def test_failed_publish_still_finishes_the_run(tmp_path):
 
     ctx, clock = make_context(tmp_path, FakeTransport())
     with pytest.raises(ConnectionError):
-        run(ctx.catalog, ctx.state, ctx.pacer, {}, [], storage=MemoryStorage(fail_on="v1/"), work_dir=str(tmp_path), now=clock.iso, force_publish=True)
+        run(
+            ctx.catalog,
+            ctx.state,
+            ctx.pacer,
+            {},
+            [],
+            storage=MemoryStorage(fail_on="v1/"),
+            work_dir=str(tmp_path),
+            now=clock.iso,
+            force_publish=True,
+        )
     latest = ctx.state.recent_runs()[0]
     assert latest["finished_at"] and latest["published"] is None
     assert not list((tmp_path / "snapshots").iterdir())
@@ -221,7 +268,17 @@ def test_a_second_run_skips_while_one_holds_the_lock(tmp_path):
     transport = FakeTransport()
     with _run_lock(str(tmp_path)) as acquired:
         assert acquired
-        code = main(["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "ryuugames"], transport=transport)
+        code = main(
+            [
+                "--data-dir",
+                str(tmp_path),
+                "run",
+                "--no-publish",
+                "--sources",
+                "ryuugames",
+            ],
+            transport=transport,
+        )
     assert code == 0 and transport.requests == []
 
 
@@ -236,7 +293,16 @@ def test_failed_link_rebuild_still_finishes_the_run(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "rebuild_links", broken)
     ctx, clock = make_context(tmp_path, FakeTransport())
     with pytest.raises(RuntimeError):
-        run(ctx.catalog, ctx.state, ctx.pacer, {}, [], storage=None, work_dir=str(tmp_path), now=clock.iso)
+        run(
+            ctx.catalog,
+            ctx.state,
+            ctx.pacer,
+            {},
+            [],
+            storage=None,
+            work_dir=str(tmp_path),
+            now=clock.iso,
+        )
     latest = ctx.state.recent_runs()[0]
     assert latest["finished_at"] and latest["published"] is None
 
@@ -312,7 +378,9 @@ def _plus_listing():
     return re.sub(r'<div class="pageNav">.*?</div>', "", page, flags=re.S).encode()
 
 
-def test_only_the_lc_feed_is_skipped_without_the_lc_cookie(tmp_path, monkeypatch, caplog):
+def test_only_the_lc_feed_is_skipped_without_the_lc_cookie(
+    tmp_path, monkeypatch, caplog
+):
     monkeypatch.delenv("WLIB_CATALOG_LC_COOKIE", raising=False)
     monkeypatch.delenv("WLIB_CATALOG_BROWSER_SITES", raising=False)
     transport = FakeTransport()
@@ -321,24 +389,37 @@ def test_only_the_lc_feed_is_skipped_without_the_lc_cookie(tmp_path, monkeypatch
         Response(200, fixture_bytes("ryuugames_posts.json"), {"X-WP-TotalPages": "1"}),
     )
     transport.route("lewdcorner.com/forums/", Response(200, _plus_listing()))
-    transport.route("lewdcorner.com/threads/", Response(200, fixture_bytes("lc_thread_24724.html")))
+    transport.route(
+        "lewdcorner.com/threads/", Response(200, fixture_bytes("lc_thread_24724.html"))
+    )
     clock = FakeClock()
     with caplog.at_level("INFO"):
         code = main(
-            ["--data-dir", str(tmp_path), "run", "--no-publish", "--sources",
-             "lc,lc_plus,lc_threads,ryuugames"],
+            [
+                "--data-dir",
+                str(tmp_path),
+                "run",
+                "--no-publish",
+                "--sources",
+                "lc,lc_plus,lc_threads,ryuugames",
+            ],
             transport=transport,
             sleep=clock.sleep,
         )
     assert code == 0
-    lc_urls = [request.url for request in transport.requests if "lewdcorner" in request.url]
+    lc_urls = [
+        request.url for request in transport.requests if "lewdcorner" in request.url
+    ]
     assert not any("/latest-updates/api" in url for url in lc_urls)
     assert any("/forums/119/" in url for url in lc_urls)
     assert any("/forums/213/" in url for url in lc_urls)
     assert any("/threads/" in url for url in lc_urls)
     assert all("Cookie" not in request.headers for request in transport.requests)
     assert "lc: skipped, it needs the LC login cookie" in caplog.text
-    assert "lc_threads: skipped" not in caplog.text and "lc_plus: skipped" not in caplog.text
+    assert (
+        "lc_threads: skipped" not in caplog.text
+        and "lc_plus: skipped" not in caplog.text
+    )
 
 
 def test_guest_lc_steps_send_no_login_cookie_through_the_browser(tmp_path, monkeypatch):
@@ -361,9 +442,18 @@ def test_guest_lc_steps_send_no_login_cookie_through_the_browser(tmp_path, monke
     browser = FakeBrowser(answer)
     clock = FakeClock()
     code = main(
-        ["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "lc,lc_plus,lc_threads"],
+        [
+            "--data-dir",
+            str(tmp_path),
+            "run",
+            "--no-publish",
+            "--sources",
+            "lc,lc_plus,lc_threads",
+        ],
         transport=FakeTransport(),
-        browser=BrowserTransport(cookies=lc_login_cookies("1%2Ckey"), session_factory=browser),
+        browser=BrowserTransport(
+            cookies=lc_login_cookies("1%2Ckey"), session_factory=browser
+        ),
         sleep=clock.sleep,
     )
     # The feed lost its login; the guest steps still ran.

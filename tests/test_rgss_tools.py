@@ -65,7 +65,9 @@ def build_rgss_v1(
     buf = bytearray(b"RGSSAD\x00\x01")
     key = 0xDEADCAFE
     for raw_name, data in entries:
-        name_bytes = raw_name if isinstance(raw_name, bytes) else raw_name.encode(encoding)
+        name_bytes = (
+            raw_name if isinstance(raw_name, bytes) else raw_name.encode(encoding)
+        )
         buf += struct.pack("<I", len(name_bytes) ^ key)
         key = _advance(key)
         for byte in name_bytes:
@@ -89,12 +91,16 @@ def build_rgss_v3(
     key_bytes = key.to_bytes(4, "little")
     encoded_entries: list[tuple[bytes, bytes, int]] = []
     for idx, (raw_name, data) in enumerate(entries):
-        name_bytes = raw_name if isinstance(raw_name, bytes) else raw_name.encode(encoding)
+        name_bytes = (
+            raw_name if isinstance(raw_name, bytes) else raw_name.encode(encoding)
+        )
         file_key = ((seed + idx * 0x10203 + 0x55AA) & MASK32) or 1
         encoded_entries.append((name_bytes, data, file_key))
 
     # Header (12 bytes) + index entries + 16-byte zero terminator
-    index_size = sum(16 + len(name_bytes) for name_bytes, _data, _fk in encoded_entries) + 16
+    index_size = (
+        sum(16 + len(name_bytes) for name_bytes, _data, _fk in encoded_entries) + 16
+    )
     data_offset = 12 + index_size
 
     buf = bytearray(b"RGSSAD\x00\x03")
@@ -359,10 +365,14 @@ def test_streamed_decrypt_round_trip_sizes(tmp_path: Path, builder) -> None:
         "size3.bin": b"\x01\x02\x03",
         "size4.bin": b"\xde\xad\xbe\xef",
         "size5.bin": b"hello",
-        "nested/over_1mib.bin": bytes((i * 31 + 7) & 0xFF for i in range(CHUNK_SIZE + 17)),
+        "nested/over_1mib.bin": bytes(
+            (i * 31 + 7) & 0xFF for i in range(CHUNK_SIZE + 17)
+        ),
     }
     archive = tmp_path / "Game.rgss3a"
-    builder(archive, [(name.replace("/", "\\"), data) for name, data in payloads.items()])
+    builder(
+        archive, [(name.replace("/", "\\"), data) for name, data in payloads.items()]
+    )
 
     index = read_rgss_index(str(archive))
     out = tmp_path / "out"
@@ -394,7 +404,9 @@ def test_write_entry_cancel_between_chunks_cleans_partial(
             write_entry(file, index.entries[0], str(dest), cancelled)
 
     assert not dest.exists()
-    assert not [p for p in (tmp_path / "out").rglob("*") if p.name.endswith(".wlib-partial")]
+    assert not [
+        p for p in (tmp_path / "out").rglob("*") if p.name.endswith(".wlib-partial")
+    ]
 
 
 @pytest.mark.slow
@@ -434,7 +446,9 @@ def _tree(root: Path) -> dict[str, bytes]:
     }
 
 
-def test_extract_folder_mode_overwrites_and_keeps_game_untouched(tmp_path: Path) -> None:
+def test_extract_folder_mode_overwrites_and_keeps_game_untouched(
+    tmp_path: Path,
+) -> None:
     game = make_rgss_game(tmp_path)
     build_rgss_v3(
         game / "Game.rgss3a",
@@ -778,4 +792,6 @@ def test_read_entry_hit_miss_cap_and_backup(tmp_path: Path) -> None:
         backup_game / "Game.rgssad.wlib-backup",
         [("Data/System.rxdata", b"xp-system-bytes")],
     )
-    assert read_entry(str(backup_game), "data/system.rxdata", 1024) == b"xp-system-bytes"
+    assert (
+        read_entry(str(backup_game), "data/system.rxdata", 1024) == b"xp-system-bytes"
+    )

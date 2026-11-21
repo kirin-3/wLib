@@ -28,7 +28,10 @@ def test_merge_fills_empty_fields_and_records_the_baseline():
     updates = merge_thread_details({"overview": "", "aliases": "[]"}, CATALOG)
     assert updates["overview"] == "A game."
     assert updates["aliases"] == '["Alias"]'
-    assert json.loads(str(updates[BASELINE_COLUMN]))["language"] == "English (MTL), Japanese"
+    assert (
+        json.loads(str(updates[BASELINE_COLUMN]))["language"]
+        == "English (MTL), Japanese"
+    )
 
 
 def test_merge_keeps_user_edits_and_follows_untouched_fields():
@@ -77,7 +80,9 @@ def _row(game_id: int) -> dict[str, object]:
     return next(game for game in database.get_all_games() if game["id"] == game_id)
 
 
-def test_fill_applies_new_snapshots_and_keeps_edits(rating_catalog, tmp_path, monkeypatch):
+def test_fill_applies_new_snapshots_and_keeps_edits(
+    rating_catalog, tmp_path, monkeypatch
+):
     _add_thread, sha = rating_catalog
     _details_catalog(tmp_path, 1)
     filled, other = _game(1), _game(2)
@@ -102,7 +107,9 @@ def test_fill_applies_new_snapshots_and_keeps_edits(rating_catalog, tmp_path, mo
     assert game["original_title"] == "My title"
 
 
-def test_a_game_added_later_is_filled_without_a_new_snapshot(rating_catalog, tmp_path, monkeypatch):
+def test_a_game_added_later_is_filled_without_a_new_snapshot(
+    rating_catalog, tmp_path, monkeypatch
+):
     _details_catalog(tmp_path, 5)
     api = Api()
     monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
@@ -112,7 +119,9 @@ def test_a_game_added_later_is_filled_without_a_new_snapshot(rating_catalog, tmp
     assert _row(game_id)["language"] == "English (MTL), Japanese"
 
 
-def test_a_catalog_without_the_details_table_changes_nothing(rating_catalog, tmp_path, monkeypatch):
+def test_a_catalog_without_the_details_table_changes_nothing(
+    rating_catalog, tmp_path, monkeypatch
+):
     with sqlite3.connect(tmp_path / "catalog.db") as catalog:
         catalog.execute("DROP TABLE f95_thread_details")
     game_id = _game(1)
@@ -140,7 +149,9 @@ def test_update_game_cleans_the_fields_and_a_new_thread_clears_them():
     assert (game["overview"], game["aliases"], game[BASELINE_COLUMN]) == ("", [], None)
 
 
-def test_details_and_baseline_round_trip_through_a_backup(tmp_path, rating_catalog, monkeypatch):
+def test_details_and_baseline_round_trip_through_a_backup(
+    tmp_path, rating_catalog, monkeypatch
+):
     _details_catalog(tmp_path, 1)
     game_id = _game(1)
     api = Api()
@@ -160,7 +171,9 @@ def test_details_and_baseline_round_trip_through_a_backup(tmp_path, rating_catal
             f"UPDATE games SET overview = '', aliases = '[]', {BASELINE_COLUMN} = NULL WHERE id = ?",
             (game_id,),
         )
-    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})["success"]
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})[
+        "success"
+    ]
     game = _row(game_id)
     assert (game["overview"], game["aliases"]) == ("Edited", ["Alias"])
     # The restored baseline still protects the edit from the catalog.
@@ -174,20 +187,31 @@ def test_a_bad_baseline_in_a_backup_means_never_filled(value):
     assert _normalize_game_field(BASELINE_COLUMN, value) is None
 
 
-def test_catalog_fill_reports_a_newly_abandoned_game_once(rating_catalog, tmp_path, monkeypatch):
+def test_catalog_fill_reports_a_newly_abandoned_game_once(
+    rating_catalog, tmp_path, monkeypatch
+):
     _add_thread, sha = rating_catalog
     _details_catalog(tmp_path, 1)
     watched, archived, unknown = _game(1), _game(2), _game(3)
     for game_id in (watched, archived):
         _ = database.update_game(game_id, {"thread_onhold": 0, "thread_abandoned": 0})
     _ = database.update_game(archived, {"play_status": "Archived"})
-    entry = {"thread_onhold": False, "thread_abandoned": True, "thread_states_seen_at": "2025-11-19T10:00:00Z"}
-    monkeypatch.setattr("core.game_lookup.f95_thread_entries", lambda ids: {thread: dict(entry) for thread in ids})
+    entry = {
+        "thread_onhold": False,
+        "thread_abandoned": True,
+        "thread_states_seen_at": "2025-11-19T10:00:00Z",
+    }
+    monkeypatch.setattr(
+        "core.game_lookup.f95_thread_entries",
+        lambda ids: {thread: dict(entry) for thread in ids},
+    )
     api = Api()
     monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
 
     _ = api._fill_thread_details_from_catalog()
-    assert [_row(game_id)["thread_abandoned"] for game_id in (watched, archived, unknown)] == [1, 1, 1]
+    assert [
+        _row(game_id)["thread_abandoned"] for game_id in (watched, archived, unknown)
+    ] == [1, 1, 1]
     # Only a known 0 -> 1 change of a game that is not Archived is reported.
     assert api.take_abandoned_notices() == [{"id": watched, "title": "G"}]
     assert api.take_abandoned_notices() == []

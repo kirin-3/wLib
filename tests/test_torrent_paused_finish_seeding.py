@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # pyright: reportPrivateUsage=false
 """A torrent that finishes while it is paused (user pause or queue hold) seeds per the setting."""
+
 import json
 
 import pytest
@@ -19,7 +20,12 @@ def _setup(tmp_path, monkeypatch, mode):
     monkeypatch.setattr(torrent_settings, "seed_mode", lambda: mode)
     monkeypatch.setattr(torrent_settings, "seed_ratio", lambda: 1.0)
     monkeypatch.setattr(torrent_settings, "seed_hours", lambda: None)
-    sup = TorrentSupervisor(command=lambda: (["false"], {}), free_space_fn=lambda path: 10**12, clock=lambda: 1000.0, options=lambda: {})
+    sup = TorrentSupervisor(
+        command=lambda: (["false"], {}),
+        free_space_fn=lambda path: 10**12,
+        clock=lambda: 1000.0,
+        options=lambda: {},
+    )
     sent: list[dict[str, object]] = []
 
     def send(command: dict[str, object]) -> bool:
@@ -44,7 +50,9 @@ def _setup(tmp_path, monkeypatch, mode):
 
 
 @pytest.mark.parametrize("auto_paused", [False, True])
-def test_always_seed_resumes_a_torrent_that_finished_paused(tmp_path, monkeypatch, auto_paused):
+def test_always_seed_resumes_a_torrent_that_finished_paused(
+    tmp_path, monkeypatch, auto_paused
+):
     sup, job, sent, folder = _setup(tmp_path, monkeypatch, "always")
     job.auto_paused = auto_paused
     sup._on_event({"event": "finished", "id": job.id})
@@ -54,7 +62,14 @@ def test_always_seed_resumes_a_torrent_that_finished_paused(tmp_path, monkeypatc
     state = json.loads((folder / "state.json").read_text())
     assert state["phase"] == "seeding" and state["paused"] is False
     # Seeding status now counts time and can reach the limits.
-    sup._on_event({"event": "status", "torrents": [{"id": job.id, "state": "seeding", "up": 5, "peers": 1, "uploaded": 100}]})
+    sup._on_event(
+        {
+            "event": "status",
+            "torrents": [
+                {"id": job.id, "state": "seeding", "up": 5, "peers": 1, "uploaded": 100}
+            ],
+        }
+    )
     assert job.seed_state == "ended"
     assert {"cmd": "stop_seeding", "id": job.id} in sent
 

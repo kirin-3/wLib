@@ -64,7 +64,9 @@ def loose_save_files(folder: str) -> list[str]:
         return found
     for entry in entries:
         name = entry.name.lower()
-        if not any(fnmatch.fnmatchcase(name, pattern) for pattern in LOOSE_SAVE_PATTERNS):
+        if not any(
+            fnmatch.fnmatchcase(name, pattern) for pattern in LOOSE_SAVE_PATTERNS
+        ):
             continue
         try:
             if entry.is_file(follow_symlinks=False):
@@ -72,6 +74,7 @@ def loose_save_files(folder: str) -> list[str]:
         except OSError:
             continue
     return found
+
 
 BACKUP_NAME_PATTERN = re.compile(
     r"^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})(?:-(\d+))?$", re.ASCII
@@ -211,7 +214,9 @@ def _name_matches_game(entry: str, title_clean: str, game_name: str) -> bool:
         # Other apps share a generic name as a word (GameMaker for Game.exe,
         # PrismLauncher for Launcher.exe), so it needs the name alone or
         # with save words only ("run-data" for run.exe).
-        if entry_tokens[0] == game_key and all(t in _SAVE_WORDS for t in entry_tokens[1:]):
+        if entry_tokens[0] == game_key and all(
+            t in _SAVE_WORDS for t in entry_tokens[1:]
+        ):
             return True
         game_key = ""
     elif game_key and (entry_key == game_key or game_key in entry_tokens):
@@ -241,7 +246,9 @@ def _name_matches_game(entry: str, title_clean: str, game_name: str) -> bool:
 _GENERIC_EXE_STEMS = frozenset({"game", "start", "launcher", "main", "run"})
 
 # Words a save folder adds after a generic executable name.
-_SAVE_WORDS = frozenset({"save", "saves", "savedata", "savegame", "savegames", "data", "userdata"})
+_SAVE_WORDS = frozenset(
+    {"save", "saves", "savedata", "savegame", "savegames", "data", "userdata"}
+)
 
 
 def _nested_game_folders(base: str, title: str, game_name: str) -> list[str]:
@@ -538,10 +545,7 @@ def detect_save_locations(
                         candidate = os.path.join(appdata_dir, entry)
                         if not os.path.isdir(candidate):
                             continue
-                        if (
-                            label == "AppData Roaming"
-                            and entry.casefold() == "renpy"
-                        ):
+                        if label == "AppData Roaming" and entry.casefold() == "renpy":
                             # Ren'Py under Wine keeps its saves one level down,
                             # in %APPDATA%\RenPy\<game>-<hash>, like ~/.renpy.
                             for child in _renpy_children(

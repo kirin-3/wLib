@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """File hosts, torrents, RPDL, download offers and archive installs."""
+
 from __future__ import annotations
 
 import os
@@ -79,7 +80,9 @@ class DownloadsMixin(ApiBase):
             "engine_pending": "{engine}" in pattern and not engine,
         }
 
-    def get_update_download_links(self, game_id: int, site: str = "") -> dict[str, object]:
+    def get_update_download_links(
+        self, game_id: int, site: str = ""
+    ) -> dict[str, object]:
         return self._update_downloads.get_links(game_id, site)
 
     def close_update_download_links(self, game_id: int) -> dict[str, object]:
@@ -94,7 +97,10 @@ class DownloadsMixin(ApiBase):
         from core.downloads.transfer import DownloadError
 
         if game_id in self.get_running_games():
-            return {"success": False, "error": "Close the game before downloading an update"}
+            return {
+                "success": False,
+                "error": "Close the game before downloading an update",
+            }
         replaced = replaces if isinstance(replaces, str) and replaces else None
         try:
             job = self._update_downloads.start(game_id, link_id, replaced)
@@ -122,7 +128,8 @@ class DownloadsMixin(ApiBase):
                 wishlisted[game_id] = _is_wishlisted(database.get_game(game_id))
             job["game_wishlisted"] = wishlisted[game_id]
         seeding = [
-            job for job in supervisor.status()
+            job
+            for job in supervisor.status()
             if job.get("stage") == "done" and job.get("seed_state") == "seeding"
         ]
         return {"success": True, **status, "seeding": seeding}
@@ -218,7 +225,10 @@ class DownloadsMixin(ApiBase):
         try:
             accounts.disconnect_pixeldrain()
         except (OSError, sqlite3.Error) as exc:
-            return {"success": False, "error": str(exc) or "Could not remove the API key"}
+            return {
+                "success": False,
+                "error": str(exc) or "Could not remove the API key",
+            }
         return {"success": True}
 
     def connect_mega_account(
@@ -242,7 +252,10 @@ class DownloadsMixin(ApiBase):
                 "needs_code": str(exc) == "MEGA requires your two-factor code",
             }
         except (OSError, sqlite3.Error) as exc:
-            return {"success": False, "error": str(exc) or "Could not save the MEGA session"}
+            return {
+                "success": False,
+                "error": str(exc) or "Could not save the MEGA session",
+            }
         return {"success": True, "email": connected}
 
     def disconnect_mega_account(self) -> dict[str, object]:
@@ -271,7 +284,10 @@ class DownloadsMixin(ApiBase):
         except DownloadError as exc:
             return {"success": False, "error": str(exc)}
         except (OSError, sqlite3.Error) as exc:
-            return {"success": False, "error": str(exc) or "Could not save the RPDL account"}
+            return {
+                "success": False,
+                "error": str(exc) or "Could not save the RPDL account",
+            }
         return {"success": True, "username": name}
 
     def disconnect_rpdl_account(self) -> dict[str, object]:
@@ -329,12 +345,26 @@ class DownloadsMixin(ApiBase):
         game = database.get_game(coerced_id) if coerced_id is not None else None
         if coerced_id is None or not game:
             return {"success": False, "error": "Game not found"}
-        if isinstance(torrent_id, bool) or not isinstance(torrent_id, int) or torrent_id <= 0:
+        if (
+            isinstance(torrent_id, bool)
+            or not isinstance(torrent_id, int)
+            or torrent_id <= 0
+        ):
             return {"success": False, "error": "Choose a torrent first"}
         if coerced_id in self.get_running_games():
-            return {"success": False, "error": "Close the game before downloading an update"}
-        if not (credentials.get(credentials.RPDL_TOKEN) or credentials.get(credentials.RPDL_USERNAME)):
-            return {"success": False, "error": rpdl.SIGN_IN_MESSAGE, "error_code": rpdl.KIND_SIGN_IN}
+            return {
+                "success": False,
+                "error": "Close the game before downloading an update",
+            }
+        if not (
+            credentials.get(credentials.RPDL_TOKEN)
+            or credentials.get(credentials.RPDL_USERNAME)
+        ):
+            return {
+                "success": False,
+                "error": rpdl.SIGN_IN_MESSAGE,
+                "error_code": rpdl.KIND_SIGN_IN,
+            }
         wanted_id = torrent_id
 
         def fetch() -> bytes:
@@ -373,10 +403,21 @@ class DownloadsMixin(ApiBase):
         from core.downloads.transfer import DownloadError
 
         log = logging.getLogger("wlib.torrent_export")
-        if isinstance(torrent_id, bool) or not isinstance(torrent_id, int) or torrent_id <= 0:
+        if (
+            isinstance(torrent_id, bool)
+            or not isinstance(torrent_id, int)
+            or torrent_id <= 0
+        ):
             return {"success": False, "error": "Choose a torrent first"}
-        if not (credentials.get(credentials.RPDL_TOKEN) or credentials.get(credentials.RPDL_USERNAME)):
-            return {"success": False, "error": rpdl.SIGN_IN_MESSAGE, "error_code": rpdl.KIND_SIGN_IN}
+        if not (
+            credentials.get(credentials.RPDL_TOKEN)
+            or credentials.get(credentials.RPDL_USERNAME)
+        ):
+            return {
+                "success": False,
+                "error": rpdl.SIGN_IN_MESSAGE,
+                "error_code": rpdl.KIND_SIGN_IN,
+            }
         try:
             data = self._fetch_checked_rpdl_torrent(torrent_id)
             result = export(data)
@@ -394,7 +435,9 @@ class DownloadsMixin(ApiBase):
                 "error_code": rpdl.KIND_INVALID,
             }
         except OSError as exc:
-            log.info("RPDL torrent %s %s failed: %s", torrent_id, kind, type(exc).__name__)
+            log.info(
+                "RPDL torrent %s %s failed: %s", torrent_id, kind, type(exc).__name__
+            )
             return {
                 "success": False,
                 "error": f"Could not write the .torrent file to {folder}: {exc.strerror or exc}",
@@ -403,20 +446,31 @@ class DownloadsMixin(ApiBase):
         return result
 
     @staticmethod
-    def _write_rpdl_torrent(folder: str, torrent_id: int, data: bytes) -> dict[str, object]:
+    def _write_rpdl_torrent(
+        folder: str, torrent_id: int, data: bytes
+    ) -> dict[str, object]:
         from core.downloads.bencode import parse_torrent
         from core.downloads.torrent_export import safe_file_name, write_torrent
 
         name = safe_file_name(parse_torrent(data).name, f"rpdl-{torrent_id}")
         return {"success": True, "path": write_torrent(folder, name, data)}
 
-    def save_rpdl_torrent(self, torrent_id: object = None, folder: object = None) -> dict[str, object]:
+    def save_rpdl_torrent(
+        self, torrent_id: object = None, folder: object = None
+    ) -> dict[str, object]:
         """Write the chosen RPDL torrent's `.torrent` file into a folder the user picked."""
-        if not isinstance(folder, str) or not os.path.isabs(folder) or not os.path.isdir(folder):
+        if (
+            not isinstance(folder, str)
+            or not os.path.isabs(folder)
+            or not os.path.isdir(folder)
+        ):
             return {"success": False, "error": "Choose an existing folder"}
         wanted = cast(int, torrent_id)
         return self._export_rpdl_torrent(
-            torrent_id, "save", lambda data: self._write_rpdl_torrent(folder, wanted, data), folder
+            torrent_id,
+            "save",
+            lambda data: self._write_rpdl_torrent(folder, wanted, data),
+            folder,
         )
 
     def get_rpdl_magnet(self, torrent_id: object = None) -> dict[str, object]:
@@ -424,10 +478,14 @@ class DownloadsMixin(ApiBase):
         from core.downloads.torrent_export import magnet_link
 
         return self._export_rpdl_torrent(
-            torrent_id, "magnet", lambda data: {"success": True, "magnet": magnet_link(data)}
+            torrent_id,
+            "magnet",
+            lambda data: {"success": True, "magnet": magnet_link(data)},
         )
 
-    def send_rpdl_torrent_to_watch_folder(self, torrent_id: object = None) -> dict[str, object]:
+    def send_rpdl_torrent_to_watch_folder(
+        self, torrent_id: object = None
+    ) -> dict[str, object]:
         """Write the `.torrent` file into the watch folder. Never starts an in-app download."""
         from core.downloads import torrent_settings
 
@@ -437,10 +495,16 @@ class DownloadsMixin(ApiBase):
         if not os.path.isabs(folder) or not os.path.isdir(folder):
             return {"success": False, "error": f"Watch folder not found: {folder}"}
         if not os.access(folder, os.W_OK | os.X_OK):
-            return {"success": False, "error": f"Cannot write to the watch folder: {folder}"}
+            return {
+                "success": False,
+                "error": f"Cannot write to the watch folder: {folder}",
+            }
         wanted = cast(int, torrent_id)
         result = self._export_rpdl_torrent(
-            torrent_id, "send", lambda data: self._write_rpdl_torrent(folder, wanted, data), folder
+            torrent_id,
+            "send",
+            lambda data: self._write_rpdl_torrent(folder, wanted, data),
+            folder,
         )
         if result.get("success"):
             result["folder"] = folder
@@ -464,7 +528,9 @@ class DownloadsMixin(ApiBase):
             return {"success": False, "error": "The torrent is not seeding"}
         return {"success": True}
 
-    def open_update_download_in_browser(self, game_id: int, link_id: str) -> dict[str, object]:
+    def open_update_download_in_browser(
+        self, game_id: int, link_id: str
+    ) -> dict[str, object]:
         from core.downloads.transfer import DownloadError
 
         try:
@@ -511,7 +577,11 @@ class DownloadsMixin(ApiBase):
         else:
             if not archive_path or not os.path.isfile(archive_path):
                 return {"success": False, "error": "Archive file was not found."}
-            from core.archive_install import ArchiveInstallError, check_volume_set, volume_set
+            from core.archive_install import (
+                ArchiveInstallError,
+                check_volume_set,
+                volume_set,
+            )
 
             # Any part may be chosen; like the install, check the format of
             # the part that extraction opens.
@@ -520,7 +590,11 @@ class DownloadsMixin(ApiBase):
                 try:
                     check_volume_set(volumes)
                 except ArchiveInstallError as exc:
-                    return {"success": False, "error": str(exc), "error_code": "parts_missing"}
+                    return {
+                        "success": False,
+                        "error": str(exc),
+                        "error_code": "parts_missing",
+                    }
                 entry_path = volumes.first
             if archive_format(entry_path) not in ("zip", "7z", "rar", "tar"):
                 return {"success": False, "error": UNSUPPORTED_FORMAT_MESSAGE}
@@ -648,7 +722,9 @@ class DownloadsMixin(ApiBase):
         from pathlib import Path
         from core.downloads.transfer import staging_dir
 
-        downloaded_by_wlib = Path(archive_path).resolve().is_relative_to(staging_dir().resolve())
+        downloaded_by_wlib = (
+            Path(archive_path).resolve().is_relative_to(staging_dir().resolve())
+        )
         from core.downloads.torrents import supervisor as torrent_supervisor
 
         in_torrents = in_torrent_area(archive_path)
@@ -678,7 +754,8 @@ class DownloadsMixin(ApiBase):
             "outside_library_folders": outside_library_folders,
             "suggested_library_folder": suggested_library_folder,
             "torrent_source": in_torrents,
-            "torrent_seeding": in_torrents and torrent_supervisor.is_seeding_path(archive_path),
+            "torrent_seeding": in_torrents
+            and torrent_supervisor.is_seeding_path(archive_path),
             "downloaded_by_wlib": downloaded_by_wlib,
             "title": title,
             "version": version,
@@ -707,7 +784,14 @@ class DownloadsMixin(ApiBase):
 
     # Stages before the library changes; the install can still be cancelled.
     _CANCELLABLE_INSTALL_STAGES: frozenset[str] = frozenset(
-        {"starting", "preparing", "extracting", "copying", "fixing permissions", "carrying saves"}
+        {
+            "starting",
+            "preparing",
+            "extracting",
+            "copying",
+            "fixing permissions",
+            "carrying saves",
+        }
     )
 
     def _set_archive_install_status(
@@ -723,7 +807,11 @@ class DownloadsMixin(ApiBase):
             if not running:
                 self._archive_install_game_id: int | None = None
             previous = self._archive_install_status
-            if running and self._archive_install_cancel.is_set() and stage in self._CANCELLABLE_INSTALL_STAGES:
+            if (
+                running
+                and self._archive_install_cancel.is_set()
+                and stage in self._CANCELLABLE_INSTALL_STAGES
+            ):
                 stage = "cancelling"
             self._archive_install_status: dict[str, object] = {
                 "running": running,
@@ -740,7 +828,11 @@ class DownloadsMixin(ApiBase):
         with self._status_lock:
             status = self._archive_install_status
             if not status.get("running"):
-                return {"success": False, "error": "No install is running.", "error_code": "not_running"}
+                return {
+                    "success": False,
+                    "error": "No install is running.",
+                    "error_code": "not_running",
+                }
             if not status.get("cancellable"):
                 return {
                     "success": False,
@@ -748,7 +840,11 @@ class DownloadsMixin(ApiBase):
                     "error_code": "not_cancellable",
                 }
             self._archive_install_cancel.set()
-            self._archive_install_status = {**status, "cancellable": False, "stage": "cancelling"}
+            self._archive_install_status = {
+                **status,
+                "cancellable": False,
+                "stage": "cancelling",
+            }
         return {"success": True}
 
     def install_archive(
@@ -777,7 +873,9 @@ class DownloadsMixin(ApiBase):
         archive_path = os.path.expanduser(
             str(payload.get("archive_path") or payload.get("archive") or "").strip()
         )
-        source_kind = "folder" if str(payload.get("source_kind") or "") == "folder" else "archive"
+        source_kind = (
+            "folder" if str(payload.get("source_kind") or "") == "folder" else "archive"
+        )
         from core.archive_install import in_torrent_area
         from core.downloads.torrents import supervisor as torrent_supervisor
 
@@ -943,8 +1041,12 @@ class DownloadsMixin(ApiBase):
                 tags=self._normalize_tags_csv(payload.get("tags")),
                 rating=str(payload.get("rating") or ""),
                 lc_url=lc_url,
-                lc_dismissed=lc_dismissed if lc_dismissed.isascii() and lc_dismissed.isdigit() else "",
-                screenshots=lewdcorner.page_screenshots(payload.get("screenshots")) if lc_url else [],
+                lc_dismissed=lc_dismissed
+                if lc_dismissed.isascii() and lc_dismissed.isdigit()
+                else "",
+                screenshots=lewdcorner.page_screenshots(payload.get("screenshots"))
+                if lc_url
+                else [],
                 game_id=game_id,
                 target_id=target_id,
                 remove_old=remove_old,
@@ -957,7 +1059,11 @@ class DownloadsMixin(ApiBase):
             )
         except InstallCancelled as exc:
             self._set_archive_install_status(running=False, stage="cancelled")
-            return {"success": False, "error": str(exc), "error_code": "install_cancelled"}
+            return {
+                "success": False,
+                "error": str(exc),
+                "error_code": "install_cancelled",
+            }
         except NoLauncherChosenError as exc:
             self._set_archive_install_status(running=False, stage="failed")
             return {
@@ -1000,8 +1106,10 @@ class DownloadsMixin(ApiBase):
             from core.database import THREAD_STATES_AT_COLUMN, caller_thread_states
 
             states = caller_thread_states(
-                payload.get("thread_onhold"), payload.get("thread_abandoned"),
-                payload.get("thread_states_seen_at"), has_f95=bool(f95_url),
+                payload.get("thread_onhold"),
+                payload.get("thread_abandoned"),
+                payload.get("thread_states_seen_at"),
+                has_f95=bool(f95_url),
             )
             if states is not None:
                 _ = update_game_row(

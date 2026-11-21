@@ -354,10 +354,13 @@ def _migrate_archived_status_settings(cursor: sqlite3.Cursor) -> None:
     games now carry the built-in status, and saved filter presets select
     "Archived" instead. Running it again changes nothing.
     """
+
     def read_list(key: str) -> list[object] | None:
         row = cast(
             sqlite3.Row | None,
-            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone(),
+            cursor.execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone(),
         )
         if row is None:
             return None
@@ -532,7 +535,9 @@ def thread_states_from(source: Mapping[str, object]) -> ThreadStates | None:
     if onhold is None or abandoned is None:
         return None
     seen_at = source.get("thread_states_seen_at")
-    return ThreadStates(bool(onhold), bool(abandoned), seen_at if isinstance(seen_at, str) else "")
+    return ThreadStates(
+        bool(onhold), bool(abandoned), seen_at if isinstance(seen_at, str) else ""
+    )
 
 
 def _reset_thread_states(fields: dict[str, object], *, force: bool = False) -> None:
@@ -628,10 +633,14 @@ def thread_state_fields(
         return {}, False
     stored_at = _utc_moment(game.get(THREAD_STATES_AT_COLUMN))
     seen_at = _utc_moment(states.seen_at)
-    if states.seen_at and (seen_at is None or (stored_at is not None and seen_at <= stored_at)):
+    if states.seen_at and (
+        seen_at is None or (stored_at is not None and seen_at <= stored_at)
+    ):
         return {}, False
     fields: dict[str, object] = {}
-    for column, value in zip(THREAD_STATE_COLUMNS, (states.onhold, states.abandoned), strict=True):
+    for column, value in zip(
+        THREAD_STATE_COLUMNS, (states.onhold, states.abandoned), strict=True
+    ):
         if game.get(column) != int(value):
             fields[column] = int(value)
     read_at = states.seen_at or utc_now_iso()
@@ -670,14 +679,19 @@ def find_game_by_f95_url(
 def _find_lc_game_row(
     conn: sqlite3.Connection, url: str, exclude_id: int | None = None
 ) -> sqlite3.Row | None:
-    return cast(sqlite3.Row | None, conn.execute(
-        "SELECT id, title, f95_url, lc_url, play_status, exe_path FROM games "
-        + "WHERE lc_url = ? AND lc_url != '' AND (? IS NULL OR id != ?) ORDER BY id LIMIT 1",
-        (url, exclude_id, exclude_id),
-    ).fetchone())
+    return cast(
+        sqlite3.Row | None,
+        conn.execute(
+            "SELECT id, title, f95_url, lc_url, play_status, exe_path FROM games "
+            + "WHERE lc_url = ? AND lc_url != '' AND (? IS NULL OR id != ?) ORDER BY id LIMIT 1",
+            (url, exclude_id, exclude_id),
+        ).fetchone(),
+    )
 
 
-def find_game_by_lc_url(url: object, exclude_id: int | None = None) -> dict[str, object] | None:
+def find_game_by_lc_url(
+    url: object, exclude_id: int | None = None
+) -> dict[str, object] | None:
     normalized = lewdcorner.normalize_thread_url(url)
     if not normalized:
         return None
@@ -696,32 +710,49 @@ def fill_lc_threads(partners: Mapping[str, tuple[str, str]]) -> int:
     count = 0
     with closing(get_connection()) as conn:
         _ = conn.execute("BEGIN IMMEDIATE")
-        settings = dict(cast(list[tuple[str, str]], conn.execute(
-            "SELECT key, value FROM settings WHERE key IN ('lc_enabled', ?, ?)",
-            (lewdcorner.LC_PLUS_MODE, lewdcorner.LC_PLUS_DETECTED),
-        ).fetchall()))
+        settings = dict(
+            cast(
+                list[tuple[str, str]],
+                conn.execute(
+                    "SELECT key, value FROM settings WHERE key IN ('lc_enabled', ?, ?)",
+                    (lewdcorner.LC_PLUS_MODE, lewdcorner.LC_PLUS_DETECTED),
+                ).fetchall(),
+            )
+        )
         if not lewdcorner.setting_enabled(settings.get("lc_enabled")):
             return 0
         has_plus = lewdcorner.plus_effective(
-            settings.get(lewdcorner.LC_PLUS_MODE), settings.get(lewdcorner.LC_PLUS_DETECTED)
+            settings.get(lewdcorner.LC_PLUS_MODE),
+            settings.get(lewdcorner.LC_PLUS_DETECTED),
         )
-        rows = cast(list[tuple[int, str, str]], conn.execute(
-            "SELECT id, f95_url, lc_dismissed FROM games "
-            + "WHERE f95_url != '' AND COALESCE(lc_url, '') = '' ORDER BY id"
-        ).fetchall())
-        claimed = {url for (url,) in cast(list[tuple[str]], conn.execute(
-            "SELECT lc_url FROM games WHERE lc_url != ''"
-        ).fetchall())}
+        rows = cast(
+            list[tuple[int, str, str]],
+            conn.execute(
+                "SELECT id, f95_url, lc_dismissed FROM games "
+                + "WHERE f95_url != '' AND COALESCE(lc_url, '') = '' ORDER BY id"
+            ).fetchall(),
+        )
+        claimed = {
+            url
+            for (url,) in cast(
+                list[tuple[str]],
+                conn.execute("SELECT lc_url FROM games WHERE lc_url != ''").fetchall(),
+            )
+        }
         for game_id, f95_url, dismissed in rows:
             partner = partners.get(extract_thread_id(f95_url))
             if partner is None:
                 continue
             thread_id, tier = partner
-            if thread_id == dismissed or (tier.casefold() == "premium" and not has_plus):
+            if thread_id == dismissed or (
+                tier.casefold() == "premium" and not has_plus
+            ):
                 continue
             url = f"https://lewdcorner.com/threads/{thread_id}/"
             if url not in claimed:
-                _ = conn.execute("UPDATE games SET lc_url = ? WHERE id = ?", (url, game_id))
+                _ = conn.execute(
+                    "UPDATE games SET lc_url = ? WHERE id = ?", (url, game_id)
+                )
                 claimed.add(url)
                 count += 1
         conn.commit()
@@ -736,14 +767,22 @@ def attach_lc_thread(game_id: int, url: str, f95_url: str) -> bool:
     with closing(get_connection()) as conn:
         _ = conn.execute("BEGIN IMMEDIATE")
         conn.row_factory = sqlite3.Row
-        row = cast(sqlite3.Row | None, conn.execute(
-            "SELECT f95_url, lc_url FROM games WHERE id = ?", (game_id,)
-        ).fetchone())
-        if (row is None or row["lc_url"]
+        row = cast(
+            sqlite3.Row | None,
+            conn.execute(
+                "SELECT f95_url, lc_url FROM games WHERE id = ?", (game_id,)
+            ).fetchone(),
+        )
+        if (
+            row is None
+            or row["lc_url"]
             or not thread_urls_match(cast(object, row["f95_url"]), f95_url)
-            or _find_lc_game_row(conn, normalized)):
+            or _find_lc_game_row(conn, normalized)
+        ):
             return False
-        _ = conn.execute("UPDATE games SET lc_url = ? WHERE id = ?", (normalized, game_id))
+        _ = conn.execute(
+            "UPDATE games SET lc_url = ? WHERE id = ?", (normalized, game_id)
+        )
         conn.commit()
     return True
 
@@ -936,7 +975,16 @@ def _publish_db_backup(partial: str, target: str) -> None:
         if rename is None:
             raise
         at_fdcwd, rename_noreplace = -100, 1
-        if rename(at_fdcwd, os.fsencode(partial), at_fdcwd, os.fsencode(target), rename_noreplace) != 0:
+        if (
+            rename(
+                at_fdcwd,
+                os.fsencode(partial),
+                at_fdcwd,
+                os.fsencode(target),
+                rename_noreplace,
+            )
+            != 0
+        ):
             code = ctypes.get_errno()
             raise OSError(code, os.strerror(code), target) from exc
 
@@ -964,9 +1012,10 @@ def _backup_before_migration() -> str | None:
         # The copy holds the same secrets as wlib.db.
         _create_private_file(partial)
         # The backup API also copies pages that are still in the WAL file.
-        with closing(sqlite3.connect(DB_PATH, timeout=10)) as source, closing(
-            sqlite3.connect(partial)
-        ) as copy:
+        with (
+            closing(sqlite3.connect(DB_PATH, timeout=10)) as source,
+            closing(sqlite3.connect(partial)) as copy,
+        ):
             source.backup(copy)
         try:
             _publish_db_backup(partial, target)
@@ -1005,7 +1054,9 @@ def init_db() -> None:
         fingerprint = schema_fingerprint()
 
         def current() -> bool:
-            row = cast(tuple[int] | None, conn.execute("PRAGMA user_version").fetchone())
+            row = cast(
+                tuple[int] | None, conn.execute("PRAGMA user_version").fetchone()
+            )
             return row is not None and row[0] == _schema_state(conn, fingerprint)
 
         if current():
@@ -1075,7 +1126,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         )
     """)
     for key in ("steam_games_mode", "steam_account_id"):
-        _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, '')", (key,))
+        _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, '')", (key,)
+        )
 
     _ = cursor.execute("""
         CREATE TABLE IF NOT EXISTS game_launch_targets (
@@ -1194,18 +1247,27 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandbox_new_games', 'false')"
     )
     for key in lewdcorner.LC_SETTINGS:
-        _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, '0')", (key,))
+        _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, '0')", (key,)
+        )
     # The old "I have LC Plus" switch: on becomes Yes, off becomes Auto. Once only.
     _ = cursor.execute(
         "INSERT OR IGNORE INTO settings (key, value) SELECT ?, CASE WHEN lower(trim(value)) "
         + "IN ('1', 'true', 'on', 'yes') THEN 'yes' ELSE 'auto' END FROM settings WHERE key = 'lc_plus'",
         (lewdcorner.LC_PLUS_MODE,),
     )
-    _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'auto')", (lewdcorner.LC_PLUS_MODE,))
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'auto')",
+        (lewdcorner.LC_PLUS_MODE,),
+    )
     for key in ("gamemode_enabled", "mangohud_enabled"):
-        _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'false')", (key,))
+        _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'false')", (key,)
+        )
     for key, value in gamescope.SETTINGS_DEFAULTS.items():
-        _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value)
+        )
     _ = cursor.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandboxie_custom_path', '')"
     )
@@ -1221,9 +1283,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ = cursor.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('last_update_check', '')"
     )
-    _ = cursor.execute(
-        "DELETE FROM settings WHERE key = 'playwright_browsers_path'"
-    )
+    _ = cursor.execute("DELETE FROM settings WHERE key = 'playwright_browsers_path'")
     _ = cursor.execute(
         f"INSERT OR IGNORE INTO settings (key, value) VALUES ('{RPGMAKER_LINUX_RUNNER_SETTING}', '')"
     )
@@ -1339,9 +1399,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
 
     for col_name, col_type in new_columns:
         if col_name not in existing_columns:
-            _ = cursor.execute(
-                f"ALTER TABLE games ADD COLUMN {col_name} {col_type}"
-            )
+            _ = cursor.execute(f"ALTER TABLE games ADD COLUMN {col_name} {col_type}")
 
     if "f95_latest_version" not in existing_columns:
         _ = cursor.execute(
@@ -1381,14 +1439,19 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         )
     except sqlite3.IntegrityError:
         print("[wLib] Warning: duplicate lc_url values exist; unique index not applied")
-    rows = cast(list[tuple[int, str]], cursor.execute(
-        "SELECT id, lc_url FROM games WHERE lc_url IS NOT NULL AND lc_url != '' ORDER BY id"
-    ).fetchall())
+    rows = cast(
+        list[tuple[int, str]],
+        cursor.execute(
+            "SELECT id, lc_url FROM games WHERE lc_url IS NOT NULL AND lc_url != '' ORDER BY id"
+        ).fetchall(),
+    )
     for game_id, stored_url in rows:
         normalized = lewdcorner.normalize_thread_url(stored_url)
         if normalized and normalized != stored_url:
             try:
-                _ = cursor.execute("UPDATE games SET lc_url = ? WHERE id = ?", (normalized, game_id))
+                _ = cursor.execute(
+                    "UPDATE games SET lc_url = ? WHERE id = ?", (normalized, game_id)
+                )
             except sqlite3.IntegrityError:
                 continue
 
@@ -1496,7 +1559,9 @@ def add_game(
         cursor = conn.cursor()
         _ = conn.execute("BEGIN IMMEDIATE")
         if normalized_lc and _find_lc_game_row(conn, normalized_lc):
-            raise sqlite3.IntegrityError(f"LewdCorner thread already in the library: {normalized_lc}")
+            raise sqlite3.IntegrityError(
+                f"LewdCorner thread already in the library: {normalized_lc}"
+            )
         if (
             normalized_url
             and find_matching_game_row(cursor, normalized_url) is not None
@@ -1617,14 +1682,18 @@ def add_game_tags(cursor: sqlite3.Cursor, game_id: int, tags: Sequence[str]) -> 
     stored_tags, baseline, user_edited = row
     current = _tag_list(stored_tags)
     current_keys = {tag.lower() for tag in current}
-    missing = [tag for tag in _tag_list(",".join(tags)) if tag.lower() not in current_keys]
+    missing = [
+        tag for tag in _tag_list(",".join(tags)) if tag.lower() not in current_keys
+    ]
     if not missing:
         return False
     fields: dict[str, object] = {"tags": ", ".join([*current, *missing])}
     if baseline is None and not user_edited:
         fields["f95_tags"] = ", ".join(current)
     set_clause = ", ".join(f"{key} = ?" for key in fields)
-    _ = cursor.execute(f"UPDATE games SET {set_clause} WHERE id = ?", (*fields.values(), game_id))
+    _ = cursor.execute(
+        f"UPDATE games SET {set_clause} WHERE id = ?", (*fields.values(), game_id)
+    )
     return True
 
 
@@ -1649,7 +1718,8 @@ def seed_tag_colors_once(
         stored = {}
     colors: dict[str, object] = (
         {str(key): value for key, value in cast(dict[object, object], stored).items()}
-        if isinstance(stored, dict) else {}
+        if isinstance(stored, dict)
+        else {}
     )
     present = {key.strip().lower() for key in colors}
     for tag, swatch in defaults.items():
@@ -1957,7 +2027,9 @@ def get_all_games() -> list[dict[str, object]]:
             if name.casefold() in canonical_collections
         ]
         game_dict["note_links"] = normalize_note_links(game_dict.get("note_links"))
-        game_dict["screenshots"] = _decode_game_screenshots(game_dict.get("screenshots"))
+        game_dict["screenshots"] = _decode_game_screenshots(
+            game_dict.get("screenshots")
+        )
         for field in LIST_FIELDS:
             game_dict[field] = normalize_detail(field, game_dict.get(field))
         game_id = int(str(game_dict["id"]))
@@ -1984,20 +2056,28 @@ def _latest_for_game(
     game: Mapping[str, object], lc_enabled: bool
 ) -> tuple[str, lewdcorner.LatestSite]:
     f95 = (
-        (str(game.get("f95_latest_version") or ""), str(game.get("f95_latest_at") or ""))
-        if game.get("f95_url") else None
+        (
+            str(game.get("f95_latest_version") or ""),
+            str(game.get("f95_latest_at") or ""),
+        )
+        if game.get("f95_url")
+        else None
     )
     lc = (
         (str(game.get("lc_latest_version") or ""), str(game.get("lc_latest_at") or ""))
-        if lewdcorner.lc_active(game, lc_enabled) else None
+        if lewdcorner.lc_active(game, lc_enabled)
+        else None
     )
     return lewdcorner.pick_latest(f95, lc)
 
 
 def _lc_enabled_in(connection: sqlite3.Connection) -> bool:
-    row = cast(tuple[object, ...] | sqlite3.Row | None, connection.execute(
-        "SELECT value FROM settings WHERE key = 'lc_enabled'"
-    ).fetchone())
+    row = cast(
+        tuple[object, ...] | sqlite3.Row | None,
+        connection.execute(
+            "SELECT value FROM settings WHERE key = 'lc_enabled'"
+        ).fetchone(),
+    )
     return row is not None and lewdcorner.setting_enabled(cast(object, row[0]))
 
 
@@ -2012,11 +2092,14 @@ def refresh_latest_versions() -> int:
         conn.row_factory = sqlite3.Row
         _ = conn.execute("BEGIN IMMEDIATE")
         lc_enabled = _lc_enabled_in(conn)
-        rows = cast(list[sqlite3.Row], conn.execute(
-            "SELECT id, f95_url, lc_url, lc_mode, f95_latest_version, f95_latest_at, "
-            + "lc_latest_version, lc_latest_at, latest_version, latest_site "
-            + "FROM games WHERE COALESCE(lc_url, '') != ''"
-        ).fetchall())
+        rows = cast(
+            list[sqlite3.Row],
+            conn.execute(
+                "SELECT id, f95_url, lc_url, lc_mode, f95_latest_version, f95_latest_at, "
+                + "lc_latest_version, lc_latest_at, latest_version, latest_site "
+                + "FROM games WHERE COALESCE(lc_url, '') != ''"
+            ).fetchall(),
+        )
         for row in rows:
             game = {str(key): cast(object, row[key]) for key in row.keys()}
             latest, site = _latest_for_game(game, lc_enabled)
@@ -2024,7 +2107,10 @@ def refresh_latest_versions() -> int:
             # version that came from an older wLib.
             if not (site or game.get("latest_site")):
                 continue
-            if (latest, site) != (game.get("latest_version") or "", game.get("latest_site") or ""):
+            if (latest, site) != (
+                game.get("latest_version") or "",
+                game.get("latest_site") or "",
+            ):
                 _ = conn.execute(
                     "UPDATE games SET latest_version = ?, latest_site = ? WHERE id = ?",
                     (latest, site, game["id"]),
@@ -2069,9 +2155,10 @@ def store_thread_update(
     with closing(get_connection()) as conn, conn:
         conn.row_factory = sqlite3.Row
         _ = conn.execute("BEGIN IMMEDIATE")
-        row = cast(sqlite3.Row | None, conn.execute(
-            "SELECT * FROM games WHERE id = ?", (game_id,)
-        ).fetchone())
+        row = cast(
+            sqlite3.Row | None,
+            conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone(),
+        )
         if row is None:
             return None
         game = {str(key): cast(object, row[key]) for key in row.keys()}
@@ -2087,7 +2174,9 @@ def store_thread_update(
             version, at = observation
             version_key, time_key = f"{site}_latest_version", f"{site}_latest_at"
             stored_at = str(game.get(time_key) or "")
-            same = normalize_version(version) == normalize_version(game.get(version_key))
+            same = normalize_version(version) == normalize_version(
+                game.get(version_key)
+            )
             if keep_newer and at and stored_at > at and not same:
                 # The catalog's Completed flag came with this older version.
                 catalog_completed = False
@@ -2103,9 +2192,11 @@ def store_thread_update(
 
         if catalog_completed:
             completed, lc_completed = True, True
-        newly_finished = completed and not game.get("thread_completed") and not str(
-            game.get("exe_path") or ""
-        ).strip()
+        newly_finished = (
+            completed
+            and not game.get("thread_completed")
+            and not str(game.get("exe_path") or "").strip()
+        )
         if completed:
             fields["thread_completed"] = 1
         if site == "lc" and lc_completed is not None:
@@ -2124,7 +2215,8 @@ def store_thread_update(
         if fields:
             assignments = ", ".join(f"{field} = ?" for field in fields)
             _ = conn.execute(
-                f"UPDATE games SET {assignments} WHERE id = ?", (*fields.values(), game_id)
+                f"UPDATE games SET {assignments} WHERE id = ?",
+                (*fields.values(), game_id),
             )
         return {**game, **fields}, newly_finished, newly_abandoned
 
@@ -2229,7 +2321,9 @@ def clear_game_install(game_id: int) -> None:
         cursor = conn.execute("UPDATE games SET exe_path = '' WHERE id = ?", (game_id,))
         if cursor.rowcount == 0:
             raise sqlite3.IntegrityError("The game was not found.")
-        _ = conn.execute("DELETE FROM game_launch_targets WHERE game_id = ?", (game_id,))
+        _ = conn.execute(
+            "DELETE FROM game_launch_targets WHERE game_id = ?", (game_id,)
+        )
 
 
 def set_game_local_cover(
@@ -2264,10 +2358,15 @@ def get_cover_cache_work() -> list[dict[str, object]]:
     # Include valid rows too so missing files are repaired on the next wake.
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
-        rows = cast(list[sqlite3.Row], conn.execute(
-            "SELECT id, cover_image_path, cover_cache, cover_cache_url FROM games WHERE COALESCE(cover_image_path, '') != '' OR cover_cache IS NOT NULL"
-        ).fetchall())
-        return [{str(key): cast(object, row[key]) for key in row.keys()} for row in rows]
+        rows = cast(
+            list[sqlite3.Row],
+            conn.execute(
+                "SELECT id, cover_image_path, cover_cache, cover_cache_url FROM games WHERE COALESCE(cover_image_path, '') != '' OR cover_cache IS NOT NULL"
+            ).fetchall(),
+        )
+        return [
+            {str(key): cast(object, row[key]) for key in row.keys()} for row in rows
+        ]
 
 
 def set_game_cover_cache(game_id: int, url: str, name: str) -> bool:
@@ -2283,30 +2382,51 @@ def set_game_cover_cache(game_id: int, url: str, name: str) -> bool:
 def clear_game_cover_cache(game_id: int | None = None) -> None:
     with closing(get_connection()) as conn:
         if game_id is None:
-            _ = conn.execute("UPDATE games SET cover_cache = NULL, cover_cache_url = NULL")
+            _ = conn.execute(
+                "UPDATE games SET cover_cache = NULL, cover_cache_url = NULL"
+            )
         else:
-            _ = conn.execute("UPDATE games SET cover_cache = NULL, cover_cache_url = NULL WHERE id = ?", (game_id,))
+            _ = conn.execute(
+                "UPDATE games SET cover_cache = NULL, cover_cache_url = NULL WHERE id = ?",
+                (game_id,),
+            )
         conn.commit()
 
 
 def referenced_cover_cache_names() -> set[str]:
     with closing(get_connection()) as conn:
-        rows = cast(list[tuple[str]], conn.execute("SELECT cover_cache FROM games WHERE cover_cache IS NOT NULL").fetchall())
+        rows = cast(
+            list[tuple[str]],
+            conn.execute(
+                "SELECT cover_cache FROM games WHERE cover_cache IS NOT NULL"
+            ).fetchall(),
+        )
         return {row[0] for row in rows}
 
 
 def lc_screenshot_sources() -> list[tuple[str, list[str]]]:
     """``(lc_url, stored screenshots)`` of each game that has either."""
     with closing(get_connection()) as conn:
-        rows = cast(list[tuple[object, object]], conn.execute(
-            "SELECT lc_url, screenshots FROM games WHERE COALESCE(lc_url, '') != '' OR COALESCE(screenshots, '[]') != '[]'"
-        ).fetchall())
-    return [(str(lc_url or ""), _decode_game_screenshots(screens)) for lc_url, screens in rows]
+        rows = cast(
+            list[tuple[object, object]],
+            conn.execute(
+                "SELECT lc_url, screenshots FROM games WHERE COALESCE(lc_url, '') != '' OR COALESCE(screenshots, '[]') != '[]'"
+            ).fetchall(),
+        )
+    return [
+        (str(lc_url or ""), _decode_game_screenshots(screens))
+        for lc_url, screens in rows
+    ]
 
 
 def referenced_cover_local_names() -> set[str]:
     with closing(get_connection()) as conn:
-        rows = cast(list[tuple[str]], conn.execute("SELECT cover_local FROM games WHERE cover_local IS NOT NULL AND cover_local != ''").fetchall())
+        rows = cast(
+            list[tuple[str]],
+            conn.execute(
+                "SELECT cover_local FROM games WHERE cover_local IS NOT NULL AND cover_local != ''"
+            ).fetchall(),
+        )
         return {row[0] for row in rows}
 
 
@@ -2353,7 +2473,9 @@ def normalize_note_links(value: object) -> list[dict[str, str]]:
         if not valid or len(url) > 2048 or url in seen:
             continue
         label = entry.get("label")
-        result.append({"url": url, "label": label.strip()[:200] if isinstance(label, str) else ""})
+        result.append(
+            {"url": url, "label": label.strip()[:200] if isinstance(label, str) else ""}
+        )
         seen.add(url)
     return result
 
@@ -2444,7 +2566,9 @@ def update_game(
         return {}
 
     if "note_links" in safe_fields:
-        safe_fields["note_links"] = json.dumps(normalize_note_links(safe_fields["note_links"]))
+        safe_fields["note_links"] = json.dumps(
+            normalize_note_links(safe_fields["note_links"])
+        )
 
     raw_tags = safe_fields.get("tags")
     if isinstance(raw_tags, list):
@@ -2490,13 +2614,17 @@ def update_game(
     if "finished_version" in safe_fields:
         safe_fields["finished_version"] = str(safe_fields["finished_version"]).strip()
     if "default_target_label" in safe_fields:
-        safe_fields["default_target_label"] = str(safe_fields["default_target_label"]).strip()
+        safe_fields["default_target_label"] = str(
+            safe_fields["default_target_label"]
+        ).strip()
     for tool in ("gamemode", "mangohud", "gamescope"):
         if tool in safe_fields:
             safe_fields[tool] = normalize_tool_override(safe_fields[tool])
     for column in gamescope.GAME_OVERRIDE_COLUMNS:
         if column in safe_fields:
-            safe_fields[column] = gamescope.normalize_game_field(column, safe_fields[column])
+            safe_fields[column] = gamescope.normalize_game_field(
+                column, safe_fields[column]
+            )
     if "html_player" in safe_fields:
         safe_fields["html_player"] = normalize_html_player(safe_fields["html_player"])
     if "launch_mode" in safe_fields:
@@ -2510,10 +2638,16 @@ def update_game(
         if "lc_url" in safe_fields:
             lc_url = str(safe_fields["lc_url"])
             if lc_url and _find_lc_game_row(conn, lc_url, game_id):
-                raise sqlite3.IntegrityError(f"LewdCorner thread already in the library: {lc_url}")
-            row = cast(sqlite3.Row | None, conn.execute(
-                "SELECT lc_url, screenshots, f95_url FROM games WHERE id = ?", (game_id,)
-            ).fetchone())
+                raise sqlite3.IntegrityError(
+                    f"LewdCorner thread already in the library: {lc_url}"
+                )
+            row = cast(
+                sqlite3.Row | None,
+                conn.execute(
+                    "SELECT lc_url, screenshots, f95_url FROM games WHERE id = ?",
+                    (game_id,),
+                ).fetchone(),
+            )
             old_id = lewdcorner.extract_thread_id(cast(object, row[0])) if row else ""
             if old_id and old_id != lewdcorner.extract_thread_id(lc_url):
                 safe_fields["lc_dismissed"] = old_id
@@ -2576,20 +2710,28 @@ def update_game(
                     "DELETE FROM game_links WHERE game_id = ? AND origin = 'f95_post'",
                     (game_id,),
                 )
-            elif not normalize_thread_url(stored_url) and normalize_thread_url(safe_fields["f95_url"]):
+            elif not normalize_thread_url(stored_url) and normalize_thread_url(
+                safe_fields["f95_url"]
+            ):
                 # A first F95 thread decides from now on; the stored states
                 # came from LC.
                 _reset_thread_states(safe_fields)
 
         if refresh_winner or "lc_mode" in safe_fields:
-            stored = cast(sqlite3.Row | None, conn.execute(
-                "SELECT * FROM games WHERE id = ?", (game_id,)
-            ).fetchone())
+            stored = cast(
+                sqlite3.Row | None,
+                conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone(),
+            )
             if stored:
                 game = {str(key): cast(object, stored[key]) for key in stored.keys()}
-                latest, site = _latest_for_game({**game, **safe_fields}, _lc_enabled_in(conn))
+                latest, site = _latest_for_game(
+                    {**game, **safe_fields}, _lc_enabled_in(conn)
+                )
                 if refresh_winner or site or game.get("latest_site"):
-                    safe_fields["latest_version"], safe_fields["latest_site"] = latest, site
+                    safe_fields["latest_version"], safe_fields["latest_site"] = (
+                        latest,
+                        site,
+                    )
 
         if "version" in safe_fields:
             _ = cursor.execute("SELECT version FROM games WHERE id = ?", (game_id,))
@@ -2766,7 +2908,9 @@ def get_play_history() -> tuple[
     }
     sessions: dict[int, list[dict[str, object]]] = {}
     for row in rows:
-        sessions.setdefault(int(str(cast(object, row["game_id"]))), []).append(dict(row))
+        sessions.setdefault(int(str(cast(object, row["game_id"]))), []).append(
+            dict(row)
+        )
     return totals, sessions
 
 
@@ -2793,9 +2937,12 @@ _NEW_SYNC_UID_SQL = "lower(hex(randomblob(16)))"
 
 def _read_folder_settings(conn: sqlite3.Connection) -> tuple[str | None, str | None]:
     """The stored `library_folders` and `library_folder` values, read together."""
-    rows = cast(list[tuple[str, object]], conn.execute(
-        "SELECT key, value FROM settings WHERE key IN ('library_folders', 'library_folder')"
-    ).fetchall())
+    rows = cast(
+        list[tuple[str, object]],
+        conn.execute(
+            "SELECT key, value FROM settings WHERE key IN ('library_folders', 'library_folder')"
+        ).fetchall(),
+    )
     settings = {key: str(value) for key, value in rows}
     return settings.get("library_folders"), settings.get("library_folder")
 
@@ -2805,7 +2952,9 @@ def _normalized_library_folders(
 ) -> tuple[list[str], str]:
     default = (raw_default or "").strip()
     try:
-        folders = normalize_library_folders(cast(object, json.loads(raw_folders or "[]")))
+        folders = normalize_library_folders(
+            cast(object, json.loads(raw_folders or "[]"))
+        )
     except (ValueError, TypeError):
         folders = []
     if default:
@@ -2879,11 +3028,18 @@ def update_setting(key: str, value: str) -> None:
 def lc_plus_effective() -> bool:
     """The effective LC Plus state: Yes, or Auto with Plus detected on this device."""
     with closing(get_connection()) as conn:
-        rows = dict(cast(list[tuple[str, str]], conn.execute(
-            "SELECT key, value FROM settings WHERE key IN (?, ?)",
-            (lewdcorner.LC_PLUS_MODE, lewdcorner.LC_PLUS_DETECTED),
-        ).fetchall()))
-    return lewdcorner.plus_effective(rows.get(lewdcorner.LC_PLUS_MODE), rows.get(lewdcorner.LC_PLUS_DETECTED))
+        rows = dict(
+            cast(
+                list[tuple[str, str]],
+                conn.execute(
+                    "SELECT key, value FROM settings WHERE key IN (?, ?)",
+                    (lewdcorner.LC_PLUS_MODE, lewdcorner.LC_PLUS_DETECTED),
+                ).fetchall(),
+            )
+        )
+    return lewdcorner.plus_effective(
+        rows.get(lewdcorner.LC_PLUS_MODE), rows.get(lewdcorner.LC_PLUS_DETECTED)
+    )
 
 
 def update_settings(
@@ -2895,7 +3051,9 @@ def update_settings(
         # Match case-insensitively like the reset below, so a case-only rename keeps its games.
         kept = {str(status).strip().casefold() for status in custom_play_statuses}
         removed = [
-            status for status in get_custom_play_statuses() if status.casefold() not in kept
+            status
+            for status in get_custom_play_statuses()
+            if status.casefold() not in kept
         ]
         values = {
             **values,
@@ -3171,7 +3329,10 @@ def rename_collection(old_name: object, new_name: object) -> list[str]:
         _write_collections_setting(cursor, collections)
         # Rename keeps members: rewrite matching names in the same transaction.
         _rewrite_game_collection_memberships(
-            cursor, lambda names: [new_normalized if name.casefold() == old_key else name for name in names]
+            cursor,
+            lambda names: [
+                new_normalized if name.casefold() == old_key else name for name in names
+            ],
         )
         conn.commit()
     return collections
@@ -3225,9 +3386,7 @@ def set_game_collections(game_id: int, names: Sequence[object]) -> list[str]:
         cursor = conn.cursor()
         if _read_game_collections(cursor, game_id) is None:
             raise ValueError("Game not found")
-        canonical_by_key = {
-            name.casefold(): name for name in _read_collections(cursor)
-        }
+        canonical_by_key = {name.casefold(): name for name in _read_collections(cursor)}
         members: list[str] = []
         seen: set[str] = set()
         for name in names:
@@ -3258,7 +3417,10 @@ def _archived_filter_statuses[Status](statuses: Sequence[Status]) -> list[Status
     result: list[Status | str] = []
     for status in statuses:
         value: Status | str = status
-        if isinstance(status, str) and status.strip().casefold() in _ARCHIVED_STATUS_ALIASES:
+        if (
+            isinstance(status, str)
+            and status.strip().casefold() in _ARCHIVED_STATUS_ALIASES
+        ):
             value = "Archived"
         if value not in result:
             result.append(value)
@@ -3286,7 +3448,9 @@ def normalize_filter_preset(entry: object) -> dict[str, object] | None:
     return {
         "name": name,
         "filterCollection": str(source.get("filterCollection") or ""),
-        "filterStatuses": _archived_filter_statuses(string_list(source.get("filterStatuses"))),
+        "filterStatuses": _archived_filter_statuses(
+            string_list(source.get("filterStatuses"))
+        ),
         "filterInstallState": (
             install_state if install_state in FILTER_PRESET_INSTALL_STATES else ""
         ),
@@ -3530,32 +3694,59 @@ def set_game_companion_tool_override(
 def list_steam_shortcuts(account_id: str) -> list[dict[str, object]]:
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
-        rows = cast(list[sqlite3.Row], conn.execute(
-            'SELECT * FROM steam_shortcuts WHERE account_id = ?', (account_id,)
-        ).fetchall())
-        return [{str(key): cast(object, row[key]) for key in row.keys()} for row in rows]
+        rows = cast(
+            list[sqlite3.Row],
+            conn.execute(
+                "SELECT * FROM steam_shortcuts WHERE account_id = ?", (account_id,)
+            ).fetchall(),
+        )
+        return [
+            {str(key): cast(object, row[key]) for key in row.keys()} for row in rows
+        ]
 
 
-def put_steam_shortcut(account_id: str, game_id: int, app_id: int | None, state: str, art_key: str = '') -> None:
+def put_steam_shortcut(
+    account_id: str, game_id: int, app_id: int | None, state: str, art_key: str = ""
+) -> None:
     with closing(get_connection()) as conn:
-        _ = conn.execute('''INSERT INTO steam_shortcuts(account_id, game_id, app_id, state, art_key)
+        _ = conn.execute(
+            """INSERT INTO steam_shortcuts(account_id, game_id, app_id, state, art_key)
             VALUES (?, ?, ?, ?, ?) ON CONFLICT(account_id, game_id) DO UPDATE SET
-            app_id=excluded.app_id, state=excluded.state, art_key=excluded.art_key''',
-            (account_id, game_id, app_id, state, art_key))
+            app_id=excluded.app_id, state=excluded.state, art_key=excluded.art_key""",
+            (account_id, game_id, app_id, state, art_key),
+        )
         conn.commit()
 
 
 def delete_steam_shortcut(account_id: str, game_id: int) -> None:
     with closing(get_connection()) as conn:
-        _ = conn.execute('DELETE FROM steam_shortcuts WHERE account_id = ? AND game_id = ?', (account_id, game_id))
+        _ = conn.execute(
+            "DELETE FROM steam_shortcuts WHERE account_id = ? AND game_id = ?",
+            (account_id, game_id),
+        )
         conn.commit()
 
 
 # Download queue (device-local; see core/downloads/queue.py)
 DOWNLOAD_JOB_COLUMNS = (
-    "id", "kind", "game_id", "title", "version", "position", "state", "reason",
-    "error_code", "error_text", "source", "bytes_done", "bytes_total", "retries",
-    "retry_at", "created_at", "updated_at", "finished_at",
+    "id",
+    "kind",
+    "game_id",
+    "title",
+    "version",
+    "position",
+    "state",
+    "reason",
+    "error_code",
+    "error_text",
+    "source",
+    "bytes_done",
+    "bytes_total",
+    "retries",
+    "retry_at",
+    "created_at",
+    "updated_at",
+    "finished_at",
 )
 # Columns update_download_job may change; id, kind and created_at stay fixed.
 _DOWNLOAD_JOB_UPDATABLE = frozenset(DOWNLOAD_JOB_COLUMNS) - {"id", "kind", "created_at"}
@@ -3567,7 +3758,9 @@ def list_download_jobs() -> list[dict[str, object]]:
         conn.row_factory = sqlite3.Row
         rows = cast(
             list[sqlite3.Row],
-            conn.execute("SELECT * FROM download_jobs ORDER BY position, created_at, id").fetchall(),
+            conn.execute(
+                "SELECT * FROM download_jobs ORDER BY position, created_at, id"
+            ).fetchall(),
         )
     return [{str(key): cast(object, row[key]) for key in row.keys()} for row in rows]
 
@@ -3588,14 +3781,17 @@ def insert_download_job(job: Mapping[str, object]) -> None:
         columns = ", ".join(values)
         marks = ", ".join("?" for _ in values)
         _ = conn.execute(
-            f"INSERT INTO download_jobs ({columns}) VALUES ({marks})", tuple(values.values())
+            f"INSERT INTO download_jobs ({columns}) VALUES ({marks})",
+            tuple(values.values()),
         )
         conn.commit()
 
 
 def update_download_job(job_id: str, fields: Mapping[str, object]) -> bool:
     """Change allowed columns of one job; False when no such job exists."""
-    values = {key: value for key, value in fields.items() if key in _DOWNLOAD_JOB_UPDATABLE}
+    values = {
+        key: value for key, value in fields.items() if key in _DOWNLOAD_JOB_UPDATABLE
+    }
     unknown = set(fields) - _DOWNLOAD_JOB_UPDATABLE
     if unknown:
         raise ValueError(f"Unknown download job fields: {', '.join(sorted(unknown))}")
@@ -3603,7 +3799,8 @@ def update_download_job(job_id: str, fields: Mapping[str, object]) -> bool:
     assignments = ", ".join(f"{key} = ?" for key in values)
     with closing(get_connection()) as conn:
         cursor = conn.execute(
-            f"UPDATE download_jobs SET {assignments} WHERE id = ?", (*values.values(), job_id)
+            f"UPDATE download_jobs SET {assignments} WHERE id = ?",
+            (*values.values(), job_id),
         )
         conn.commit()
         return cursor.rowcount > 0
@@ -3616,7 +3813,9 @@ def reorder_download_jobs(job_ids: Sequence[str]) -> None:
             str(row[0])
             for row in cast(
                 list[tuple[object]],
-                conn.execute("SELECT id FROM download_jobs ORDER BY position, created_at, id").fetchall(),
+                conn.execute(
+                    "SELECT id FROM download_jobs ORDER BY position, created_at, id"
+                ).fetchall(),
             )
         ]
         known = set(existing)

@@ -55,8 +55,14 @@ def test_exact_name_wins_over_case_variant(game: Path) -> None:
     (game / "A.js").write_text("upper")
     if (game / "a.js").read_text() != "lower":
         pytest.skip("file system ignores letter case")
-    assert web_player.resolve_game_file(str(game), "/A.js") == (os.path.realpath(game / "A.js"), "text/javascript")
-    assert web_player.resolve_game_file(str(game), "/a.js") == (os.path.realpath(game / "a.js"), "text/javascript")
+    assert web_player.resolve_game_file(str(game), "/A.js") == (
+        os.path.realpath(game / "A.js"),
+        "text/javascript",
+    )
+    assert web_player.resolve_game_file(str(game), "/a.js") == (
+        os.path.realpath(game / "a.js"),
+        "text/javascript",
+    )
     # Neither exact: the first name in sorted order wins.
     resolved = web_player.resolve_game_file(str(game), "/a.JS")
     assert resolved is not None and resolved[0] == os.path.realpath(game / "A.js")
@@ -77,13 +83,28 @@ def test_case_lookup_tries_the_next_folder_variant(game: Path) -> None:
     (game / "Data").mkdir()
     (game / "Data" / "b.txt").write_text("b")
     resolved = web_player.resolve_game_file(str(game), "/data/B.TXT")
-    assert resolved is not None and resolved[0] == os.path.realpath(game / "Data" / "b.txt")
+    assert resolved is not None and resolved[0] == os.path.realpath(
+        game / "Data" / "b.txt"
+    )
     resolved = web_player.resolve_game_file(str(game), "/DATA/A.TXT")
-    assert resolved is not None and resolved[0] == os.path.realpath(game / "data" / "a.txt")
+    assert resolved is not None and resolved[0] == os.path.realpath(
+        game / "data" / "a.txt"
+    )
 
 
 @pytest.mark.parametrize(
-    "path", ["/", "", "/sub/", "/./", "/img/", "/STRASSE.png", "/C:/index.html", "/D:/index.html", "/c:index.html"]
+    "path",
+    [
+        "/",
+        "",
+        "/sub/",
+        "/./",
+        "/img/",
+        "/STRASSE.png",
+        "/C:/index.html",
+        "/D:/index.html",
+        "/c:index.html",
+    ],
 )
 def test_case_lookup_misses(game: Path, path: str) -> None:
     (game / "Straße.png").write_bytes(b"png")
@@ -96,18 +117,31 @@ def test_case_lookup_is_bounded(game: Path) -> None:
         folder.mkdir(parents=True)
         (folder / "f.txt").write_text("1")
     # Exact paths have no depth limit; the letter-case search stops after 64 parts.
-    assert web_player.resolve_game_file(str(game), "/" + "d70/" * 70 + "f.txt") is not None
-    if not (game / "D70").exists():  # a file system that ignores letter case finds it on the exact path
-        assert web_player.resolve_game_file(str(game), "/" + "D70/" * 70 + "f.txt") is None
-    assert web_player.resolve_game_file(str(game), "/" + "D60/" * 60 + "F.TXT") is not None
+    assert (
+        web_player.resolve_game_file(str(game), "/" + "d70/" * 70 + "f.txt") is not None
+    )
+    if not (
+        game / "D70"
+    ).exists():  # a file system that ignores letter case finds it on the exact path
+        assert (
+            web_player.resolve_game_file(str(game), "/" + "D70/" * 70 + "f.txt") is None
+        )
+    assert (
+        web_player.resolve_game_file(str(game), "/" + "D60/" * 60 + "F.TXT") is not None
+    )
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks")
 def test_case_lookup_stops_on_symlink_loops(game: Path) -> None:
     (game / "x").symlink_to(".")
     (game / "X").symlink_to(".")
-    assert web_player.resolve_game_file(str(game), "/" + "x/" * 40 + "missing.txt") is None
-    assert web_player.resolve_game_file(str(game), "/" + "x/" * 40 + "INDEX.html") is not None
+    assert (
+        web_player.resolve_game_file(str(game), "/" + "x/" * 40 + "missing.txt") is None
+    )
+    assert (
+        web_player.resolve_game_file(str(game), "/" + "x/" * 40 + "INDEX.html")
+        is not None
+    )
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks")
@@ -117,7 +151,18 @@ def test_case_lookup_rejects_symlink_escape(game: Path, tmp_path: Path) -> None:
     assert web_player.resolve_game_file(str(game), "/SUB/../../secret.txt") is None
 
 
-@pytest.mark.parametrize("path", ["/../secret.txt", "/sub/../../secret.txt", "/%2e%2e/secret.txt", "/sub/..%2f..%2fsecret.txt", "/missing.html", "/sub", "/a\x00b"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/../secret.txt",
+        "/sub/../../secret.txt",
+        "/%2e%2e/secret.txt",
+        "/sub/..%2f..%2fsecret.txt",
+        "/missing.html",
+        "/sub",
+        "/a\x00b",
+    ],
+)
 def test_rejects_traversal_and_missing(game: Path, path: str) -> None:
     assert web_player.resolve_game_file(str(game), path) is None
 
@@ -132,13 +177,34 @@ def test_rejects_symlink_escape(game: Path, tmp_path: Path) -> None:
 
 def test_parse_args_good(game: Path, tmp_path: Path) -> None:
     args = web_player.parse_args(
-        ["--root", str(game), "--entry", "index.html", "--profile", str(tmp_path / "p"), "--title", "T", "--offline", "--links", "ignore"]
+        [
+            "--root",
+            str(game),
+            "--entry",
+            "index.html",
+            "--profile",
+            str(tmp_path / "p"),
+            "--title",
+            "T",
+            "--offline",
+            "--links",
+            "ignore",
+        ]
     )
     assert args.entry == "index.html" and args.offline and not args.flash
     assert args.links == "ignore" and args.title == "T"
     assert not args.devtools and not args.sandboxed
     args = web_player.parse_args(
-        ["--root", str(game), "--entry", "index.html", "--profile", str(tmp_path / "p"), "--devtools", "--sandboxed"]
+        [
+            "--root",
+            str(game),
+            "--entry",
+            "index.html",
+            "--profile",
+            str(tmp_path / "p"),
+            "--devtools",
+            "--sandboxed",
+        ]
     )
     assert args.devtools and args.sandboxed and args.links == "open"
 
@@ -153,7 +219,14 @@ def test_parse_args_good(game: Path, tmp_path: Path) -> None:
     ],
 )
 def test_parse_args_bad(game: Path, tmp_path: Path, extra: list[str]) -> None:
-    base = ["--root", str(game), "--entry", "index.html", "--profile", str(tmp_path / "p")]
+    base = [
+        "--root",
+        str(game),
+        "--entry",
+        "index.html",
+        "--profile",
+        str(tmp_path / "p"),
+    ]
     argv = extra if extra in ([], ["--root"]) else [*base, *extra]
     with pytest.raises(web_player.UsageError):
         web_player.parse_args(argv)
@@ -161,13 +234,17 @@ def test_parse_args_bad(game: Path, tmp_path: Path, extra: list[str]) -> None:
 
 def test_parse_args_missing_entry(game: Path, tmp_path: Path) -> None:
     with pytest.raises(web_player.UsageError):
-        web_player.parse_args(["--root", str(game), "--entry", "nope.html", "--profile", str(tmp_path)])
+        web_player.parse_args(
+            ["--root", str(game), "--entry", "nope.html", "--profile", str(tmp_path)]
+        )
 
 
 def test_main_dispatch_usage_error() -> None:
     result = subprocess.run(
         [sys.executable, str(REPO / "main.py"), "--play-web", "--root"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert result.returncode == 2 and "Usage: wlib --play-web" in result.stderr
 
@@ -186,18 +263,30 @@ def test_main_dispatch_usage_error() -> None:
         ("ftp://example.com/x", "open", False, "drop"),
     ],
 )
-def test_classify_navigation(url: str, links: str, offline: bool, expected: str) -> None:
+def test_classify_navigation(
+    url: str, links: str, offline: bool, expected: str
+) -> None:
     assert web_player.classify_navigation(url, links, offline) == expected  # type: ignore[arg-type]
 
 
 def test_flash_page_and_bootstrap() -> None:
     page = web_player.flash_page("a b/<g>.swf").decode()
-    assert "wlib-game://game/a%20b/%3Cg%3E.swf" in page and "<g>" not in page.split("<script")[0].replace("&lt;g&gt;", "")
+    assert "wlib-game://game/a%20b/%3Cg%3E.swf" in page and "<g>" not in page.split(
+        "<script"
+    )[0].replace("&lt;g&gt;", "")
     assert "wlib-game://ruffle/" in web_player.ruffle_bootstrap_source()
 
 
 def test_host_open_env_drops_bundled_libs() -> None:
-    env = web_player.host_open_env({"APPDIR": "/a", "LD_LIBRARY_PATH": "/a/lib", "LD_LIBRARY_PATH_ORIG": "/o", "QT_QPA_PLATFORM": "xcb", "HOME": "/h"})
+    env = web_player.host_open_env(
+        {
+            "APPDIR": "/a",
+            "LD_LIBRARY_PATH": "/a/lib",
+            "LD_LIBRARY_PATH_ORIG": "/o",
+            "QT_QPA_PLATFORM": "xcb",
+            "HOME": "/h",
+        }
+    )
     assert env == {"LD_LIBRARY_PATH": "/o", "HOME": "/h"}
 
 
@@ -224,7 +313,9 @@ def test_open_folder_on_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 def test_open_folder_on_windows(tmp_path: Path) -> None:
     with (
         patch("core.web_player.is_windows", return_value=True),
-        patch("core.host_platform.open_windows_system_target", return_value=(True, "")) as opener,
+        patch(
+            "core.host_platform.open_windows_system_target", return_value=(True, "")
+        ) as opener,
     ):
         assert web_player.open_folder_on_host(str(tmp_path))
     opener.assert_called_once_with(str(tmp_path))
@@ -247,17 +338,29 @@ def test_safe_export_name(suggested: str, expected: str) -> None:
     assert web_player.safe_export_name(suggested) == expected
 
 
-@pytest.mark.parametrize(("name", "stem", "extension"), [("save.save", "save", ".save"), ("save", "save", "")])
-def test_unique_export_path(tmp_path: Path, name: str, stem: str, extension: str) -> None:
+@pytest.mark.parametrize(
+    ("name", "stem", "extension"),
+    [("save.save", "save", ".save"), ("save", "save", "")],
+)
+def test_unique_export_path(
+    tmp_path: Path, name: str, stem: str, extension: str
+) -> None:
     folder = str(tmp_path)
     first_copy = f"{stem} (1){extension}"
     (tmp_path / name).touch()
-    assert web_player.unique_export_path(folder, name, set()) == str(tmp_path / first_copy)
-    assert web_player.unique_export_path(folder, name, {first_copy}) == str(tmp_path / f"{stem} (2){extension}")
+    assert web_player.unique_export_path(folder, name, set()) == str(
+        tmp_path / first_copy
+    )
+    assert web_player.unique_export_path(folder, name, {first_copy}) == str(
+        tmp_path / f"{stem} (2){extension}"
+    )
 
 
 def test_file_picker_filter_uses_extensions_only() -> None:
-    assert web_player.file_picker_filter([None, "image/*", ".save", ".json"]) == "Accepted files (*.save *.json);;All files (*)"
+    assert (
+        web_player.file_picker_filter([None, "image/*", ".save", ".json"])
+        == "Accepted files (*.save *.json);;All files (*)"
+    )
     assert web_player.file_picker_filter(["text/plain"]) == "All files (*)"
 
 
@@ -266,7 +369,9 @@ def test_literal_percent_names_decode_once(game: Path, tmp_path: Path) -> None:
 
     (game / "a%20b.html").write_text("x")
     # A URL path is decoded once: %2520 is the file "a%20b.html".
-    assert web_player.resolve_game_file(str(game), "/" + quote("a%20b.html")) is not None
+    assert (
+        web_player.resolve_game_file(str(game), "/" + quote("a%20b.html")) is not None
+    )
     args = web_player.parse_args(
         ["--root", str(game), "--entry", "a%20b.html", "--profile", str(tmp_path / "p")]
     )

@@ -16,7 +16,9 @@ def _touch(path: Path) -> None:
     path.touch()
 
 
-@pytest.mark.parametrize("prefix", [game_files.MOVE_PREFIX, game_files.UNINSTALL_PREFIX])
+@pytest.mark.parametrize(
+    "prefix", [game_files.MOVE_PREFIX, game_files.UNINSTALL_PREFIX]
+)
 def test_scan_skips_move_and_uninstall_work_folders(tmp_path, prefix):
     _touch(tmp_path / f"{prefix}123456" / "Game.exe")
     _touch(tmp_path / "Real Game" / "Real.exe")
@@ -30,7 +32,9 @@ def test_find_launcher_skips_a_move_folder_below_the_game(tmp_path):
     _touch(tmp_path / f"{game_files.MOVE_PREFIX}1" / "Copy.exe")
     _touch(tmp_path / "Inner" / "Inner.exe")
 
-    assert game_scan.find_launcher(str(tmp_path)) == str(tmp_path / "Inner" / "Inner.exe")
+    assert game_scan.find_launcher(str(tmp_path)) == str(
+        tmp_path / "Inner" / "Inner.exe"
+    )
 
 
 def test_lone_32_bit_launcher_wins_over_a_web_page(tmp_path):

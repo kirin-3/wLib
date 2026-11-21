@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Removing one download never deletes a partial file another download uses."""
+
 import io
 import threading
 import time
@@ -43,24 +44,37 @@ def _worker(tmp_path, monkeypatch):
 def _job(job_id: str, part: str, state: str = "paused"):
     from core.downloads.queue import QueueJob
 
-    return QueueJob(id=job_id, kind="host", game_id=1, state=state,
-                    source={"host": "pixeldrain", "part_file": part})
+    return QueueJob(
+        id=job_id,
+        kind="host",
+        game_id=1,
+        state=state,
+        source={"host": "pixeldrain", "part_file": part},
+    )
 
 
-def test_removing_a_paused_job_keeps_the_partial_another_job_is_writing(tmp_path, monkeypatch):
+def test_removing_a_paused_job_keeps_the_partial_another_job_is_writing(
+    tmp_path, monkeypatch
+):
     worker = _worker(tmp_path, monkeypatch)
     data = b"PK\x03\x04" + b"a" * 200
     gate = threading.Event()
-    info = FileInfo("game.zip", len(data), lambda: _Held(data, gate),
-                    resume_factory=lambda offset: _Held(data, gate, offset),
-                    resume_key="pixeldrain:file")
+    info = FileInfo(
+        "game.zip",
+        len(data),
+        lambda: _Held(data, gate),
+        resume_factory=lambda offset: _Held(data, gate, offset),
+        resume_key="pixeldrain:file",
+    )
     part = _resume_part(tmp_path, info)
     assert part is not None
     result: list[object] = []
 
     def run() -> None:
         try:
-            result.append(transfer(info, "jobB", Event(), lambda *_: None, directory=tmp_path))
+            result.append(
+                transfer(info, "jobB", Event(), lambda *_: None, directory=tmp_path)
+            )
         except Exception as exc:  # noqa: BLE001 - reported below
             result.append(exc)
 
@@ -78,7 +92,9 @@ def test_removing_a_paused_job_keeps_the_partial_another_job_is_writing(tmp_path
     assert isinstance(result[0], type(part)) and result[0].read_bytes() == data
 
 
-def test_removing_a_job_keeps_the_partial_a_queued_job_continues_from(tmp_path, monkeypatch):
+def test_removing_a_job_keeps_the_partial_a_queued_job_continues_from(
+    tmp_path, monkeypatch
+):
     worker = _worker(tmp_path, monkeypatch)
     part = tmp_path / "resume-abc.part"
     part.write_bytes(b"PK\x03\x04")
@@ -90,7 +106,9 @@ def test_removing_a_job_keeps_the_partial_a_queued_job_continues_from(tmp_path, 
     assert not part.exists()
 
 
-def test_failed_part_unlink_does_not_prevent_the_next_job_from_resuming(tmp_path, monkeypatch):
+def test_failed_part_unlink_does_not_prevent_the_next_job_from_resuming(
+    tmp_path, monkeypatch
+):
     data = b"PK\x03\x04" + b"a" * 200
     offsets = []
 
@@ -100,8 +118,13 @@ def test_failed_part_unlink_does_not_prevent_the_next_job_from_resuming(tmp_path
 
     gate = Event()
     gate.set()
-    info = FileInfo("game.zip", len(data), lambda: _Held(data, gate),
-                    resume_factory=resume, resume_key="pixeldrain:file")
+    info = FileInfo(
+        "game.zip",
+        len(data),
+        lambda: _Held(data, gate),
+        resume_factory=resume,
+        resume_key="pixeldrain:file",
+    )
     part = _resume_part(tmp_path, info)
     assert part is not None
     unlink = type(part).unlink

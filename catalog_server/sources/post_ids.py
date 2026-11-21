@@ -8,25 +8,61 @@ from collections.abc import Callable
 # Labels that end the overview; a colon inside the overview text is not one.
 SECTION_LABELS = frozenset(
     {
-        "thread updated", "release date", "developer", "developers", "publisher",
-        "original title", "original name", "aliases", "alias", "also known as", "aka",
-        "translator", "translators", "censored", "censorship", "version", "os",
-        "platform", "platforms", "language", "languages", "store", "stores", "genre",
-        "genres", "installation", "changelog", "download", "downloads", "trailer",
-        "developer notes", "translator notes", "other games",
+        "thread updated",
+        "release date",
+        "developer",
+        "developers",
+        "publisher",
+        "original title",
+        "original name",
+        "aliases",
+        "alias",
+        "also known as",
+        "aka",
+        "translator",
+        "translators",
+        "censored",
+        "censorship",
+        "version",
+        "os",
+        "platform",
+        "platforms",
+        "language",
+        "languages",
+        "store",
+        "stores",
+        "genre",
+        "genres",
+        "installation",
+        "changelog",
+        "download",
+        "downloads",
+        "trailer",
+        "developer notes",
+        "translator notes",
+        "other games",
     }
 )
 _LANGUAGE_SPLIT_RE = re.compile(r",|;|/|&|\+|\band\b|\|", re.I)
 _LANGUAGE_NAME_RE = re.compile(r"[A-Za-z][A-Za-z -]{1,24}")
-_NOT_LANGUAGES = frozenset({"MTL", "AI", "LLM", "TL", "OTHER", "OTHERS", "NONE", "UNKNOWN"})
+_NOT_LANGUAGES = frozenset(
+    {"MTL", "AI", "LLM", "TL", "OTHER", "OTHERS", "NONE", "UNKNOWN"}
+)
 
-_ID_PATTERNS: tuple[tuple[str, re.Pattern[str], Callable[[re.Match[str]], str | None]], ...] = (
+_ID_PATTERNS: tuple[
+    tuple[str, re.Pattern[str], Callable[[re.Match[str]], str | None]], ...
+] = (
     (
         "patreon",
-        re.compile(r"^https?://(?:www\.)?patreon\.com/(?:c/|cw/|join/)?([A-Za-z0-9_-]+)/?(?:[?#/].*)?$"),
-        lambda m: None
-        if m.group(1).lower() in {"posts", "user", "home", "login", "checkout", "bepatron"}
-        else m.group(1).lower(),
+        re.compile(
+            r"^https?://(?:www\.)?patreon\.com/(?:c/|cw/|join/)?([A-Za-z0-9_-]+)/?(?:[?#/].*)?$"
+        ),
+        lambda m: (
+            None
+            if m.group(1).lower()
+            in {"posts", "user", "home", "login", "checkout", "bepatron"}
+            else m.group(1).lower()
+        ),
     ),
     (
         "patreon",
@@ -35,7 +71,10 @@ _ID_PATTERNS: tuple[tuple[str, re.Pattern[str], Callable[[re.Match[str]], str | 
     ),
     (
         "itch",
-        re.compile(r"^https?://([a-z0-9-]+)\.itch\.io(?:/([A-Za-z0-9_-]+))?/?(?:[?#].*)?$", re.I),
+        re.compile(
+            r"^https?://([a-z0-9-]+)\.itch\.io(?:/([A-Za-z0-9_-]+))?/?(?:[?#].*)?$",
+            re.I,
+        ),
         lambda m: m.group(1).lower() + (f"/{m.group(2).lower()}" if m.group(2) else ""),
     ),
     (
@@ -45,24 +84,34 @@ _ID_PATTERNS: tuple[tuple[str, re.Pattern[str], Callable[[re.Match[str]], str | 
     ),
     (
         "subscribestar",
-        re.compile(r"^https?://(?:www\.)?subscribestar\.(?:com|adult)/([A-Za-z0-9_-]+)", re.I),
+        re.compile(
+            r"^https?://(?:www\.)?subscribestar\.(?:com|adult)/([A-Za-z0-9_-]+)", re.I
+        ),
         lambda m: None if m.group(1).lower() == "posts" else m.group(1).lower(),
     ),
     (
         "kofi",
         re.compile(r"^https?://(?:www\.)?ko-fi\.com/([A-Za-z0-9_]+)", re.I),
-        lambda m: None
-        if m.group(1).lower() in {"s", "i", "post", "home", "album", "shop"}
-        else m.group(1).lower(),
+        lambda m: (
+            None
+            if m.group(1).lower() in {"s", "i", "post", "home", "album", "shop"}
+            else m.group(1).lower()
+        ),
     ),
     (
         "discord",
-        re.compile(r"^https?://(?:www\.)?(?:discord\.gg|discord(?:app)?\.com/invite)/([A-Za-z0-9-]+)", re.I),
+        re.compile(
+            r"^https?://(?:www\.)?(?:discord\.gg|discord(?:app)?\.com/invite)/([A-Za-z0-9-]+)",
+            re.I,
+        ),
         lambda m: m.group(1),
     ),
     (
         "steam",
-        re.compile(r"^https?://(?:store\.steampowered\.com|steamcommunity\.com)/app/(\d+)", re.I),
+        re.compile(
+            r"^https?://(?:store\.steampowered\.com|steamcommunity\.com)/app/(\d+)",
+            re.I,
+        ),
         lambda m: m.group(1),
     ),
 )

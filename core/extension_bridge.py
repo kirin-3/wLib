@@ -36,7 +36,9 @@ _repeats = RepeatLimiter()
 # How an extension made a fetch answer, for the log (extension_api.md).
 _FETCH_VIA = frozenset({"background", "tab"})
 _TAB_RETRY = frozenset({"no_tab", "failed", "no_time"})
-_XF_LOGGED_IN_RE = re.compile(r"""\bdata-logged-in=["'](true|false)["']""", re.IGNORECASE)
+_XF_LOGGED_IN_RE = re.compile(
+    r"""\bdata-logged-in=["'](true|false)["']""", re.IGNORECASE
+)
 
 
 class BridgeUnavailable(Exception):
@@ -148,9 +150,16 @@ class BridgeConnection:
             send()
 
     def note_hello(
-        self, protocol: object, can_fetch: object, extension_version: object = "",
-        can_resolve: object = False, *, can_fetch_lc: object = False, can_resolve_lc: object = False,
-        can_fetch_lc_images: object = False, can_fetch_lists: object = False,
+        self,
+        protocol: object,
+        can_fetch: object,
+        extension_version: object = "",
+        can_resolve: object = False,
+        *,
+        can_fetch_lc: object = False,
+        can_resolve_lc: object = False,
+        can_fetch_lc_images: object = False,
+        can_fetch_lists: object = False,
     ) -> None:
         self._hello_ok = protocol in (1, 2)
         self.can_fetch_lists = self._hello_ok and can_fetch_lists is True
@@ -164,7 +173,10 @@ class BridgeConnection:
             self.extension_version = extension_version.strip()[:32]
 
     def note_status(
-        self, can_fetch: object, can_fetch_lc: object = None, can_resolve_lc: object = None,
+        self,
+        can_fetch: object,
+        can_fetch_lc: object = None,
+        can_resolve_lc: object = None,
         can_fetch_lc_images: object = None,
     ) -> None:
         if isinstance(can_fetch, bool):
@@ -308,7 +320,12 @@ _last_lc_signed_in: bool | None = None
 
 def reset_for_tests() -> None:
     """Clear registry and pending (tests only)."""
-    global _disconnects, _last_disconnect_at, _last_connection_seconds, _last_fetch, _last_lc_request
+    global \
+        _disconnects, \
+        _last_disconnect_at, \
+        _last_connection_seconds, \
+        _last_fetch, \
+        _last_lc_request
     global _lc_request_lock, _last_lc_signed_in, _repeats
     _lc_request_lock = _LcGate()
     _repeats = RepeatLimiter()
@@ -350,7 +367,9 @@ def _register_connection(conn: BridgeConnection) -> None:
             _connections.insert(0, conn)
         count = len(_connections)
     logger.info(
-        "Browser extension bridge opened (pairing %s, %d open)", conn.pairing_id or "none", count
+        "Browser extension bridge opened (pairing %s, %d open)",
+        conn.pairing_id or "none",
+        count,
     )
 
 
@@ -368,18 +387,20 @@ def _remove_connection(conn: BridgeConnection, reason: str = "") -> None:
             _disconnects += 1
             _last_disconnect_at = now
             _last_connection_seconds = duration
-        doomed = [
-            key for key, item in _pending.items() if item.connection is conn
-        ]
+        doomed = [key for key, item in _pending.items() if item.connection is conn]
         for key in doomed:
             item = _pending.pop(key)
             item.error = "disconnected"
             item.event.set()
-        for key in [key for key, image in _pending_images.items() if image.connection is conn]:
+        for key in [
+            key for key, image in _pending_images.items() if image.connection is conn
+        ]:
             image = _pending_images.pop(key)
             image.error = "disconnected"
             image.event.set()
-        for key in [key for key, item in _pending_resolves.items() if item.connection is conn]:
+        for key in [
+            key for key, item in _pending_resolves.items() if item.connection is conn
+        ]:
             pending_resolve = _pending_resolves.pop(key)
             pending_resolve.error = "disconnected"
             pending_resolve.event.set()
@@ -395,7 +416,9 @@ def _remove_connection(conn: BridgeConnection, reason: str = "") -> None:
 def _newest_eligible(site: Site = "f95") -> BridgeConnection | None:
     with _lock:
         for conn in _connections:
-            if not conn.closed and (conn.can_fetch_lc if site == "lc" else conn.eligible):
+            if not conn.closed and (
+                conn.can_fetch_lc if site == "lc" else conn.eligible
+            ):
                 return conn
     return None
 
@@ -407,7 +430,14 @@ def is_available(*, site: Site = "f95") -> bool:
 
 def _newest_lc_image_fetcher() -> BridgeConnection | None:
     with _lock:
-        return next((conn for conn in _connections if not conn.closed and conn.can_fetch_lc_images), None)
+        return next(
+            (
+                conn
+                for conn in _connections
+                if not conn.closed and conn.can_fetch_lc_images
+            ),
+            None,
+        )
 
 
 def can_fetch_lc_images() -> bool:
@@ -462,7 +492,10 @@ def record_fetch_outcome(
             _how(via, tab_retry),
         )
     elif signed_in is True and previous is not True:
-        logger.info("Browser extension fetched F95Zone while logged in (%s)", _how(via, tab_retry))
+        logger.info(
+            "Browser extension fetched F95Zone while logged in (%s)",
+            _how(via, tab_retry),
+        )
 
 
 def _lc_signed_in(url: str, body: str) -> bool | None:
@@ -529,12 +562,17 @@ def status_snapshot() -> dict[str, object]:
             "extension_version": newest.extension_version if newest else "",
             "can_fetch": newest.can_fetch if newest else None,
             "can_fetch_lc": any(conn.can_fetch_lc for conn in open_connections),
-            "can_resolve_lc": any(conn.can_fetch_lc and conn.can_resolve and conn.can_resolve_lc for conn in open_connections),
-            "can_fetch_lc_images": any(conn.can_fetch_lc_images for conn in open_connections),
-            "can_fetch_lists": any(conn.eligible and conn.can_fetch_lists for conn in open_connections),
-            "connected_seconds": (
-                round(now - newest.opened_at) if newest else None
+            "can_resolve_lc": any(
+                conn.can_fetch_lc and conn.can_resolve and conn.can_resolve_lc
+                for conn in open_connections
             ),
+            "can_fetch_lc_images": any(
+                conn.can_fetch_lc_images for conn in open_connections
+            ),
+            "can_fetch_lists": any(
+                conn.eligible and conn.can_fetch_lists for conn in open_connections
+            ),
+            "connected_seconds": (round(now - newest.opened_at) if newest else None),
             "disconnects": _disconnects,
             "last_connection_seconds": (
                 round(_last_connection_seconds)
@@ -594,7 +632,9 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
         could_resolve_lc = conn.can_resolve_lc
         could_fetch_lc_images = conn.can_fetch_lc_images
         conn.note_status(
-            message.get("can_fetch"), message.get("can_fetch_lc"), message.get("can_resolve_lc"),
+            message.get("can_fetch"),
+            message.get("can_fetch_lc"),
+            message.get("can_resolve_lc"),
             message.get("can_fetch_lc_images"),
         )
         if conn.can_resolve_lc != could_resolve_lc:
@@ -604,7 +644,9 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
         if conn.can_fetch_lc != could_fetch_lc:
             logger.info("Browser extension can fetch LewdCorner: %s", conn.can_fetch_lc)
         if conn.can_fetch_lc_images != could_fetch_lc_images:
-            logger.info("Browser extension can_fetch_lc_images: %s", conn.can_fetch_lc_images)
+            logger.info(
+                "Browser extension can_fetch_lc_images: %s", conn.can_fetch_lc_images
+            )
             if conn.can_fetch_lc_images:
                 _notify_lc_images_available()
         if conn.can_fetch_lc and not could_fetch_lc:
@@ -666,7 +708,9 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
                 final_url=final_url,
                 body=body,
                 via=via if isinstance(via, str) and via in _FETCH_VIA else "",
-                tab_retry=tab_retry if isinstance(tab_retry, str) and tab_retry in _TAB_RETRY else "",
+                tab_retry=tab_retry
+                if isinstance(tab_retry, str) and tab_retry in _TAB_RETRY
+                else "",
             )
             item.error = ""
         else:
@@ -698,18 +742,32 @@ def _handle_image_chunk(conn: BridgeConnection, message: dict[str, object]) -> N
             item.error = error
             item.event.set()
 
-        if not isinstance(index, int) or isinstance(index, bool) or index != len(item.chunks):
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or index != len(item.chunks)
+        ):
             fail("image chunk missing")
             return
         if index == 0:
             if message.get("ok") is not True:
                 raw_error = message.get("error")
-                fail(raw_error.strip()[:80] if isinstance(raw_error, str) and raw_error.strip() else "image fetch failed")
+                fail(
+                    raw_error.strip()[:80]
+                    if isinstance(raw_error, str) and raw_error.strip()
+                    else "image fetch failed"
+                )
                 return
             status = message.get("status")
-            item.status = status if isinstance(status, int) and not isinstance(status, bool) else 0
+            item.status = (
+                status
+                if isinstance(status, int) and not isinstance(status, bool)
+                else 0
+            )
             content_type = message.get("content_type")
-            item.content_type = content_type.strip()[:200] if isinstance(content_type, str) else ""
+            item.content_type = (
+                content_type.strip()[:200] if isinstance(content_type, str) else ""
+            )
             final_url = message.get("final_url")
             item.final_url = final_url if isinstance(final_url, str) else ""
         if not isinstance(data, str):
@@ -743,7 +801,9 @@ def _lc_gap_ready_at() -> float:
     return (_last_lc_request or 0.0) + LC_GAP_SECONDS
 
 
-def fetch(url: str, timeout: float = 30, *, site: Site = "f95", background: bool = False) -> BridgeResponse:
+def fetch(
+    url: str, timeout: float = 30, *, site: Site = "f95", background: bool = False
+) -> BridgeResponse:
     """Send one fetch to the newest eligible extension and wait for its body.
 
     A ``background`` LC fetch keeps the normal LC gap but waits behind every
@@ -773,7 +833,11 @@ def fetch(url: str, timeout: float = 30, *, site: Site = "f95", background: bool
 def _newest_list_fetcher() -> BridgeConnection | None:
     with _lock:
         return next(
-            (conn for conn in _connections if not conn.closed and conn.eligible and conn.can_fetch_lists),
+            (
+                conn
+                for conn in _connections
+                if not conn.closed and conn.eligible and conn.can_fetch_lists
+            ),
             None,
         )
 
@@ -782,7 +846,9 @@ def list_fetch_unavailable_reason() -> str | None:
     """``None`` when a list fetch can be sent, else why it cannot."""
     if _newest_list_fetcher() is not None:
         return None
-    return "extension_outdated" if _newest_eligible("f95") is not None else "no_extension"
+    return (
+        "extension_outdated" if _newest_eligible("f95") is not None else "no_extension"
+    )
 
 
 def fetch_list_page(url: str, timeout: float = 30) -> BridgeResponse:
@@ -792,14 +858,17 @@ def fetch_list_page(url: str, timeout: float = 30) -> BridgeResponse:
     if conn is None:
         reason = list_fetch_unavailable_reason() or "no_extension"
         raise BridgeUnavailable(
-            "extension does not support F95 list pages" if reason == "extension_outdated"
+            "extension does not support F95 list pages"
+            if reason == "extension_outdated"
             else "no eligible extension connected",
             reason,
         )
     return _fetch(url, timeout, "f95", conn)
 
 
-def _fetch(url: str, timeout: float, site: Site, conn: BridgeConnection | None = None) -> BridgeResponse:
+def _fetch(
+    url: str, timeout: float, site: Site, conn: BridgeConnection | None = None
+) -> BridgeResponse:
     global _last_lc_request
     if conn is None:
         conn = _newest_eligible(site)
@@ -842,7 +911,11 @@ def _fetch(url: str, timeout: float, site: Site, conn: BridgeConnection | None =
 
 def _note_lc_failure(error: str) -> None:
     _repeats.log(
-        logger, logging.WARNING, f"lc-fail:{error}", "Browser extension LewdCorner fetch failed: %s", error
+        logger,
+        logging.WARNING,
+        f"lc-fail:{error}",
+        "Browser extension LewdCorner fetch failed: %s",
+        error,
     )
 
 
@@ -853,9 +926,13 @@ def _background_ready_at() -> float:
 def _check_background_limit() -> None:
     now = time.monotonic()
     with _lock:
-        if len(_lc_background_fetches) >= LC_BACKGROUND_PER_HOUR and now - _lc_background_fetches[0] < 3600:
+        if (
+            len(_lc_background_fetches) >= LC_BACKGROUND_PER_HOUR
+            and now - _lc_background_fetches[0] < 3600
+        ):
             raise LcImageLimitReached(
-                "LewdCorner image limit for this hour reached", 3600 - (now - _lc_background_fetches[0])
+                "LewdCorner image limit for this hour reached",
+                3600 - (now - _lc_background_fetches[0]),
             )
 
 
@@ -881,7 +958,9 @@ def fetch_image(url: str, *, background: bool, timeout: float = 60) -> ImageResp
             _wait_lc_gap()
         conn = _newest_lc_image_fetcher()
         if conn is None:
-            raise BridgeUnavailable("no extension with LewdCorner image support connected")
+            raise BridgeUnavailable(
+                "no extension with LewdCorner image support connected"
+            )
         request_id = uuid.uuid4().hex
         item = _PendingImage(conn)
         with _lock:
@@ -893,7 +972,9 @@ def fetch_image(url: str, *, background: bool, timeout: float = 60) -> ImageResp
             if background:
                 with _lock:
                     _lc_background_fetches.append(_last_lc_request)
-            conn.send_text(json.dumps({"type": "fetch_image", "id": request_id, "url": url}))
+            conn.send_text(
+                json.dumps({"type": "fetch_image", "id": request_id, "url": url})
+            )
         except (BridgeFailed, OSError, ValueError) as exc:
             with _lock:
                 _ = _pending_images.pop(request_id, None)
@@ -907,14 +988,20 @@ def fetch_image(url: str, *, background: bool, timeout: float = 60) -> ImageResp
     if item.error:
         raise BridgeFailed(item.error)
     return ImageResponse(
-        status=item.status, content_type=item.content_type,
-        final_url=item.final_url, body=b"".join(item.chunks),
+        status=item.status,
+        content_type=item.content_type,
+        final_url=item.final_url,
+        body=b"".join(item.chunks),
     )
 
 
 def _can_resolve(conn: BridgeConnection, site: Site) -> bool:
-    return not conn.closed and conn.can_resolve and (
-        conn.can_fetch_lc and conn.can_resolve_lc if site == "lc" else conn.eligible
+    return (
+        not conn.closed
+        and conn.can_resolve
+        and (
+            conn.can_fetch_lc and conn.can_resolve_lc if site == "lc" else conn.eligible
+        )
     )
 
 
@@ -924,15 +1011,21 @@ def _newest_resolver(site: Site) -> BridgeConnection | None:
 
 
 def resolve(
-    url: str, host: str, timeout: float = 35,
+    url: str,
+    host: str,
+    timeout: float = 35,
     on_progress: Callable[[str], None] | None = None,
     start: Callable[[Callable[[], None]], None] | None = None,
-    cancel: threading.Event | None = None, *, site: Site = "f95",
+    cancel: threading.Event | None = None,
+    *,
+    site: Site = "f95",
 ) -> dict[str, object]:
     """Resolve one link, releasing the site's pacing slot after sending it."""
     global _last_lc_request
     if site == "lc" and _newest_resolver(site) is None:
-        raise BridgeUnavailable("no extension with LewdCorner download resolution connected")
+        raise BridgeUnavailable(
+            "no extension with LewdCorner download resolution connected"
+        )
     with _resolve_lock:
         conn = _newest_resolver(site)
         if conn is None:
@@ -945,7 +1038,9 @@ def resolve(
                 raise BridgeUnavailable("extension disconnected")
             _pending_resolves[request_id] = item
         try:
-            payload = json.dumps({"type": "resolve", "id": request_id, "url": url, "host": host})
+            payload = json.dumps(
+                {"type": "resolve", "id": request_id, "url": url, "host": host}
+            )
             send = lambda: conn.send_text(payload)  # noqa: E731
             if site == "lc":
                 with _lc_request_lock:
@@ -953,7 +1048,9 @@ def resolve(
                     if cancel is not None and cancel.is_set():
                         raise BridgeFailed("cancelled")
                     if not _can_resolve(conn, site):
-                        raise BridgeUnavailable("extension no longer supports LewdCorner downloads")
+                        raise BridgeUnavailable(
+                            "extension no longer supports LewdCorner downloads"
+                        )
                     _last_lc_request = time.monotonic()
                     send()
             elif start is None:
@@ -961,10 +1058,13 @@ def resolve(
             else:
                 start(send)
             deadline = time.monotonic() + timeout
+
             def abandon() -> None:
                 # The extension closes the window it opened for this request.
                 try:
-                    conn.send_text(json.dumps({"type": "resolve_cancel", "id": request_id}))
+                    conn.send_text(
+                        json.dumps({"type": "resolve_cancel", "id": request_id})
+                    )
                 except (BridgeFailed, OSError, ValueError):
                     pass
 
@@ -988,6 +1088,7 @@ def resolve(
         finally:
             with _lock:
                 _ = _pending_resolves.pop(request_id, None)
+
 
 def _send_raw(wfile: BinaryIO | BufferedIOBase, data: bytes) -> None:
     _ = wfile.write(data)
@@ -1041,27 +1142,34 @@ def serve_bridge_connection(
             except extension_ws.MessageTooLarge:
                 reason = "message too large"
                 try:
-                    conn.send_locked(lambda: _send_raw(wfile, extension_ws.encode_server_close(1009)))
+                    conn.send_locked(
+                        lambda: _send_raw(wfile, extension_ws.encode_server_close(1009))
+                    )
                 except (OSError, ValueError):
                     pass
                 break
             except (extension_ws.WebSocketError, OSError, ValueError) as exc:
-                reason = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+                reason = (
+                    f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+                )
                 break
             if kind == "close":
                 reason = "closed by the extension"
                 try:
                     conn.send_locked(
-                        lambda: _send_raw(
-                            wfile, extension_ws.encode_server_close(1000)
-                        )
+                        lambda: _send_raw(wfile, extension_ws.encode_server_close(1000))
                     )
                 except (OSError, ValueError):
                     pass
                 break
             if kind == "ping":
                 try:
-                    conn.send_locked(lambda: _send_raw(wfile, extension_ws.encode_server_pong(payload)))  # noqa: B023 - send_locked calls it at once
+                    conn.send_locked(
+                        lambda: _send_raw(
+                            wfile,
+                            extension_ws.encode_server_pong(payload),  # noqa: B023 - send_locked calls it at once
+                        )
+                    )
                 except (OSError, ValueError):
                     break
                 continue

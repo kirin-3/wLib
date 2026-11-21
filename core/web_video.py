@@ -6,6 +6,7 @@ finds such files by reading MP4 headers in Python (no ffmpeg needed), keeps a
 device-local per-game check cache, and converts files in place to AV1 (or VP9)
 and Opus with the host's ffmpeg.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -43,12 +44,16 @@ UNSUPPORTED_CODECS = frozenset({"avc1", "avc3", "hvc1", "hev1"})
 MP3_OBJECT_TYPES = frozenset({0x69, 0x6B})
 _CONTAINER_BOXES = frozenset({b"trak", b"mdia", b"minf", b"stbl"})
 
-WEB_MEDIA_BUSY = "This game's videos are being converted. Wait for the conversion to finish."
+WEB_MEDIA_BUSY = (
+    "This game's videos are being converted. Wait for the conversion to finish."
+)
 
 # ── MP4 box reader ──
 
 
-def _iter_boxes(data: bytes, start: int = 0, end: int | None = None) -> Iterator[tuple[bytes, int, int]]:
+def _iter_boxes(
+    data: bytes, start: int = 0, end: int | None = None
+) -> Iterator[tuple[bytes, int, int]]:
     """Yield (type, payload start, payload end) for each box in data[start:end]."""
     limit = len(data) if end is None else min(end, len(data))
     offset = start
@@ -68,7 +73,9 @@ def _iter_boxes(data: bytes, start: int = 0, end: int | None = None) -> Iterator
         offset += size
 
 
-def _read_descriptor_length(data: bytes, offset: int, end: int) -> tuple[int, int] | None:
+def _read_descriptor_length(
+    data: bytes, offset: int, end: int
+) -> tuple[int, int] | None:
     length = 0
     for _ in range(4):
         if offset >= end:
@@ -121,7 +128,9 @@ def _mp4a_object_type(data: bytes, start: int, end: int) -> int | None:
         if kind == b"esds":
             return _esds_object_type(data, child_start, child_end)
         if kind == b"wave":
-            for inner, inner_start, inner_end in _iter_boxes(data, child_start, child_end):
+            for inner, inner_start, inner_end in _iter_boxes(
+                data, child_start, child_end
+            ):
                 if inner == b"esds":
                     return _esds_object_type(data, inner_start, inner_end)
     return None
@@ -137,9 +146,15 @@ def _sample_entries(moov: bytes) -> list[tuple[str, int | None]]:
                 walk(child_start, child_end)
             elif kind == b"stsd":
                 # Full box header (4) and entry count (4).
-                for entry, entry_start, entry_end in _iter_boxes(moov, child_start + 8, child_end):
+                for entry, entry_start, entry_end in _iter_boxes(
+                    moov, child_start + 8, child_end
+                ):
                     code = entry.decode("latin-1")
-                    object_type = _mp4a_object_type(moov, entry_start, entry_end) if code == "mp4a" else None
+                    object_type = (
+                        _mp4a_object_type(moov, entry_start, entry_end)
+                        if code == "mp4a"
+                        else None
+                    )
                     entries.append((code, object_type))
 
     walk(0, len(moov))
@@ -285,7 +300,13 @@ def scan_cache_path(game_id: int) -> str:
 
 
 def _empty_cache(root: str) -> ScanCache:
-    return {"version": SCAN_VERSION, "root": root, "files": {}, "play_anyway": None, "other_roots": {}}
+    return {
+        "version": SCAN_VERSION,
+        "root": root,
+        "files": {},
+        "play_anyway": None,
+        "other_roots": {},
+    }
 
 
 def _load_cache(game_id: int) -> ScanCache | None:
@@ -299,15 +320,27 @@ def _load_cache(game_id: int) -> ScanCache | None:
     data = cast(dict[str, object], raw)
     files_raw = data.get("files")
     root = data.get("root")
-    if data.get("version") != SCAN_VERSION or not isinstance(root, str) or not isinstance(files_raw, dict):
+    if (
+        data.get("version") != SCAN_VERSION
+        or not isinstance(root, str)
+        or not isinstance(files_raw, dict)
+    ):
         return None
     files: dict[str, CacheEntry] = {}
     for key, value in cast(dict[object, object], files_raw).items():
         if not isinstance(key, str) or not isinstance(value, dict):
             continue
         entry = cast(dict[str, object], value)
-        size, mtime_ns, needs = entry.get("size"), entry.get("mtime_ns"), entry.get("needs")
-        if isinstance(size, int) and isinstance(mtime_ns, int) and isinstance(needs, bool):
+        size, mtime_ns, needs = (
+            entry.get("size"),
+            entry.get("mtime_ns"),
+            entry.get("needs"),
+        )
+        if (
+            isinstance(size, int)
+            and isinstance(mtime_ns, int)
+            and isinstance(needs, bool)
+        ):
             files[key] = {"size": size, "mtime_ns": mtime_ns, "needs": needs}
     play_anyway = data.get("play_anyway")
     other_raw = data.get("other_roots")
@@ -358,7 +391,9 @@ def cached_root(game_id: int) -> str:
 def fingerprint(cache: ScanCache) -> str:
     """SHA-256 of the sorted (path, size, mtime_ns) of the files that need conversion."""
     rows = sorted(
-        (path, entry["size"], entry["mtime_ns"]) for path, entry in cache["files"].items() if entry["needs"]
+        (path, entry["size"], entry["mtime_ns"])
+        for path, entry in cache["files"].items()
+        if entry["needs"]
     )
     return hashlib.sha256(json.dumps(rows).encode("utf-8")).hexdigest()
 
@@ -378,11 +413,17 @@ def _switch_root(old: ScanCache | None, real_root: str) -> ScanCache:
     return cache
 
 
-def _refresh(game_id: int, root: str, reader: Callable[[str], bool | None]) -> ScanCache:
+def _refresh(
+    game_id: int, root: str, reader: Callable[[str], bool | None]
+) -> ScanCache:
     """Bring the cache up to date with the folder; caller holds _cache_lock."""
     real_root = os.path.realpath(root)
     old = _load_cache(game_id)
-    cache = old if old is not None and old["root"] == real_root else _switch_root(old, real_root)
+    cache = (
+        old
+        if old is not None and old["root"] == real_root
+        else _switch_root(old, real_root)
+    )
     files: dict[str, CacheEntry] = {}
     for relative, path in iter_media_files(real_root):
         try:
@@ -390,14 +431,22 @@ def _refresh(game_id: int, root: str, reader: Callable[[str], bool | None]) -> S
         except OSError:
             continue
         previous = cache["files"].get(relative)
-        if previous and previous["size"] == info.st_size and previous["mtime_ns"] == info.st_mtime_ns:
+        if (
+            previous
+            and previous["size"] == info.st_size
+            and previous["mtime_ns"] == info.st_mtime_ns
+        ):
             files[relative] = previous
         else:
             needs = reader(path)
             if needs is None:
                 # A read error is not a result; read the file again at the next check.
                 continue
-            files[relative] = {"size": info.st_size, "mtime_ns": info.st_mtime_ns, "needs": needs}
+            files[relative] = {
+                "size": info.st_size,
+                "mtime_ns": info.st_mtime_ns,
+                "needs": needs,
+            }
     updated: ScanCache = {
         "version": SCAN_VERSION,
         "root": real_root,
@@ -414,13 +463,17 @@ def _result(cache: ScanCache) -> ScanResult:
     current = fingerprint(cache)
     return {
         "root": cache["root"],
-        "needs": sorted(path for path, entry in cache["files"].items() if entry["needs"]),
+        "needs": sorted(
+            path for path, entry in cache["files"].items() if entry["needs"]
+        ),
         "fingerprint": current,
         "play_anyway": cache["play_anyway"] == current,
     }
 
 
-def scan_game(game_id: int, root: str, reader: Callable[[str], bool | None] | None = None) -> ScanResult:
+def scan_game(
+    game_id: int, root: str, reader: Callable[[str], bool | None] | None = None
+) -> ScanResult:
     """Check the served folder, reading only new or changed files."""
     with _cache_lock:
         return _result(_refresh(game_id, root, reader or check_file))
@@ -503,13 +556,28 @@ def install_hint(
 ) -> InstallHint:
     """How to install ffmpeg on this platform."""
     if is_windows() if windows is None else windows:
-        return {"command": WINDOWS_INSTALL, "package_manager": "winget", "platform": "windows", "host": False}
+        return {
+            "command": WINDOWS_INSTALL,
+            "package_manager": "winget",
+            "platform": "windows",
+            "host": False,
+        }
     host = is_flatpak() if flatpak is None else flatpak
     if nixos if nixos is not None else host_system_layout()[0]:
-        return {"command": NIXOS_INSTALL, "package_manager": "nixos", "platform": "linux", "host": host}
+        return {
+            "command": NIXOS_INSTALL,
+            "package_manager": "nixos",
+            "platform": "linux",
+            "host": host,
+        }
     for manager, command in LINUX_INSTALL_COMMANDS:
         if which(manager):
-            return {"command": command, "package_manager": manager, "platform": "linux", "host": host}
+            return {
+                "command": command,
+                "package_manager": manager,
+                "platform": "linux",
+                "host": host,
+            }
     return {"command": "", "package_manager": "", "platform": "linux", "host": host}
 
 
@@ -554,7 +622,9 @@ def probe_ffmpeg(
         encoders = parse_encoders(run([ffmpeg, "-hide_banner", "-encoders"], 20))
     except (OSError, subprocess.SubprocessError):
         encoders: set[str] = set()
-    info["video_encoder"] = next((name for name in VIDEO_ENCODERS if name in encoders), "")
+    info["video_encoder"] = next(
+        (name for name in VIDEO_ENCODERS if name in encoders), ""
+    )
     info["audio_encoder"] = AUDIO_ENCODER if AUDIO_ENCODER in encoders else ""
     if not info["video_encoder"]:
         info["reason"] = "no_video_encoder"
@@ -672,7 +742,10 @@ def parse_probe(text: str) -> StreamInfo:
                 continue
             entry = cast(dict[str, object], stream)
             disposition = entry.get("disposition")
-            if isinstance(disposition, dict) and cast(dict[str, object], disposition).get("attached_pic") == 1:
+            if (
+                isinstance(disposition, dict)
+                and cast(dict[str, object], disposition).get("attached_pic") == 1
+            ):
                 # Cover art is a still image, not a video track; `-map 0:V?` drops it.
                 continue
             kind, name = entry.get("codec_type"), str(entry.get("codec_name") or "")
@@ -685,7 +758,9 @@ def parse_probe(text: str) -> StreamInfo:
     container = data.get("format")
     if isinstance(container, dict):
         try:
-            info["duration"] = float(str(cast(dict[str, object], container).get("duration")))
+            info["duration"] = float(
+                str(cast(dict[str, object], container).get("duration"))
+            )
         except ValueError:
             info["duration"] = None
     return info
@@ -693,7 +768,9 @@ def parse_probe(text: str) -> StreamInfo:
 
 def verify_output(source: StreamInfo, output: StreamInfo) -> str | None:
     """Why the converted file is not usable, or None."""
-    if bool(source["video"]) != bool(output["video"]) or bool(source["audio"]) != bool(output["audio"]):
+    if bool(source["video"]) != bool(output["video"]) or bool(source["audio"]) != bool(
+        output["audio"]
+    ):
         return "streams are missing"
     if len(source.get("subtitle", [])) != len(output.get("subtitle", [])):
         return "subtitles are missing"
@@ -704,13 +781,26 @@ def verify_output(source: StreamInfo, output: StreamInfo) -> str | None:
     if source["duration"] is not None:
         if output["duration"] is None:
             return "duration is missing"
-        if abs(output["duration"] - source["duration"]) > max(0.5, source["duration"] * 0.02):
+        if abs(output["duration"] - source["duration"]) > max(
+            0.5, source["duration"] * 0.02
+        ):
             return "duration does not match"
     return None
 
 
-def encode_command(info: FfmpegInfo, source: str, target: str, streams: StreamInfo) -> list[str]:
-    cmd = [info["ffmpeg"], "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", source]
+def encode_command(
+    info: FfmpegInfo, source: str, target: str, streams: StreamInfo
+) -> list[str]:
+    cmd = [
+        info["ffmpeg"],
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        source,
+    ]
     # `0:V` (capital) leaves out cover art, which would otherwise become a
     # one-frame AV1 track or stop the mux with "received no packets".
     # Subtitle tracks are kept; the built-in player ignores them, but the
@@ -721,7 +811,16 @@ def encode_command(info: FfmpegInfo, source: str, target: str, streams: StreamIn
     elif info["video_encoder"] == "libsvtav1":
         cmd += ["-c:v", "libsvtav1", "-preset", "8", "-crf", "35"]
     else:
-        cmd += ["-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1"]
+        cmd += [
+            "-c:v",
+            "libvpx-vp9",
+            "-deadline",
+            "realtime",
+            "-cpu-used",
+            "8",
+            "-row-mt",
+            "1",
+        ]
         cmd += ["-b:v", "0", "-crf", "33"]
     if "-c:v" in cmd and cmd[cmd.index("-c:v") + 1] != "copy":
         cmd += ["-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"]
@@ -752,9 +851,14 @@ class Converter:
 
     def _probe(self, path: str) -> StreamInfo:
         cmd = [
-            self.info["ffprobe"], "-v", "error", "-show_entries",
+            self.info["ffprobe"],
+            "-v",
+            "error",
+            "-show_entries",
             "stream=codec_type,codec_name:stream_disposition=attached_pic:format=duration",
-            "-of", "json", path,
+            "-of",
+            "json",
+            path,
         ]
         return parse_probe(_run_text(cmd, 60))
 
@@ -778,7 +882,11 @@ class Converter:
                 self._process = None
         if process.returncode != 0:
             message = (stderr or b"").decode("utf-8", "replace").strip().splitlines()
-            return message[-1] if message else f"ffmpeg exited with code {process.returncode}"
+            return (
+                message[-1]
+                if message
+                else f"ffmpeg exited with code {process.returncode}"
+            )
         return None
 
     def kill(self) -> None:
@@ -810,7 +918,9 @@ class Converter:
         folder = os.path.dirname(path)
         free = shutil.disk_usage(folder).free
         if free < source_stat.st_size + FREE_SPACE_MARGIN:
-            raise LowDiskSpace(f"Not enough free space on {_mount_point(folder)} to convert the next video.")
+            raise LowDiskSpace(
+                f"Not enough free space on {_mount_point(folder)} to convert the next video."
+            )
         partial = path + PARTIAL_SUFFIX
         with self._lock:
             self._partial = partial
@@ -825,15 +935,28 @@ class Converter:
             # Keep a copy that changed while ffmpeg ran (an update): the
             # converted file is of the old copy.
             current_stat = os.stat(path)
-            if (current_stat.st_dev, current_stat.st_ino, current_stat.st_size, current_stat.st_mtime_ns) != (
-                source_stat.st_dev, source_stat.st_ino, source_stat.st_size, source_stat.st_mtime_ns,
+            if (
+                current_stat.st_dev,
+                current_stat.st_ino,
+                current_stat.st_size,
+                current_stat.st_mtime_ns,
+            ) != (
+                source_stat.st_dev,
+                source_stat.st_ino,
+                source_stat.st_size,
+                source_stat.st_mtime_ns,
             ):
                 failed["error"] = "the file changed while it was converted"
                 return failed
             os.chmod(partial, stat.S_IMODE(source_stat.st_mode))
             os.replace(partial, path)
             new_stat = os.stat(path)
-            return {"ok": True, "error": "", "size": new_stat.st_size, "mtime_ns": new_stat.st_mtime_ns}
+            return {
+                "ok": True,
+                "error": "",
+                "size": new_stat.st_size,
+                "mtime_ns": new_stat.st_mtime_ns,
+            }
         except (OSError, subprocess.SubprocessError) as exc:
             failed["error"] = str(exc)
             return failed

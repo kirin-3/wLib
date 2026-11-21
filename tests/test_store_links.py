@@ -45,8 +45,12 @@ def test_lc_thread_is_not_stored_as_a_link(tmp_path, monkeypatch):
 
     game = database.add_game("LC game", "")
     assert game is not None
-    database.replace_game_links(game, "page", [
-        {"url": "https://www.lewdcorner.com/threads/game.123/#post-1"},
-        {"url": "https://vndb.org/v123"},
-    ])
+    database.replace_game_links(
+        game,
+        "page",
+        [
+            {"url": "https://www.lewdcorner.com/threads/game.123/#post-1"},
+            {"url": "https://vndb.org/v123"},
+        ],
+    )
     assert [link["source"] for link in database.get_game_links(game)] == ["vndb"]

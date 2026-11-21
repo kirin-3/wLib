@@ -556,7 +556,9 @@ def _format_ruby_float(value: float) -> bytes:
     return repr(value).encode("ascii")
 
 
-def _symbol_key(sym: SymbolNode) -> tuple[bytes, tuple[tuple[bytes, object], ...] | None]:
+def _symbol_key(
+    sym: SymbolNode,
+) -> tuple[bytes, tuple[tuple[bytes, object], ...] | None]:
     if sym.ivars is None:
         return (sym.name, None)
     sig: list[tuple[bytes, object]] = []
@@ -854,9 +856,7 @@ def _ivars_equal(
     return True
 
 
-def _nodes_equal(
-    a: MarshalNode, b: MarshalNode, link_map: dict[int, int]
-) -> bool:
+def _nodes_equal(a: MarshalNode, b: MarshalNode, link_map: dict[int, int]) -> bool:
     if type(a) is not type(b):
         return False
     if isinstance(a, LinkNode) and isinstance(b, LinkNode):
@@ -894,9 +894,7 @@ def _nodes_equal(
         if len(a.pairs) != len(b.pairs):
             return False
         for (ka, va), (kb, vb) in zip(a.pairs, b.pairs, strict=True):
-            if not _nodes_equal(ka, kb, link_map) or not _nodes_equal(
-                va, vb, link_map
-            ):
+            if not _nodes_equal(ka, kb, link_map) or not _nodes_equal(va, vb, link_map):
                 return False
         if a.default is None or b.default is None:
             return a.default is b.default
@@ -1007,9 +1005,7 @@ def assign_ids(
     return nodes_by_id, editable_ids
 
 
-def _project_node(
-    node: MarshalNode, editable_ids: set[int]
-) -> dict[str, object]:
+def _project_node(node: MarshalNode, editable_ids: set[int]) -> dict[str, object]:
     nid = node.node_id if node.node_id is not None else -1
     editable = nid in editable_ids
 

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M12: a bencoded RPDL torrent without valid metadata must fail the job, not strand it in "fetching"."""
+
 from pathlib import Path
 
 import pytest
@@ -29,12 +30,18 @@ def test_checked_fetch_turns_a_parse_error_into_the_invalid_torrent_error():
 
 
 @pytest.mark.usefixtures("rpdl_reply")
-def test_job_with_unparseable_rpdl_torrent_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_job_with_unparseable_rpdl_torrent_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
     sup = TorrentSupervisor(command=lambda: (["helper"], {}), options=lambda: {})
     monkeypatch.setattr(torrents.threading, "Thread", _InlineThread)
     job_id = sup.start(
-        1, "Game", "1.0", 7, lambda: ApiBase._fetch_checked_rpdl_torrent(7)  # pyright: ignore[reportPrivateUsage]
+        1,
+        "Game",
+        "1.0",
+        7,
+        lambda: ApiBase._fetch_checked_rpdl_torrent(7),  # pyright: ignore[reportPrivateUsage]
     )
     job = sup._jobs[job_id]  # pyright: ignore[reportPrivateUsage]
     assert job.stage == "failed"
@@ -44,7 +51,9 @@ def test_job_with_unparseable_rpdl_torrent_fails(tmp_path: Path, monkeypatch: py
 class _InlineThread:
     """Runs the target at start(), so the test sees the job's final stage."""
 
-    def __init__(self, target: object, args: tuple[object, ...] = (), daemon: bool = False) -> None:
+    def __init__(
+        self, target: object, args: tuple[object, ...] = (), daemon: bool = False
+    ) -> None:
         self._target = target
         self._args = args
 

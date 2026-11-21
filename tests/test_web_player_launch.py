@@ -36,7 +36,9 @@ from core.launcher import Launcher
     ],
 )
 def test_resolve_web_player(target, mode, per_game, setting, windows, expected):
-    assert resolve_web_player(target, mode, per_game, setting, windows=windows) == expected
+    assert (
+        resolve_web_player(target, mode, per_game, setting, windows=windows) == expected
+    )
 
 
 @pytest.fixture
@@ -67,13 +69,26 @@ def _launch(game_dir, name="index.html", **kwargs):
         patch("threading.Thread"),
         patch("core.database.update_setting") as update_setting,
     ):
-        status.return_value = {"status": "ready", "tool": "bwrap", "path": "/usr/bin/bwrap", "version": "", "reason": ""}
+        status.return_value = {
+            "status": "ready",
+            "tool": "bwrap",
+            "path": "/usr/bin/bwrap",
+            "version": "",
+            "reason": "",
+        }
         launcher = Launcher()
-        result = launcher.launch(str(game_dir / name), game_id=kwargs.pop("game_id", 7), game_title="My Game", **kwargs)
+        result = launcher.launch(
+            str(game_dir / name),
+            game_id=kwargs.pop("game_id", 7),
+            game_title="My Game",
+            **kwargs,
+        )
     return result, popen, update_setting, launcher
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="simulates a Linux host; POSIX paths only"
+)
 def test_builtin_player_is_a_tracked_process_with_first_use_note(game_dir):
     result, popen, update_setting, launcher = _launch(game_dir)
     assert result["success"] and result.get("tracks_playtime", True)
@@ -107,7 +122,9 @@ def test_swf_target_uses_flash_page_without_note(game_dir):
 
 
 def test_system_browser_choice_keeps_untracked_xdg_open(game_dir):
-    result, popen, _, launcher = _launch(game_dir, html_player="browser", sandbox_enabled=True, block_network=True)
+    result, popen, _, launcher = _launch(
+        game_dir, html_player="browser", sandbox_enabled=True, block_network=True
+    )
     assert result["success"] and result["tracks_playtime"] is False
     assert popen.call_args.args[0][0] == "xdg-open"
     assert launcher.get_running_games() == []
@@ -115,7 +132,9 @@ def test_system_browser_choice_keeps_untracked_xdg_open(game_dir):
 
 def test_setting_off_selects_system_browser(game_dir):
     result, popen, *_ = _launch(game_dir, settings={"html_builtin_player": "false"})
-    assert popen.call_args.args[0][0] == "xdg-open" and result["tracks_playtime"] is False
+    assert (
+        popen.call_args.args[0][0] == "xdg-open" and result["tracks_playtime"] is False
+    )
 
 
 def test_no_internet_and_sandbox_flags(game_dir, monkeypatch):
@@ -129,7 +148,9 @@ def test_no_internet_and_sandbox_flags(game_dir, monkeypatch):
     assert "--sandboxed" in player
     assert popen.call_args.kwargs["env"]["QTWEBENGINE_DISABLE_SANDBOX"] == "1"
     profile = game_sandbox.web_player_folder(7)
-    assert ["--bind", profile, profile] in [argv[i : i + 3] for i in range(len(argv) - 2)]
+    assert ["--bind", profile, profile] in [
+        argv[i : i + 3] for i in range(len(argv) - 2)
+    ]
 
 
 def test_devtools_flag_follows_setting(game_dir):
@@ -151,7 +172,9 @@ def test_devtools_flag_inside_sandboxed_argv(game_dir, monkeypatch):
     assert "--devtools" in argv[argv.index("--play-web") :]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="simulates a Linux host; POSIX paths only"
+)
 def test_non_html_targets_are_unaffected(game_dir):
     script = game_dir / "run.sh"
     script.write_text("#!/bin/sh\n")
@@ -178,14 +201,25 @@ def test_bwrap_binds_profile_read_write_and_runtime_read_only():
 def test_bwrap_refuses_writable_home():
     with pytest.raises(ValueError):
         game_sandbox.build_bwrap_argv(
-            ["x"], game_dir="/games/g", home="/home/u", sandbox_home="/s", cwd="/", writable_paths=("/home/u",)
+            ["x"],
+            game_dir="/games/g",
+            home="/home/u",
+            sandbox_home="/s",
+            cwd="/",
+            writable_paths=("/home/u",),
         )
 
 
 def test_sandbox_environment_keeps_player_qt_variables():
-    env = {"QT_QPA_PLATFORM": "xcb", "SECRET_TOKEN": "t", "QTWEBENGINE_DISABLE_SANDBOX": "1"}
+    env = {
+        "QT_QPA_PLATFORM": "xcb",
+        "SECRET_TOKEN": "t",
+        "QTWEBENGINE_DISABLE_SANDBOX": "1",
+    }
     host = {"QT_QPA_PLATFORM": "xcb", "SECRET_TOKEN": "t"}
-    assert game_sandbox.sandbox_environment(env, host) == {"QTWEBENGINE_DISABLE_SANDBOX": "1"}
+    assert game_sandbox.sandbox_environment(env, host) == {
+        "QTWEBENGINE_DISABLE_SANDBOX": "1"
+    }
     kept = game_sandbox.sandbox_environment(env, host, game_sandbox.PLAYER_ENV_NAMES)
     assert kept == {"QT_QPA_PLATFORM": "xcb", "QTWEBENGINE_DISABLE_SANDBOX": "1"}
 
@@ -193,9 +227,14 @@ def test_sandbox_environment_keeps_player_qt_variables():
 def test_sandboxie_box_opens_profile_folder(monkeypatch, tmp_path):
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
     calls = []
-    monkeypatch.setattr(game_sandbox, "_sandboxie_call", lambda exe, args: calls.append(args) or "")
+    monkeypatch.setattr(
+        game_sandbox, "_sandboxie_call", lambda exe, args: calls.append(args) or ""
+    )
     game_sandbox.configure_sandboxie_box(
-        "C:\\Sandboxie\\Start.exe", 3, "C:\\games\\g", extra_write_paths=("C:\\data\\web-player\\3",)
+        "C:\\Sandboxie\\Start.exe",
+        3,
+        "C:\\games\\g",
+        extra_write_paths=("C:\\data\\web-player\\3",),
     )
     assert ["append", "wLib_3", "OpenFilePath", "C:\\data\\web-player\\3\\"] in calls
 
@@ -210,19 +249,28 @@ def test_sandboxie_launch_passes_sandboxed_flag(game_dir, monkeypatch):
             "core.launcher.game_sandbox.get_sandbox_status",
             return_value={"status": "ready", "path": r"C:\Sandboxie\Start.exe"},
         ),
-        patch("core.launcher.game_sandbox.configure_sandboxie_box", return_value="wLib_7") as configure,
+        patch(
+            "core.launcher.game_sandbox.configure_sandboxie_box", return_value="wLib_7"
+        ) as configure,
         patch("core.launcher.game_sandbox.check_writable_mounts"),
         patch("core.launcher.get_setting", return_value=None),
         patch("core.launcher.web_player_devtools_enabled", return_value=False),
         patch("subprocess.Popen") as popen,
         patch("threading.Thread"),
     ):
-        result = Launcher().launch(r"C:\Games\index.html", game_id=7, sandbox_enabled=True, html_player="builtin")
+        result = Launcher().launch(
+            r"C:\Games\index.html",
+            game_id=7,
+            sandbox_enabled=True,
+            html_player="builtin",
+        )
     assert result["success"]
     argv = popen.call_args.args[0]
     assert argv[1] == "/box:wLib_7"
     assert "--sandboxed" in argv[argv.index("--play-web") :]
-    assert configure.call_args.kwargs["extra_write_paths"] == (game_sandbox.web_player_folder(7),)
+    assert configure.call_args.kwargs["extra_write_paths"] == (
+        game_sandbox.web_player_folder(7),
+    )
 
 
 @pytest.mark.parametrize("game_id", [0, -1, True])
@@ -232,7 +280,9 @@ def test_web_player_exports_folder_rejects_invalid_id(game_id):
 
 
 def test_web_player_exports_folder_is_inside_profile(game_dir):
-    assert game_sandbox.web_player_exports_folder(7) == str(game_dir.parent / "data" / "web-player" / "7" / "exports")
+    assert game_sandbox.web_player_exports_folder(7) == str(
+        game_dir.parent / "data" / "web-player" / "7" / "exports"
+    )
 
 
 def test_flatpak_player_argv_sandboxed():
@@ -241,14 +291,33 @@ def test_flatpak_player_argv_sandboxed():
         game_dir="/g",
         profile="/p",
         network_blocked=True,
-        environment={"QTWEBENGINE_DISABLE_SANDBOX": "1", "QT_QPA_PLATFORM": "wayland", "HOME": "/h"},
+        environment={
+            "QTWEBENGINE_DISABLE_SANDBOX": "1",
+            "QT_QPA_PLATFORM": "wayland",
+            "HOME": "/h",
+        },
     )
     assert argv[:3] == ["flatpak-spawn", "--sandbox", "--watch-bus"]
-    for flag in ("--sandbox-expose-path=/g", "--sandbox-expose-path=/p", "--sandbox-flag=share-display", "--sandbox-flag=share-sound", "--sandbox-flag=share-gpu", "--no-network", "--env=QTWEBENGINE_DISABLE_SANDBOX=1"):
+    for flag in (
+        "--sandbox-expose-path=/g",
+        "--sandbox-expose-path=/p",
+        "--sandbox-flag=share-display",
+        "--sandbox-flag=share-sound",
+        "--sandbox-flag=share-gpu",
+        "--no-network",
+        "--env=QTWEBENGINE_DISABLE_SANDBOX=1",
+    ):
         assert flag in argv
     assert not any(part.startswith("--env=HOME") for part in argv)
-    assert argv[argv.index("--") + 1 :] == ["/app/bin/wlib", "--play-web", "--root", "/g"]
-    assert "--no-network" not in game_sandbox.flatpak_player_argv(["x"], game_dir="/g", profile="/p", network_blocked=False)
+    assert argv[argv.index("--") + 1 :] == [
+        "/app/bin/wlib",
+        "--play-web",
+        "--root",
+        "/g",
+    ]
+    assert "--no-network" not in game_sandbox.flatpak_player_argv(
+        ["x"], game_dir="/g", profile="/p", network_blocked=False
+    )
 
 
 def test_flatpak_runs_player_in_app_not_on_host(game_dir, monkeypatch):
@@ -259,9 +328,14 @@ def test_flatpak_runs_player_in_app_not_on_host(game_dir, monkeypatch):
     assert result["success"] and argv[0] != "flatpak-spawn" and "--play-web" in argv
 
 
-def test_flatpak_sandboxed_uses_sub_sandbox_and_reports_early_exit(game_dir, monkeypatch):
+def test_flatpak_sandboxed_uses_sub_sandbox_and_reports_early_exit(
+    game_dir, monkeypatch
+):
     monkeypatch.setattr("core.launcher.is_flatpak", lambda: True)
-    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", MagicMock(side_effect=AssertionError("bwrap must not be probed")))
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        MagicMock(side_effect=AssertionError("bwrap must not be probed")),
+    )
     popen = MagicMock()
     popen.return_value.pid = 99
     popen.return_value.returncode = 1
@@ -272,24 +346,39 @@ def test_flatpak_sandboxed_uses_sub_sandbox_and_reports_early_exit(game_dir, mon
         patch("subprocess.Popen", popen),
         patch("threading.Thread"),
     ):
-        result = Launcher().launch(str(game_dir / "index.html"), game_id=5, sandbox_enabled=True, block_network=True)
+        result = Launcher().launch(
+            str(game_dir / "index.html"),
+            game_id=5,
+            sandbox_enabled=True,
+            block_network=True,
+        )
     argv = popen.call_args.args[0]
     assert argv[:2] == ["flatpak-spawn", "--sandbox"] and "--no-network" in argv
     assert "--devtools" in argv
     assert "--sandboxed" in argv[argv.index("--play-web") :]
-    assert not result["success"] and "exited before its window opened" in result["error"]
+    assert (
+        not result["success"] and "exited before its window opened" in result["error"]
+    )
     assert 5 not in Launcher()._running
 
 
 def test_flatpak_player_argv_network_only_keeps_app_permissions():
     argv = game_sandbox.flatpak_player_argv(
-        ["/app/bin/wlib", "--play-web"], game_dir="/g", profile="/p", network_blocked=True, sandbox=False
+        ["/app/bin/wlib", "--play-web"],
+        game_dir="/g",
+        profile="/p",
+        network_blocked=True,
+        sandbox=False,
     )
     assert argv[:2] == ["flatpak-spawn", "--watch-bus"] and "--no-network" in argv
-    assert not any(part.startswith(("--sandbox", "--sandbox-expose-path")) for part in argv)
+    assert not any(
+        part.startswith(("--sandbox", "--sandbox-expose-path")) for part in argv
+    )
 
 
-def test_flatpak_no_internet_without_sandbox_still_blocks_network(game_dir, monkeypatch):
+def test_flatpak_no_internet_without_sandbox_still_blocks_network(
+    game_dir, monkeypatch
+):
     monkeypatch.setattr("core.launcher.is_flatpak", lambda: True)
     result, popen, *_ = _launch(game_dir, block_network=True)
     argv = popen.call_args.args[0]
@@ -324,9 +413,14 @@ def test_flatpak_sub_sandbox_keeps_session_bus_for_the_portal(game_dir, monkeypa
         patch("subprocess.Popen", popen),
         patch("threading.Thread"),
     ):
-        result = Launcher().launch(str(game_dir / "index.html"), game_id=5, sandbox_enabled=True)
+        result = Launcher().launch(
+            str(game_dir / "index.html"), game_id=5, sandbox_enabled=True
+        )
     assert result["success"]
-    assert popen.call_args.kwargs["env"]["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/1000/bus"
+    assert (
+        popen.call_args.kwargs["env"]["DBUS_SESSION_BUS_ADDRESS"]
+        == "unix:path=/run/user/1000/bus"
+    )
 
 
 def test_flatpak_player_skips_host_performance_tools(game_dir, monkeypatch):
@@ -334,7 +428,11 @@ def test_flatpak_player_skips_host_performance_tools(game_dir, monkeypatch):
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
     result, popen, *_ = _launch(game_dir, gamemode=True, mangohud=True)
     argv = popen.call_args.args[0]
-    assert result["success"] and "/usr/bin/mangohud" not in argv and "/usr/bin/gamemoderun" not in argv
+    assert (
+        result["success"]
+        and "/usr/bin/mangohud" not in argv
+        and "/usr/bin/gamemoderun" not in argv
+    )
 
 
 # ── Video check before the built-in player starts ──
@@ -347,21 +445,34 @@ def h264_game(game_dir, monkeypatch):
     from core import web_video
 
     (game_dir / "videos").mkdir()
-    (game_dir / "videos" / "intro.mp4").write_bytes(mp4(sample_entry(b"avc1"), sample_entry(b"mp4a", 0x40)))
-    monkeypatch.setattr(web_video, "ffmpeg_info", lambda refresh=False: {"available": False, "reason": "missing"})
+    (game_dir / "videos" / "intro.mp4").write_bytes(
+        mp4(sample_entry(b"avc1"), sample_entry(b"mp4a", 0x40))
+    )
+    monkeypatch.setattr(
+        web_video,
+        "ffmpeg_info",
+        lambda refresh=False: {"available": False, "reason": "missing"},
+    )
     return game_dir
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="simulates a Linux host; POSIX paths only"
+)
 def test_h264_videos_stop_the_player(h264_game):
     result, popen, _, launcher = _launch(h264_game, check_web_media=True)
     assert result["success"] is False and result["code"] == "web_media_unsupported"
-    assert result["media"] == {"count": 1, "ffmpeg": {"available": False, "reason": "missing"}}
+    assert result["media"] == {
+        "count": 1,
+        "ffmpeg": {"available": False, "reason": "missing"},
+    }
     popen.assert_not_called()
     assert launcher.get_running_games() == []
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="simulates a Linux host; POSIX paths only"
+)
 def test_vp9_and_av1_videos_start_the_player(game_dir):
     from test_web_video import mp4, sample_entry
 
@@ -371,7 +482,9 @@ def test_vp9_and_av1_videos_start_the_player(game_dir):
     assert result["success"] and "--play-web" in popen.call_args.args[0]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="simulates a Linux host; POSIX paths only"
+)
 def test_browser_and_swf_launches_are_not_checked(h264_game):
     result, popen, *_ = _launch(h264_game, html_player="browser", check_web_media=True)
     assert result["success"] and popen.call_args.args[0][0] == "xdg-open"
@@ -379,7 +492,9 @@ def test_browser_and_swf_launches_are_not_checked(h264_game):
     assert result["success"] and "--flash" in popen.call_args.args[0]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="simulates a Linux host; POSIX paths only"
+)
 def test_play_anyway_and_launches_without_the_flag_start_the_player(h264_game):
     from core import web_video
 
@@ -401,5 +516,7 @@ def test_launch_tracked_passes_the_flag_only_when_asked(tmp_path):
     launcher.launch.return_value = {"success": False, "error": "x"}
     _ = launch_tracked(launcher, None, {"exe_path": str(target)})
     assert "check_web_media" not in launcher.launch.call_args.kwargs
-    _ = launch_tracked(launcher, None, {"exe_path": str(target), "check_web_media": True})
+    _ = launch_tracked(
+        launcher, None, {"exe_path": str(target), "check_web_media": True}
+    )
     assert launcher.launch.call_args.kwargs["check_web_media"] is True

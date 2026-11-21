@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M16: malformed RPDL data or an unexpected error must not leave a torrent job in "fetching"."""
+
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,9 @@ _TORRENT = (
 class _InlineThread:
     """Runs the target at start(), so the test sees the job's final stage."""
 
-    def __init__(self, target: object, args: tuple[object, ...] = (), daemon: bool = False) -> None:
+    def __init__(
+        self, target: object, args: tuple[object, ...] = (), daemon: bool = False
+    ) -> None:
         self._target = target
         self._args = args
 
@@ -31,13 +34,17 @@ class _InlineThread:
 
 
 @pytest.mark.parametrize("number", ["NaN", "Infinity"])
-def test_malformed_details_do_not_break_the_checked_fetch(monkeypatch: pytest.MonkeyPatch, number: str):
+def test_malformed_details_do_not_break_the_checked_fetch(
+    monkeypatch: pytest.MonkeyPatch, number: str
+):
     # json.loads accepts NaN and Infinity; int() of them raises ValueError or OverflowError.
     # The details now parse (the bad number reads as 0), so the info hash must match.
     info_hash = parse_torrent(_TORRENT).info_hash
     body = f'{{"data": {{"torrent_id": 7, "title": "Game", "file_size": {number}, "info_hash": "{info_hash}"}}}}'
     monkeypatch.setattr(rpdl, "fetch_torrent", lambda _id: _TORRENT)
-    monkeypatch.setattr(rpdl, "_request", lambda *_a, **_k: (body.encode(), "application/json"))
+    monkeypatch.setattr(
+        rpdl, "_request", lambda *_a, **_k: (body.encode(), "application/json")
+    )
     assert ApiBase._fetch_checked_rpdl_torrent(7) == _TORRENT  # pyright: ignore[reportPrivateUsage]
 
 
@@ -63,7 +70,9 @@ def test_unexpected_fetch_error_fails_the_job(
     assert "secret" not in err
 
 
-def test_unexpected_error_after_cancel_marks_the_job_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_unexpected_error_after_cancel_marks_the_job_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     sup = _supervisor(tmp_path, monkeypatch)
     holder: dict[str, torrents._Job] = {}  # pyright: ignore[reportPrivateUsage]
 

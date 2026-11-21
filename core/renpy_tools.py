@@ -66,7 +66,7 @@ def console_script(developer: bool) -> str:
 
 
 def console_state(game_folder: str) -> str:
-    """"off", "on" or "developer" from the files in `game/`."""
+    """ "off", "on" or "developer" from the files in `game/`."""
     rpy, rpyc = console_paths(game_folder)
     if os.path.isfile(rpy):
         try:
@@ -403,7 +403,9 @@ def extract_archives(
     """Extract every listed archive; `mode` is "folder" or "in_place"."""
     if mode not in ("folder", "in_place"):
         raise GameToolError("Unknown extraction mode")
-    output_real = validate_output_folder(game_folder, output) if mode == "folder" else ""
+    output_real = (
+        validate_output_folder(game_folder, output) if mode == "folder" else ""
+    )
     archives = list_archives(game_folder)
     if not archives:
         raise GameToolError("There are no archives to extract")
@@ -505,7 +507,10 @@ def extract_archives(
     return {
         "files": files,
         "bytes": written_bytes,
-        "skipped": skipped_scripts + skipped_existing + skipped_unsafe + skipped_invalid,
+        "skipped": skipped_scripts
+        + skipped_existing
+        + skipped_unsafe
+        + skipped_invalid,
         "skipped_scripts": skipped_scripts,
         "skipped_existing": skipped_existing,
         "skipped_unsafe": skipped_unsafe,

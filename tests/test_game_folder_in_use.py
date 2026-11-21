@@ -59,17 +59,30 @@ def test_folder_in_use_reads_exe_cwd_and_wine_paths(tmp_path):
     other = tmp_path / "Other"
     other.mkdir()
 
-    assert gf.folder_in_use(str(game), _fake_proc(tmp_path / "a", exe=str(game / "sub" / "run (deleted)")))
+    assert gf.folder_in_use(
+        str(game), _fake_proc(tmp_path / "a", exe=str(game / "sub" / "run (deleted)"))
+    )
     assert gf.folder_in_use(str(game), _fake_proc(tmp_path / "b", cwd=str(game)))
     wine_word = "Z:" + str(game / "Game.exe").replace("/", "\\")
     assert gf.folder_in_use(
-        str(game), _fake_proc(tmp_path / "c", exe="/usr/bin/wine64-preloader", cmdline=("wine", wine_word))
+        str(game),
+        _fake_proc(
+            tmp_path / "c", exe="/usr/bin/wine64-preloader", cmdline=("wine", wine_word)
+        ),
     )
     assert not gf.folder_in_use(
-        str(game), _fake_proc(tmp_path / "d", exe="/usr/bin/x", cwd=str(other), cmdline=(str(other / "a"),))
+        str(game),
+        _fake_proc(
+            tmp_path / "d",
+            exe="/usr/bin/x",
+            cwd=str(other),
+            cmdline=(str(other / "a"),),
+        ),
     )
     # A sibling folder whose name starts with the same text is not inside.
-    assert not gf.folder_in_use(str(game), _fake_proc(tmp_path / "e", cwd=str(tmp_path / "Game2")))
+    assert not gf.folder_in_use(
+        str(game), _fake_proc(tmp_path / "e", cwd=str(tmp_path / "Game2"))
+    )
 
 
 def test_plans_block_a_folder_a_live_process_uses(lib):
@@ -80,7 +93,9 @@ def test_plans_block_a_folder_a_live_process_uses(lib):
     proc = subprocess.Popen(["sleep", "30"], cwd=str(library / "Game"))
     try:
         uninstall = gf.plan_uninstall([game_id], {}, _hooks(), ctx)[0]
-        move = gf.plan_move([game_id], str(library), {}, _hooks(), ctx, with_sizes=False)[0]
+        move = gf.plan_move(
+            [game_id], str(library), {}, _hooks(), ctx, with_sizes=False
+        )[0]
         assert uninstall["blocked_reason"] == gf.FOLDER_IN_USE
         assert move["blocked_reason"] == gf.FOLDER_IN_USE
     finally:

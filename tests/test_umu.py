@@ -426,7 +426,9 @@ def test_proton_path_value():
     assert umu.proton_path_value("") == ""
     assert umu.proton_path_value("wine") == ""
     assert umu.proton_path_value("/usr/bin/wine") == ""
-    assert umu.proton_path_value("/runners/GE-Proton11/proton") == "/runners/GE-Proton11"
+    assert (
+        umu.proton_path_value("/runners/GE-Proton11/proton") == "/runners/GE-Proton11"
+    )
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="umu runs only on Linux hosts")
@@ -669,7 +671,10 @@ def test_umu_invocation_reports_overridden_launch_values(tmp_path, monkeypatch, 
     assert "Ignoring PROTONPATH=/other" in out and "Ignoring PROTON_VERB=run" in out
     # Values wLib sets itself are not reported.
     _ = umu.build_umu_invocation(
-        "/games/demo.exe", prefix=str(prefix), runner="/runner/proton", game_id=7,
+        "/games/demo.exe",
+        prefix=str(prefix),
+        runner="/runner/proton",
+        game_id=7,
         environment={"PROTONPATH": "/runner", "PROTON_VERB": "waitforexitandrun"},
     )
     assert "Ignoring" not in capsys.readouterr().out

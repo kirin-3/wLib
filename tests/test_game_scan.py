@@ -13,7 +13,10 @@ def setup_test_db(tmp_path, monkeypatch):
 
 
 def test_guess_title_and_version_from_folder_names():
-    assert guess_title_and_version("SummertimeSaga-0.20.16-pc") == ("Summertime Saga", "0.20.16")
+    assert guess_title_and_version("SummertimeSaga-0.20.16-pc") == (
+        "Summertime Saga",
+        "0.20.16",
+    )
     assert guess_title_and_version("Being_A_DIK_v0.9.1") == ("Being A DIK", "0.9.1")
     assert guess_title_and_version("Game 2") == ("Game 2", "")
 
@@ -36,11 +39,18 @@ def test_scanned_game_add_uses_sandbox_default(tmp_path, default):
     assert get_all_games()[0]["sandbox_enabled"] == int(default == "true")
 
 
-@pytest.mark.parametrize("filename, content", [
-    ("game.x86_64", b"\x7fELF"), ("game.x86", b"\x7fELF"),
-    ("game", b"\x7fELF"), ("start.bat", b""), ("start.cmd", b""),
-    ("Story.html", b""), ("Story.htm", b""),
-])
+@pytest.mark.parametrize(
+    "filename, content",
+    [
+        ("game.x86_64", b"\x7fELF"),
+        ("game.x86", b"\x7fELF"),
+        ("game", b"\x7fELF"),
+        ("start.bat", b""),
+        ("start.cmd", b""),
+        ("Story.html", b""),
+        ("Story.htm", b""),
+    ],
+)
 def test_scan_supported_launchers(tmp_path, filename, content):
     folder = tmp_path / "Game"
     folder.mkdir()
@@ -88,12 +98,18 @@ def test_scan_games_folder_detects_launchers_and_engines(tmp_path, monkeypatch):
     assert set(games) == {"Eternum", "Quest", "Brew"}
     assert games["Brew"]["engine"] == "Godot"
     assert games["Eternum"]["exe_path"] == str(renpy / "Eternum.exe")
-    assert (games["Eternum"]["engine"], games["Eternum"]["version"]) == ("Ren'Py", "0.6")
+    assert (games["Eternum"]["engine"], games["Eternum"]["version"]) == (
+        "Ren'Py",
+        "0.6",
+    )
     assert games["Quest"]["exe_path"] == str(rpgm / "Game.exe")
     assert games["Quest"]["engine"] == "RPGM"
 
     add_game("Eternum", str(renpy / "Eternum.exe"))
-    scanned = {game["title"]: game["in_library"] for game in Api().scan_games_folder(str(tmp_path))["games"]}
+    scanned = {
+        game["title"]: game["in_library"]
+        for game in Api().scan_games_folder(str(tmp_path))["games"]
+    }
     assert scanned == {"Eternum": True, "Quest": False, "Brew": False}
 
 
@@ -267,9 +283,10 @@ def test_scan_in_library_matches_case_variant_paths(tmp_path, monkeypatch):
     assert game_id is not None
 
     def fake_samefile(left, right):
-        return os.path.normcase(str(left)).casefold() == os.path.normcase(
-            str(right)
-        ).casefold()
+        return (
+            os.path.normcase(str(left)).casefold()
+            == os.path.normcase(str(right)).casefold()
+        )
 
     monkeypatch.setattr("os.path.samefile", fake_samefile)
 
@@ -315,9 +332,7 @@ def test_scan_uses_a_lone_32_bit_launcher(tmp_path):
     exe.touch()
 
     assert find_launcher(str(folder)) == str(exe)
-    assert [game["exe_path"] for game in scan_games_folder(str(tmp_path))] == [
-        str(exe)
-    ]
+    assert [game["exe_path"] for game in scan_games_folder(str(tmp_path))] == [str(exe)]
 
 
 def test_scan_prefers_exact_title_over_setup(tmp_path):
@@ -385,7 +400,9 @@ def test_find_launcher_skips_helpers_installers_and_guides(tmp_path, monkeypatch
     assert game_scan.find_launcher(str(twine)) == str(twine / "Helpless.html")
 
 
-def test_swf_is_a_lowest_priority_launch_target_with_flash_engine(tmp_path, monkeypatch):
+def test_swf_is_a_lowest_priority_launch_target_with_flash_engine(
+    tmp_path, monkeypatch
+):
     from core.game_scan import detect_engine, find_launcher, inspect_game_path
 
     monkeypatch.setattr("core.game_scan.is_linux", lambda: True)
@@ -410,8 +427,11 @@ def test_swf_is_a_lowest_priority_launch_target_with_flash_engine(tmp_path, monk
 
     (tmp_path / "lib").mkdir()
     (tmp_path / "lib" / "g.swf").touch()
-    assert [g["engine"] for g in scan_games_folder(str(tmp_path))
-            if g["exe_path"].endswith("g.swf")] == ["Flash"]
+    assert [
+        g["engine"]
+        for g in scan_games_folder(str(tmp_path))
+        if g["exe_path"].endswith("g.swf")
+    ] == ["Flash"]
 
 
 def _touch(path, content=b"x"):

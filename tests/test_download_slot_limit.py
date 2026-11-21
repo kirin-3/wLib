@@ -25,7 +25,10 @@ def test_download_now_waits_when_running_count_exceeds_lowered_limit() -> None:
     assert worker.stopped == []
     assert worker.started == running_ids
     assert all(job.state == RUNNING for job in jobs[:3])
-    assert [job.id for job in queue.jobs() if job.state == QUEUED] == [selected.id, earlier.id]
+    assert [job.id for job in queue.jobs() if job.state == QUEUED] == [
+        selected.id,
+        earlier.id,
+    ]
 
     for job in jobs[:2]:
         worker.states[job.id].phase = PHASE_DONE

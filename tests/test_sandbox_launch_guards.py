@@ -104,7 +104,11 @@ def test_sandbox_that_cannot_start_reports_the_probe_reason(monkeypatch, tmp_pat
     result = _sandboxed_native_launch(
         monkeypatch,
         tmp_path,
-        {"status": "unusable", "path": "/usr/bin/bwrap", "reason": "No user namespaces"},
+        {
+            "status": "unusable",
+            "path": "/usr/bin/bwrap",
+            "reason": "No user namespaces",
+        },
     )
     assert result == {
         "success": False,

@@ -197,7 +197,9 @@ class CatalogClient:
         return os.path.join(self.data_dir, SIDECAR_FILE)
 
     def _headers(self) -> dict[str, str]:
-        return {"User-Agent": f"wLib/{self._app_version} (+https://github.com/kirin-3/wLib)"}
+        return {
+            "User-Agent": f"wLib/{self._app_version} (+https://github.com/kirin-3/wLib)"
+        }
 
     def _read_sidecar(self) -> dict[str, object]:
         try:
@@ -209,7 +211,9 @@ class CatalogClient:
 
     def _write_sidecar(self, data: Mapping[str, object]) -> None:
         os.makedirs(self.data_dir, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=self.data_dir, prefix=".catalog-", suffix=".json")
+        fd, tmp = tempfile.mkstemp(
+            dir=self.data_dir, prefix=".catalog-", suffix=".json"
+        )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(dict(data), handle, indent=2)
@@ -299,12 +303,17 @@ class CatalogClient:
         except Exception as exc:  # a callback problem never fails the check
             print(f"[wLib] Catalog install callback failed: {exc}")
 
-    def check(self, *, force: bool = False, _claimed: bool = False) -> dict[str, object]:
+    def check(
+        self, *, force: bool = False, _claimed: bool = False
+    ) -> dict[str, object]:
         """Fetch the manifest and install a newer snapshot when there is one."""
         if not _claimed:
             with self._lock:
                 if self._checking:
-                    return {"success": False, "error": "A catalog check is already running"}
+                    return {
+                        "success": False,
+                        "error": "A catalog check is already running",
+                    }
                 self._checking = True
         try:
             return self._check(force)
@@ -376,7 +385,11 @@ class CatalogClient:
         path = snapshot.get(SNAPSHOT_PATH)
         size = snapshot.get(SNAPSHOT_SIZE)
         digest = snapshot.get(SNAPSHOT_SHA256)
-        if not isinstance(path, str) or not isinstance(size, int) or not isinstance(digest, str):
+        if (
+            not isinstance(path, str)
+            or not isinstance(size, int)
+            or not isinstance(digest, str)
+        ):
             raise CatalogError("The catalog manifest's snapshot entry is incomplete")
         if not 0 < size <= MAX_SNAPSHOT_BYTES:
             raise CatalogError("The catalog snapshot is larger than allowed")
@@ -408,9 +421,13 @@ class CatalogClient:
                         return False
 
         os.makedirs(self.data_dir, exist_ok=True)
-        xz_fd, xz_tmp = tempfile.mkstemp(dir=self.data_dir, prefix=".catalog-", suffix=".xz")
+        xz_fd, xz_tmp = tempfile.mkstemp(
+            dir=self.data_dir, prefix=".catalog-", suffix=".xz"
+        )
         try:
-            db_fd, db_tmp = tempfile.mkstemp(dir=self.data_dir, prefix=".catalog-", suffix=".db")
+            db_fd, db_tmp = tempfile.mkstemp(
+                dir=self.data_dir, prefix=".catalog-", suffix=".db"
+            )
         except BaseException:
             os.close(xz_fd)
             _remove(xz_tmp)
@@ -421,7 +438,9 @@ class CatalogClient:
                 self._download(snapshot_url(url, path), target, size, digest)
             limit = snapshot.get(SNAPSHOT_UNCOMPRESSED_SIZE)
             db_digest = self._decompress(
-                xz_tmp, db_tmp, limit if isinstance(limit, int) else MAX_UNCOMPRESSED_BYTES
+                xz_tmp,
+                db_tmp,
+                limit if isinstance(limit, int) else MAX_UNCOMPRESSED_BYTES,
             )
             self._verify(db_tmp)
             if not self._enabled():
@@ -447,7 +466,9 @@ class CatalogClient:
             while chunk := response.read(_CHUNK):
                 received += len(chunk)
                 if received > size or received > MAX_SNAPSHOT_BYTES:
-                    raise CatalogError("The catalog snapshot is larger than the manifest says")
+                    raise CatalogError(
+                        "The catalog snapshot is larger than the manifest says"
+                    )
                 hasher.update(chunk)
                 _ = target.write(chunk)
         if received != size:
@@ -465,20 +486,28 @@ class CatalogClient:
                 while chunk := reader.read(_CHUNK):
                     written += len(chunk)
                     if written > limit:
-                        raise CatalogError("The catalog snapshot is larger than allowed")
+                        raise CatalogError(
+                            "The catalog snapshot is larger than allowed"
+                        )
                     hasher.update(chunk)
                     _ = writer.write(chunk)
                 writer.flush()
                 os.fsync(writer.fileno())
         except lzma.LZMAError as exc:
-            raise CatalogError("The catalog snapshot could not be decompressed") from exc
+            raise CatalogError(
+                "The catalog snapshot could not be decompressed"
+            ) from exc
         return hasher.hexdigest()
 
     def _verify(self, path: str) -> None:
         try:
-            conn = sqlite3.connect(f"{Path(os.path.abspath(path)).as_uri()}?mode=ro", uri=True)
+            conn = sqlite3.connect(
+                f"{Path(os.path.abspath(path)).as_uri()}?mode=ro", uri=True
+            )
             try:
-                check = cast(tuple[str] | None, conn.execute("PRAGMA quick_check").fetchone())
+                check = cast(
+                    tuple[str] | None, conn.execute("PRAGMA quick_check").fetchone()
+                )
                 row = cast(
                     tuple[str] | None,
                     conn.execute(
@@ -488,14 +517,19 @@ class CatalogClient:
             finally:
                 conn.close()
         except sqlite3.Error as exc:
-            raise CatalogError("The catalog snapshot is not a readable database") from exc
+            raise CatalogError(
+                "The catalog snapshot is not a readable database"
+            ) from exc
         if check is None or check[0] != "ok":
             raise CatalogError("The catalog snapshot failed its integrity check")
-        if row is None or not row[0].isdigit() or int(row[0]) not in SUPPORTED_SCHEMA_VERSIONS:
+        if (
+            row is None
+            or not row[0].isdigit()
+            or int(row[0]) not in SUPPORTED_SCHEMA_VERSIONS
+        ):
             raise CatalogError("The published catalog needs a newer version of wLib")
 
     def remove(self) -> None:
         """Delete the local catalog; used when the setting is turned off."""
         _remove(self.catalog_path)
         _remove(self.sidecar_path)
-

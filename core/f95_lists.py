@@ -7,6 +7,7 @@ sees F95 credentials or cookies. This module parses the list pages, walks
 both lists and builds the import preview; ``apply_import`` writes the
 preview to the library in one transaction.
 """
+
 from __future__ import annotations
 
 import re
@@ -18,14 +19,28 @@ from typing import Literal, cast
 from urllib.parse import urlsplit
 
 from core import extension_bridge
-from core.f95zone import NON_ENGINE_PREFIXES, extract_thread_id, normalize_prefix_label, split_thread_title
+from core.f95zone import (
+    NON_ENGINE_PREFIXES,
+    extract_thread_id,
+    normalize_prefix_label,
+    split_thread_title,
+)
 from core.versions import actionable_remote_version
 
 ListName = Literal["watched", "bookmarks"]
 LIST_NAMES: tuple[ListName, ...] = ("watched", "bookmarks")
-LIST_LABELS: dict[ListName, str] = {"watched": "Watched games", "bookmarks": "Bookmarks"}
-LIST_TAGS: dict[ListName, str] = {"watched": "Watched on F95", "bookmarks": "Bookmarked on F95"}
-LIST_TAG_COLORS: dict[str, str] = {"Watched on F95": "orange", "Bookmarked on F95": "purple"}
+LIST_LABELS: dict[ListName, str] = {
+    "watched": "Watched games",
+    "bookmarks": "Bookmarks",
+}
+LIST_TAGS: dict[ListName, str] = {
+    "watched": "Watched on F95",
+    "bookmarks": "Bookmarked on F95",
+}
+LIST_TAG_COLORS: dict[str, str] = {
+    "Watched on F95": "orange",
+    "Bookmarked on F95": "purple",
+}
 LIST_TAG_COLORS_SEEDED_KEY = "f95_list_tag_colors_seeded"
 _LIST_URLS: dict[ListName, str] = {
     "watched": "https://f95zone.to/watched/threads?tab=games&unread=0&sort=title&page={page}",
@@ -97,10 +112,13 @@ class ListReadResult:
 
 # --- small HTML helpers (same regex style as core/scraper.py) -------------
 
+
 def _attribute(opening: str, name: str) -> str:
     from html import unescape
 
-    match = re.search(rf"(?<![\w:-]){re.escape(name)}\s*=\s*([\"'])(.*?)\1", opening, re.S | re.I)
+    match = re.search(
+        rf"(?<![\w:-]){re.escape(name)}\s*=\s*([\"'])(.*?)\1", opening, re.S | re.I
+    )
     return unescape(match.group(2)) if match else ""
 
 
@@ -145,7 +163,7 @@ def _element_blocks(html: str, class_name: str) -> list[tuple[str, str]]:
                 inner_end = token.start()
                 end = token.end()
                 break
-        blocks.append((match.group(), html[match.end():inner_end]))
+        blocks.append((match.group(), html[match.end() : inner_end]))
         position = end
 
 
@@ -155,10 +173,14 @@ def _first_block(html: str, class_name: str) -> tuple[str, str] | None:
 
 
 def _anchors(html: str) -> list[tuple[str, str]]:
-    return [(m.group(1), m.group(2)) for m in re.finditer(r"(<a\b[^>]*>)(.*?)</a>", html, re.S | re.I)]
+    return [
+        (m.group(1), m.group(2))
+        for m in re.finditer(r"(<a\b[^>]*>)(.*?)</a>", html, re.S | re.I)
+    ]
 
 
 # --- page parsing ---------------------------------------------------------
+
 
 def _html_opening(html: str) -> str:
     match = re.search(r"<html\b[^>]*>", html[:8192], re.I)
@@ -197,7 +219,9 @@ def _row_title(inner: str) -> str:
         if _attribute(anchor, "data-tp-primary") == "on":
             return _text(content)
     for anchor, content in anchors:
-        if "labelLink" not in _classes(anchor) and extract_thread_id(_attribute(anchor, "href")):
+        if "labelLink" not in _classes(anchor) and extract_thread_id(
+            _attribute(anchor, "href")
+        ):
             return _text(content)
     return ""
 
@@ -225,13 +249,15 @@ def parse_rows(html: str) -> list[ListRow]:
                 if name:
                     prefix_names.append(name)
         version_block = _first_block(inner, "f95wg-ver")
-        rows.append(ListRow(
-            thread_id=thread_id,
-            title=_row_title(inner),
-            prefix_ids=prefix_ids,
-            prefix_names=prefix_names,
-            list_version=_text(version_block[1]) if version_block else "",
-        ))
+        rows.append(
+            ListRow(
+                thread_id=thread_id,
+                title=_row_title(inner),
+                prefix_ids=prefix_ids,
+                prefix_names=prefix_names,
+                list_version=_text(version_block[1]) if version_block else "",
+            )
+        )
     return rows
 
 
@@ -292,23 +318,29 @@ def _version_from_list(raw: str) -> str:
 
 def _first_actionable_version(*versions: str) -> str:
     """The first usable version; else the first nonempty placeholder ("Unknown")."""
-    return next((value for value in versions if actionable_remote_version(value)), "") or next(
-        (value for value in versions if value), ""
-    )
+    return next(
+        (value for value in versions if actionable_remote_version(value)), ""
+    ) or next((value for value in versions if value), "")
 
 
 def entry_from_row(row: ListRow, list_name: ListName) -> ListEntry:
     """Title, version and developer from the row title, engine from the prefix labels."""
     title, version, developer = split_thread_title(row.title)
     engine = next(
-        (name for name in row.prefix_names if normalize_prefix_label(name) not in NON_ENGINE_PREFIXES),
+        (
+            name
+            for name in row.prefix_names
+            if normalize_prefix_label(name) not in NON_ENGINE_PREFIXES
+        ),
         "",
     )
     return ListEntry(
         thread_id=row.thread_id,
         raw_title=row.title,
         title=title or row.title.strip(),
-        version=_first_actionable_version(version, _version_from_list(row.list_version)),
+        version=_first_actionable_version(
+            version, _version_from_list(row.list_version)
+        ),
         developer=developer,
         engine=engine,
         prefixes=list(row.prefix_names),
@@ -350,7 +382,9 @@ def fetch_page_via_extension(url: str) -> tuple[int, str, str]:
         text = str(exc)
         raise ListReadError("timeout" if "in time" in text else "fetch_failed") from exc
     except scraper.F95RequestError as exc:
-        raise ListReadError(exc.code if exc.code in ERROR_MESSAGES else "fetch_failed", str(exc)) from exc
+        raise ListReadError(
+            exc.code if exc.code in ERROR_MESSAGES else "fetch_failed", str(exc)
+        ) from exc
     return response.status, response.final_url, response.body
 
 
@@ -373,13 +407,15 @@ def read_lists(
         if progress is None:
             return
         known = [value for value in totals.values() if value is not None]
-        progress({
-            "list": list_name,
-            "list_label": LIST_LABELS[list_name],
-            "page": page,
-            "found": counts["watched"] + counts["bookmarks"],
-            "total": sum(known) if known else None,
-        })
+        progress(
+            {
+                "list": list_name,
+                "list_label": LIST_LABELS[list_name],
+                "page": page,
+                "found": counts["watched"] + counts["bookmarks"],
+                "total": sum(known) if known else None,
+            }
+        )
 
     for list_name in LIST_NAMES:
         seen: set[str] = set()
@@ -413,6 +449,7 @@ def read_lists(
 
 # --- preview and apply ----------------------------------------------------
 
+
 def build_preview(result: ListReadResult) -> dict[str, object]:
     """Counts per list and in total, with new and existing games."""
     from core.database import find_matching_game_row, get_connection
@@ -428,20 +465,29 @@ def build_preview(result: ListReadResult) -> dict[str, object]:
     for list_name in LIST_NAMES:
         on_list = [entry for entry in result.entries if list_name in entry.lists]
         existing = sum(1 for entry in on_list if entry.thread_id in existing_ids)
-        per_list[list_name] = {"found": len(on_list), "new": len(on_list) - existing, "existing": existing}
-    existing_total = sum(1 for entry in result.entries if entry.thread_id in existing_ids)
+        per_list[list_name] = {
+            "found": len(on_list),
+            "new": len(on_list) - existing,
+            "existing": existing,
+        }
+    existing_total = sum(
+        1 for entry in result.entries if entry.thread_id in existing_ids
+    )
     return {
         "lists": per_list,
         "total": len(result.entries),
         "new": len(result.entries) - existing_total,
         "existing": existing_total,
         "entries": [
-            {**entry.to_json(), "in_library": entry.thread_id in existing_ids} for entry in result.entries
+            {**entry.to_json(), "in_library": entry.thread_id in existing_ids}
+            for entry in result.entries
         ],
     }
 
 
-def _catalog_values(entry: ListEntry, catalog: Mapping[str, object]) -> dict[str, object]:
+def _catalog_values(
+    entry: ListEntry, catalog: Mapping[str, object]
+) -> dict[str, object]:
     def text(key: str) -> str:
         value = catalog.get(key)
         return str(value).strip() if isinstance(value, (str, int, float)) else ""
@@ -462,7 +508,8 @@ def _catalog_values(entry: ListEntry, catalog: Mapping[str, object]) -> dict[str
 def apply_import(
     entries: Sequence[ListEntry],
     *,
-    catalog_lookup: Callable[[Sequence[str]], Mapping[str, Mapping[str, object]]] | None = None,
+    catalog_lookup: Callable[[Sequence[str]], Mapping[str, Mapping[str, object]]]
+    | None = None,
 ) -> dict[str, object]:
     """Add new games as wishlisted, tag every game with its lists and seed
     the two tag colors once, all in one transaction (rolled back on error)."""
@@ -482,10 +529,14 @@ def apply_import(
         _ = conn.execute("BEGIN IMMEDIATE")
         try:
             for entry in entries:
-                list_tags = [LIST_TAGS[name] for name in LIST_NAMES if name in entry.lists]
+                list_tags = [
+                    LIST_TAGS[name] for name in LIST_NAMES if name in entry.lists
+                ]
                 row = database.find_matching_game_row(cursor, entry.url)
                 if row is not None:
-                    if database.add_game_tags(cursor, int(cast(int, row["id"])), list_tags):
+                    if database.add_game_tags(
+                        cursor, int(cast(int, row["id"])), list_tags
+                    ):
                         tagged_ids.append(int(cast(int, row["id"])))
                     continue
                 values = _catalog_values(entry, catalog.get(entry.thread_id, {}))
@@ -503,7 +554,9 @@ def apply_import(
                     thread_completed=cast(bool | None, values["thread_completed"]),
                 )
                 added_ids.append(game_id)
-            colors_seeded = database.seed_tag_colors_once(cursor, LIST_TAG_COLORS_SEEDED_KEY, LIST_TAG_COLORS)
+            colors_seeded = database.seed_tag_colors_once(
+                cursor, LIST_TAG_COLORS_SEEDED_KEY, LIST_TAG_COLORS
+            )
             conn.commit()
         except BaseException:
             conn.rollback()
@@ -523,7 +576,11 @@ PREVIEW_TTL_SECONDS = 2 * 60 * 60
 
 
 def _error(code: str, message: str = "") -> dict[str, object]:
-    return {"success": False, "error": message or ERROR_MESSAGES.get(code, code), "error_code": code}
+    return {
+        "success": False,
+        "error": message or ERROR_MESSAGES.get(code, code),
+        "error_code": code,
+    }
 
 
 class AccountReader:
@@ -535,7 +592,9 @@ class AccountReader:
     def __init__(
         self,
         fetch: PageFetch = fetch_page_via_extension,
-        preflight: Callable[[], str | None] = extension_bridge.list_fetch_unavailable_reason,
+        preflight: Callable[
+            [], str | None
+        ] = extension_bridge.list_fetch_unavailable_reason,
         clock: Callable[[], float] | None = None,
     ) -> None:
         import threading
@@ -573,7 +632,9 @@ class AccountReader:
             self._preview = None
             self._cancel.clear()
             read_id = self._read_id
-            self._thread = threading.Thread(target=self._run, args=(read_id,), name="f95-list-read", daemon=True)
+            self._thread = threading.Thread(
+                target=self._run, args=(read_id,), name="f95-list-read", daemon=True
+            )
             self._thread.start()
         return {"success": True, "read_id": read_id}
 
@@ -593,18 +654,32 @@ class AccountReader:
             )
             preview = build_preview(result)
         except ListReadError as exc:
-            self._finish(read_id, "cancelled" if exc.code == "cancelled" else "error",
-                         error=_error(exc.code, str(exc)))
+            self._finish(
+                read_id,
+                "cancelled" if exc.code == "cancelled" else "error",
+                error=_error(exc.code, str(exc)),
+            )
             return
         except Exception as exc:
             logging.getLogger("wlib.f95_lists").exception("F95 list read failed")
-            self._finish(read_id, "error", error=_error("fetch_failed", str(exc) or ERROR_MESSAGES["fetch_failed"]))
+            self._finish(
+                read_id,
+                "error",
+                error=_error(
+                    "fetch_failed", str(exc) or ERROR_MESSAGES["fetch_failed"]
+                ),
+            )
             return
         self._finish(read_id, "done", result=result, preview=preview)
 
     def _finish(
-        self, read_id: str, state: str, *, error: dict[str, object] | None = None,
-        result: ListReadResult | None = None, preview: dict[str, object] | None = None,
+        self,
+        read_id: str,
+        state: str,
+        *,
+        error: dict[str, object] | None = None,
+        result: ListReadResult | None = None,
+        preview: dict[str, object] | None = None,
     ) -> None:
         with self._lock:
             if self._read_id != read_id:
@@ -616,7 +691,10 @@ class AccountReader:
             self._finished_at = self._clock()
 
     def _expire_locked(self) -> None:
-        if self._state == "done" and self._clock() - self._finished_at > PREVIEW_TTL_SECONDS:
+        if (
+            self._state == "done"
+            and self._clock() - self._finished_at > PREVIEW_TTL_SECONDS
+        ):
             self._state = "expired"
             self._result = None
             self._preview = None
@@ -635,7 +713,9 @@ class AccountReader:
             if self._state in ("error", "cancelled") and self._error is not None:
                 payload.update(self._error)
             if self._state == "expired":
-                payload.update(_error("expired", "The preview expired. Read your F95 lists again."))
+                payload.update(
+                    _error("expired", "The preview expired. Read your F95 lists again.")
+                )
             return payload
 
     def cancel(self) -> dict[str, object]:
@@ -652,11 +732,19 @@ class AccountReader:
             if self._state == "running":
                 return _error("busy", "wLib is still reading your F95 lists.")
             if not read_id or read_id != self._read_id:
-                return _error("not_found", "This preview is no longer available. Read your F95 lists again.")
+                return _error(
+                    "not_found",
+                    "This preview is no longer available. Read your F95 lists again.",
+                )
             if self._state == "expired":
-                return _error("expired", "The preview expired. Read your F95 lists again.")
+                return _error(
+                    "expired", "The preview expired. Read your F95 lists again."
+                )
             if self._state != "done" or self._result is None:
-                return _error("not_found", "This preview is no longer available. Read your F95 lists again.")
+                return _error(
+                    "not_found",
+                    "This preview is no longer available. Read your F95 lists again.",
+                )
             if not self._result.entries:
                 return _error("empty", "No watched or bookmarked games were found.")
             result = self._result

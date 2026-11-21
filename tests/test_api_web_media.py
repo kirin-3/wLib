@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Video conversion job, busy reason and launch codes for the built-in player."""
+
 from __future__ import annotations
 
 import json
@@ -20,7 +21,12 @@ AVAILABLE: web_video.FfmpegInfo = {
     "video_encoder": "libsvtav1",
     "audio_encoder": "libopus",
     "reason": "",
-    "install": {"command": "", "package_manager": "", "platform": "linux", "host": False},
+    "install": {
+        "command": "",
+        "package_manager": "",
+        "platform": "linux",
+        "host": False,
+    },
 }
 
 
@@ -41,7 +47,9 @@ def env(tmp_path, monkeypatch):
     game_id = add_game(title="Game", exe_path=str(folder / "index.html"))
     assert game_id is not None
     monkeypatch.setattr(web_video, "ffmpeg_info", lambda refresh=False: AVAILABLE)
-    monkeypatch.setattr(web_video, "check_file", lambda path: open(path, "rb").read() == b"h264")
+    monkeypatch.setattr(
+        web_video, "check_file", lambda path: open(path, "rb").read() == b"h264"
+    )
     api = Api()
     monkeypatch.setattr(api, "get_running_games", lambda: [])
     return api, game_id, folder
@@ -71,7 +79,12 @@ class FakeConvert:
         import os
 
         info = os.stat(path)
-        return {"ok": True, "error": "", "size": info.st_size, "mtime_ns": info.st_mtime_ns}
+        return {
+            "ok": True,
+            "error": "",
+            "size": info.st_size,
+            "mtime_ns": info.st_mtime_ns,
+        }
 
 
 def _wait_done(api, game_id):
@@ -92,8 +105,17 @@ def test_conversion_counts_and_status(env, monkeypatch):
     assert api.get_web_media_conversion_status(game_id)["running"] is False
     assert api.start_web_media_conversion(game_id)["success"] is True
     status = _wait_done(api, game_id)
-    assert (status["total"], status["done"], status["converted"], status["failed"]) == (4, 4, 3, 1)
-    assert status["failed_files"] == ["clip2.mp4"] and status["error"] == "" and not status["cancelled"]
+    assert (status["total"], status["done"], status["converted"], status["failed"]) == (
+        4,
+        4,
+        3,
+        1,
+    )
+    assert (
+        status["failed_files"] == ["clip2.mp4"]
+        and status["error"] == ""
+        and not status["cancelled"]
+    )
     assert not (folder / "old.mp4.wlib-partial").exists()
     assert web_video.scan_game(game_id, str(folder))["needs"] == ["clip2.mp4"]
 
@@ -155,7 +177,11 @@ def test_refused_while_moving(env, monkeypatch, tmp_path):
 
 def test_refused_without_ffmpeg(env, monkeypatch):
     api, game_id, _folder = env
-    monkeypatch.setattr(web_video, "ffmpeg_info", lambda refresh=False: {**AVAILABLE, "available": False})
+    monkeypatch.setattr(
+        web_video,
+        "ffmpeg_info",
+        lambda refresh=False: {**AVAILABLE, "available": False},
+    )
     assert api.start_web_media_conversion(game_id)["code"] == "ffmpeg_unavailable"
 
 
@@ -201,7 +227,9 @@ def test_shutdown_stops_the_job(env, monkeypatch):
     fake = FakeConvert(gate=gate)
     monkeypatch.setattr(web_video.Converter, "convert", fake.method())
     killed = threading.Event()
-    monkeypatch.setattr(web_video.Converter, "kill", lambda _self: (killed.set(), gate.set()))
+    monkeypatch.setattr(
+        web_video.Converter, "kill", lambda _self: (killed.set(), gate.set())
+    )
     assert api.start_web_media_conversion(game_id)["success"] is True
     assert fake.started.wait(5)
     api._web_media_shutdown()

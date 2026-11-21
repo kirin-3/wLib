@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Game update checks and the automatic check."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -21,13 +22,17 @@ class UpdatesMixin(ApiBase):
         try:
             lc_url = lewdcorner.normalize_thread_url(url)
             match = (
-                database.find_game_by_lc_url(lc_url) if lc_url
+                database.find_game_by_lc_url(lc_url)
+                if lc_url
                 else database.find_game_by_f95_url(url)
             )
             game_id = match.get("id") if match else None
             game = database.get_game(game_id) if isinstance(game_id, int) else None
             if lc_url and game is None:
-                return {"success": False, "error": "LewdCorner thread is not in the library"}
+                return {
+                    "success": False,
+                    "error": "LewdCorner thread is not in the library",
+                }
 
             current: Mapping[str, object] = game or {}
             lc_result = lewdcorner_updates.CheckResult()
@@ -37,13 +42,24 @@ class UpdatesMixin(ApiBase):
                 thread_id = lewdcorner.extract_thread_id(active_url)
                 catalog = lc_thread_entries([thread_id]).get(thread_id, {})
                 lc_result = lewdcorner_updates.check_thread(
-                    game_id, active_url, current.get("lc_latest_version"), catalog, single=True,
+                    game_id,
+                    active_url,
+                    current.get("lc_latest_version"),
+                    catalog,
+                    single=True,
                 )
                 current = lc_result.game or current
 
-            f95_url = str(current.get("f95_url") or "") if game else normalize_thread_url(url) or url.strip()
+            f95_url = (
+                str(current.get("f95_url") or "")
+                if game
+                else normalize_thread_url(url) or url.strip()
+            )
             if not f95_url and not lc_result.game and not lc_result.error:
-                return {"success": False, "error": "LewdCorner update checks are off for this game"}
+                return {
+                    "success": False,
+                    "error": "LewdCorner update checks are off for this game",
+                }
 
             f95_error: Mapping[str, object] | None = None
             f95_finished = False
@@ -51,21 +67,28 @@ class UpdatesMixin(ApiBase):
             metadata_updated = 0
             version = str(current.get("latest_version") or "")
             if f95_url:
-                version_info = self._coerce_string_key_dict(
-                    self.scraper.get_thread_version(f95_url, include_metadata=True)
-                ) or {}
+                version_info = (
+                    self._coerce_string_key_dict(
+                        self.scraper.get_thread_version(f95_url, include_metadata=True)
+                    )
+                    or {}
+                )
                 abandoned_ids: list[int] = []
                 finished_ids = self._update_thread_edit_metadata_for_url(
                     f95_url, version_info, abandoned_ids
                 )
                 f95_abandoned = isinstance(game_id, int) and game_id in abandoned_ids
-                f95_finished = isinstance(game_id, int) and game_id in finished_ids and not str(
-                    current.get("exe_path") or ""
-                ).strip()
+                f95_finished = (
+                    isinstance(game_id, int)
+                    and game_id in finished_ids
+                    and not str(current.get("exe_path") or "").strip()
+                )
                 _ = self._store_f95_rating_for_url(f95_url, version_info)
                 remote = version_info.get("version")
                 if not version_info.get("success"):
-                    f95_error = self._build_scraper_error_payload(version_info, "Failed to check for updates")
+                    f95_error = self._build_scraper_error_payload(
+                        version_info, "Failed to check for updates"
+                    )
                 elif not self._is_actionable_remote_version(remote):
                     f95_error = {
                         "success": False,
@@ -78,8 +101,13 @@ class UpdatesMixin(ApiBase):
                         f95_id = extract_thread_id(f95_url)
                         catalog = f95_thread_entries([f95_id]).get(f95_id, {})
                         stored = lewdcorner_updates.store_f95_version(
-                            game_id, f95_url, version, catalog, fallback_states=lc_result.states,
-                            page_read=database.thread_states_from(version_info) is not None,
+                            game_id,
+                            f95_url,
+                            version,
+                            catalog,
+                            fallback_states=lc_result.states,
+                            page_read=database.thread_states_from(version_info)
+                            is not None,
                         )
                         if stored is not None:
                             current, stored_abandoned = stored
@@ -87,21 +115,35 @@ class UpdatesMixin(ApiBase):
                             version = str(current.get("latest_version") or "")
                     else:
                         current = {"latest_site": "f95"}
-                    metadata_updated = self._backfill_missing_metadata_for_url(f95_url, version_info)
+                    metadata_updated = self._backfill_missing_metadata_for_url(
+                        f95_url, version_info
+                    )
 
             if f95_error and not lc_result.version_checked:
                 return f95_error
             if not f95_url and lc_result.error:
-                return {"success": False, "error": str(lc_result.error), "error_code": lc_result.error.code}
+                return {
+                    "success": False,
+                    "error": str(lc_result.error),
+                    "error_code": lc_result.error.code,
+                }
 
             fields = self._version_check_fields(current, version)
             lc_note = lc_result.error or lc_result.note
-            note = str(lc_note) if lc_note else str(f95_error["error"]) if f95_error else ""
+            note = (
+                str(lc_note)
+                if lc_note
+                else str(f95_error["error"])
+                if f95_error
+                else ""
+            )
             return {
                 "success": True,
                 "version": version,
                 "latest_site": fields["latest_site"],
-                "has_update": fields["has_update"] if game else self._has_update("", version),
+                "has_update": fields["has_update"]
+                if game
+                else self._has_update("", version),
                 "skipped": fields["skipped"],
                 "archived": fields["archived"],
                 "newly_finished": lc_result.newly_finished or f95_finished,

@@ -22,8 +22,12 @@ def _fake_disk(monkeypatch, scratch_parent: Path, full_marker: str) -> None:
     real = shutil.disk_usage
 
     def disk_usage(path):
-        if os.path.realpath(str(path)).startswith(os.path.realpath(str(scratch_parent))):
-            full = any(full_marker in files for _r, _d, files in os.walk(scratch_parent))
+        if os.path.realpath(str(path)).startswith(
+            os.path.realpath(str(scratch_parent))
+        ):
+            full = any(
+                full_marker in files for _r, _d, files in os.walk(scratch_parent)
+            )
             free = 10 * 1024**2 if full else 100 * _GIB
             return _Usage(200 * _GIB, 200 * _GIB - free, free)
         return real(path)

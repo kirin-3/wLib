@@ -61,7 +61,9 @@ def test_attachment_bridge_round_trip_is_json_serializable(tmp_path, monkeypatch
 def test_attachment_bridge_rejects_unknown_game():
     api = Api()
     assert api.list_game_attachments(999999)["error_code"] == "game_not_found"
-    assert api.add_game_attachment(999999, "/tmp/x.pdf")["error_code"] == "game_not_found"
+    assert (
+        api.add_game_attachment(999999, "/tmp/x.pdf")["error_code"] == "game_not_found"
+    )
     assert api.open_game_attachment(999999, "x.pdf")["error_code"] == "game_not_found"
     assert api.remove_game_attachment(999999, "x.pdf")["error_code"] == "game_not_found"
     assert api.list_game_attachments("bad")["error_code"] == "game_not_found"
@@ -179,9 +181,7 @@ def test_delete_game_succeeds_when_attachment_cleanup_fails(tmp_path, monkeypatc
     def failing_remove(game_id_arg):
         raise OSError("cannot clean")
 
-    monkeypatch.setattr(
-        "core.game_attachments.remove_game_attachments", failing_remove
-    )
+    monkeypatch.setattr("core.game_attachments.remove_game_attachments", failing_remove)
     result = api.delete_game(game_id)
     assert result["success"] is True
 
@@ -210,9 +210,7 @@ def test_api_init_prunes_orphans_and_survives_errors(tmp_path, monkeypatch):
     def failing_prune(existing_ids):
         raise OSError("prune failed")
 
-    monkeypatch.setattr(
-        "core.game_attachments.prune_orphan_attachments", failing_prune
-    )
+    monkeypatch.setattr("core.game_attachments.prune_orphan_attachments", failing_prune)
     # Construction must not raise even when pruning fails.
     Api()
     assert os.path.isdir(orphan_again)
@@ -225,7 +223,11 @@ def test_markdown_opens_with_system_handler(tmp_path, monkeypatch):
     source.write_text("# Guide")
     assert api.add_game_attachment(game_id, str(source))["success"]
     opened = []
-    monkeypatch.setattr(api, "_open_with_system_handler", lambda target, error: opened.append((target, error)) or {"success": True})
+    monkeypatch.setattr(
+        api,
+        "_open_with_system_handler",
+        lambda target, error: opened.append((target, error)) or {"success": True},
+    )
     assert api.open_game_attachment(game_id, "guide.md")["success"]
     assert opened[0][0].endswith("guide.md")
     assert opened[0][1] == "No application found to open this file"

@@ -55,7 +55,12 @@ def test_list_attachments_filters_and_sorts(data_dir):
     with open(os.path.join(folder, "other.exe"), "w") as handle:
         handle.write("ignored")
     listed = list_attachments(7)
-    assert [item["name"] for item in listed] == ["A.pdf", "b.pdf", "guide.md", "notes.txt"]
+    assert [item["name"] for item in listed] == [
+        "A.pdf",
+        "b.pdf",
+        "guide.md",
+        "notes.txt",
+    ]
     assert all(set(item.keys()) == {"name", "size"} for item in listed)
     assert listed[0]["size"] == 5 + len(b"%PDF-1.4\n")
 
@@ -184,7 +189,11 @@ def test_prune_orphan_attachments(data_dir):
 
 
 def test_text_attachments_and_collision(tmp_path, data_dir):
-    for name, content in (("routes.txt", "日本語".encode("shift_jis")), ("empty.txt", b""), ("guide.md", b"# Guide")):
+    for name, content in (
+        ("routes.txt", "日本語".encode("shift_jis")),
+        ("empty.txt", b""),
+        ("guide.md", b"# Guide"),
+    ):
         source = tmp_path / name
         source.write_bytes(content)
         assert add_attachment(9, source)["name"] == name

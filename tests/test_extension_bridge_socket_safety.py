@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Bridge socket safety: pairing removal, handshake checks, fragment limits."""
+
 import io
 import socket
 import threading
@@ -31,7 +32,9 @@ def _fragmented(count: int, part: bytes = b"") -> bytes:
         extension_ws.encode_client_frame(extension_ws.OP_CONT, part, fin=False)
         for _ in range(count - 2)
     ]
-    frames.append(extension_ws.encode_client_frame(extension_ws.OP_CONT, b"}", fin=True))
+    frames.append(
+        extension_ws.encode_client_frame(extension_ws.OP_CONT, b"}", fin=True)
+    )
     return b"".join(frames)
 
 
@@ -137,7 +140,8 @@ def test_eviction_at_the_pairing_limit_closes_the_socket():
             token = f"{index + 1:064x}"
             _ = store.check(token, "chrome-extension://other")
             request = next(
-                entry for entry in store.snapshot()["pending"]
+                entry
+                for entry in store.snapshot()["pending"]
                 if entry["id"] == pairing.pairing_code(pairing.token_hash(token))
             )
             assert store.resolve(request["id"], True)
@@ -235,9 +239,7 @@ def test_http_1_0_handshake_is_refused(bridge_server):
 
 @pytest.mark.parametrize("version", [None, "8", "14"])
 def test_unsupported_websocket_version_gets_426(bridge_server, version):
-    assert b" 426 " in _handshake(
-        bridge_server, **{"Sec-WebSocket-Version": version}
-    )
+    assert b" 426 " in _handshake(bridge_server, **{"Sec-WebSocket-Version": version})
 
 
 def test_unpaired_handshake_is_still_403(bridge_server):

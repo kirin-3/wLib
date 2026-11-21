@@ -18,12 +18,21 @@ from core.database import (
 
 
 def _job(job_id: str, game_id: int = 1, **extra: object) -> dict[str, object]:
-    return {"id": job_id, "kind": "host", "game_id": game_id, "state": "queued", **extra}
+    return {
+        "id": job_id,
+        "kind": "host",
+        "game_id": game_id,
+        "state": "queued",
+        **extra,
+    }
 
 
 def _columns() -> list[str]:
     with closing(database.get_connection()) as conn:
-        return [str(row[1]) for row in conn.execute("PRAGMA table_info(download_jobs)").fetchall()]
+        return [
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(download_jobs)").fetchall()
+        ]
 
 
 def test_fresh_database_has_the_table():
@@ -65,7 +74,9 @@ def test_insert_appends_and_reorder_changes_order():
 def test_update_and_delete():
     init_db()
     insert_download_job(_job("a", source='{"host": "pixeldrain"}'))
-    assert update_download_job("a", {"state": "running", "bytes_done": 10, "bytes_total": 100})
+    assert update_download_job(
+        "a", {"state": "running", "bytes_done": 10, "bytes_total": 100}
+    )
     row = list_download_jobs()[0]
     assert (row["state"], row["bytes_done"], row["bytes_total"]) == ("running", 10, 100)
     assert row["source"] == '{"host": "pixeldrain"}'

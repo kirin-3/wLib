@@ -270,7 +270,11 @@ def exp_for_level(exp_params: Sequence[float], level: int) -> int:
     # JavaScript divides by zero to Infinity, which zeroes the first term.
     denominator = 6 + math.pow(level, 2) / 50 / acc_b if acc_b else math.inf
     value = (
-        basis * math.pow(level - 1, 0.9 + acc_a / 250) * level * (level + 1) / denominator
+        basis
+        * math.pow(level - 1, 0.9 + acc_a / 250)
+        * level
+        * (level + 1)
+        / denominator
         + (level - 1) * extra
     )
     return int(math.floor(value + 0.5))

@@ -16,7 +16,9 @@ LATEST_DATA_URL = (
     + "?cmd=list&cat=games&page={page}&sort=date&rows=90"
 )
 THREAD_URL = "https://f95zone.to/threads/{thread_id}/"
-TAGS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "f95_tags.json")
+TAGS_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "f95_tags.json"
+)
 
 # Even a 200 can carry the anonymous-limit message.
 _LIMIT_MARKER = "limited amount of requests"
@@ -89,7 +91,11 @@ def parse_page(payload: object) -> tuple[list[dict[str, object]], int | None]:
     total: int | None = None
     if isinstance(pagination, dict):
         raw_total = cast(dict[str, object], pagination).get("total")
-        if isinstance(raw_total, int) and not isinstance(raw_total, bool) and raw_total > 0:
+        if (
+            isinstance(raw_total, int)
+            and not isinstance(raw_total, bool)
+            and raw_total > 0
+        ):
             total = raw_total
     rows: list[dict[str, object]] = []
     for item in cast(list[object], msg.get("data") or []):
@@ -108,17 +114,25 @@ def parse_page(payload: object) -> tuple[list[dict[str, object]], int | None]:
                 "version": str(entry.get("version") or "") or None,
                 "updated_at": _iso(ts),
                 "ts": ts if isinstance(ts, int) else None,
-                "views": entry.get("views") if isinstance(entry.get("views"), int) else None,
-                "likes": entry.get("likes") if isinstance(entry.get("likes"), int) else None,
+                "views": entry.get("views")
+                if isinstance(entry.get("views"), int)
+                else None,
+                "likes": entry.get("likes")
+                if isinstance(entry.get("likes"), int)
+                else None,
                 "rating": entry.get("rating")
                 if isinstance(entry.get("rating"), (int, float))
                 else None,
                 "prefixes": _int_list(entry.get("prefixes")),
                 "tags": _int_list(entry.get("tags")),
                 "cover_url": str(entry.get("cover") or "") or None,
-                "screens": [url for url in cast(list[object], entry["screens"])
-                            if isinstance(url, str) and url.startswith("https://")]
-                if isinstance(entry.get("screens"), list) else [],
+                "screens": [
+                    url
+                    for url in cast(list[object], entry["screens"])
+                    if isinstance(url, str) and url.startswith("https://")
+                ]
+                if isinstance(entry.get("screens"), list)
+                else [],
                 "url": THREAD_URL.format(thread_id=thread_id),
             }
         )
@@ -162,7 +176,9 @@ def load_names(catalog: CatalogStore, path: str = TAGS_FILE) -> None:
 class F95Source:
     name: str = "f95"
 
-    def _fetch(self, ctx: SourceContext, page: int) -> tuple[list[dict[str, object]], int | None]:
+    def _fetch(
+        self, ctx: SourceContext, page: int
+    ) -> tuple[list[dict[str, object]], int | None]:
         response = ctx.pacer.request(
             self.name,
             LATEST_DATA_URL.format(page=page),

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Stopping one Wine game must not end another game on the same prefix."""
+
 import signal
 from unittest.mock import MagicMock, patch
 
@@ -25,9 +26,12 @@ def test_stop_spares_prefix_of_a_steam_shortcut_game(killpg):
     launcher._running[1] = RunningGame(
         MagicMock(pid=123), KILL_INFO, prefix="/prefix", host_native=False
     )
-    assert launcher.reserve_external(
-        2, RunningGame(None, None, prefix="/prefix", title="Steam game")
-    ) is None
+    assert (
+        launcher.reserve_external(
+            2, RunningGame(None, None, prefix="/prefix", title="Steam game")
+        )
+        is None
+    )
     with patch("subprocess.run") as run, patch("threading.Thread"):
         assert launcher.stop(1)["success"]
     run.assert_not_called()
@@ -39,9 +43,12 @@ def test_stop_kills_prefix_after_the_steam_game_ended(killpg):
     launcher._running[1] = RunningGame(
         MagicMock(pid=123), KILL_INFO, prefix="/prefix", host_native=False
     )
-    assert launcher.reserve_external(
-        2, RunningGame(None, None, prefix="/prefix", title="Steam game")
-    ) is None
+    assert (
+        launcher.reserve_external(
+            2, RunningGame(None, None, prefix="/prefix", title="Steam game")
+        )
+        is None
+    )
     # The runner died without reporting its end.
     launcher.external_alive = lambda _game_id: False
     with patch("subprocess.run") as run, patch("threading.Thread"):
@@ -77,14 +84,20 @@ def test_launch_on_prefix_is_refused_while_wineserver_k_runs(killpg):
         )
         return MagicMock(returncode=0)
 
-    with patch("subprocess.run", side_effect=wineserver_kill), patch("threading.Thread"):
+    with (
+        patch("subprocess.run", side_effect=wineserver_kill),
+        patch("threading.Thread"),
+    ):
         assert launcher.stop(1)["success"]
     assert answers and answers[0] is not None and "closing" in answers[0]
     # Once the kill returned, the prefix is free again.
     assert not launcher._killing_prefixes
-    assert launcher.reserve_external(
-        2, RunningGame(None, None, prefix="/prefix", title="Steam game")
-    ) is None
+    assert (
+        launcher.reserve_external(
+            2, RunningGame(None, None, prefix="/prefix", title="Steam game")
+        )
+        is None
+    )
 
 
 def test_steam_runner_marks_prefix_owner_uncertain(monkeypatch, tmp_path):

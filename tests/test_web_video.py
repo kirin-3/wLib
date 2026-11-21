@@ -138,7 +138,11 @@ def test_root_change_resets_cache(game, tmp_path):
     shutil.copytree(game, moved)
     reader = MagicMock(return_value=False)
     result = web_video.scan_game(5, str(moved), reader)
-    assert reader.call_count == 3 and result["needs"] == [] and result["root"] == str(moved.resolve())
+    assert (
+        reader.call_count == 3
+        and result["needs"] == []
+        and result["root"] == str(moved.resolve())
+    )
     data = json.loads(Path(web_video.scan_cache_path(5)).read_text())
     assert data["play_anyway"] is None
 
@@ -158,7 +162,9 @@ def test_cache_write_is_atomic_and_cache_can_be_deleted(game):
     assert web_video.cached_root(5) == str(game.resolve())
     web_video.mark_converted(5, "media/a.mp4", 10, 20)
     # The recorded size does not match, so the file is read again.
-    assert web_video.scan_game(5, str(game), MagicMock(return_value=False))["needs"] == ["media/c.m4a"]
+    assert web_video.scan_game(5, str(game), MagicMock(return_value=False))[
+        "needs"
+    ] == ["media/c.m4a"]
     assert web_video.delete_scan_cache(5) is True
     assert web_video.delete_scan_cache(5) is False
 
@@ -196,7 +202,13 @@ ENCODERS = """Encoders:
 
 
 def test_parse_encoders():
-    assert web_video.parse_encoders(ENCODERS) == {"libx264", "libsvtav1", "libvpx-vp9", "aac", "libopus"}
+    assert web_video.parse_encoders(ENCODERS) == {
+        "libx264",
+        "libsvtav1",
+        "libvpx-vp9",
+        "aac",
+        "libopus",
+    }
 
 
 def _which(found: dict[str, str]):
@@ -208,15 +220,30 @@ def _which(found: dict[str, str]):
     [
         (ENCODERS, True, "libsvtav1", ""),
         (ENCODERS.replace("libsvtav1", "libaom-av1"), True, "libvpx-vp9", ""),
-        (ENCODERS.replace("libsvtav1", "x").replace("libvpx-vp9", "y"), False, "", "no_video_encoder"),
+        (
+            ENCODERS.replace("libsvtav1", "x").replace("libvpx-vp9", "y"),
+            False,
+            "",
+            "no_video_encoder",
+        ),
         (ENCODERS.replace("libopus", "opus"), False, "libsvtav1", "no_audio_encoder"),
     ],
 )
 def test_probe_ffmpeg_encoders(monkeypatch, text, available, video, reason):
     monkeypatch.setattr(web_video, "host_system_layout", lambda: (False, {}))
-    which = _which({"ffmpeg": "/usr/bin/ffmpeg", "ffprobe": "/usr/bin/ffprobe", "pacman": "/usr/bin/pacman"})
+    which = _which(
+        {
+            "ffmpeg": "/usr/bin/ffmpeg",
+            "ffprobe": "/usr/bin/ffprobe",
+            "pacman": "/usr/bin/pacman",
+        }
+    )
     info = web_video.probe_ffmpeg(which, lambda _cmd, _timeout: text)
-    assert (info["available"], info["video_encoder"], info["reason"]) == (available, video, reason)
+    assert (info["available"], info["video_encoder"], info["reason"]) == (
+        available,
+        video,
+        reason,
+    )
 
 
 def test_probe_ffmpeg_missing(monkeypatch):
@@ -232,14 +259,30 @@ def test_probe_ffmpeg_missing(monkeypatch):
 
 def test_install_hints():
     which = _which({"dnf": "/usr/bin/dnf"})
-    assert web_video.install_hint(which, windows=True)["command"] == "winget install Gyan.FFmpeg"
+    assert (
+        web_video.install_hint(which, windows=True)["command"]
+        == "winget install Gyan.FFmpeg"
+    )
     linux = web_video.install_hint(which, windows=False, flatpak=False, nixos=False)
-    assert linux == {"command": "sudo dnf install ffmpeg --allowerasing", "package_manager": "dnf", "platform": "linux", "host": False}
+    assert linux == {
+        "command": "sudo dnf install ffmpeg --allowerasing",
+        "package_manager": "dnf",
+        "platform": "linux",
+        "host": False,
+    }
     nixos = web_video.install_hint(which, windows=False, flatpak=False, nixos=True)
     assert nixos["package_manager"] == "nixos" and "pkgs.ffmpeg" in nixos["command"]
     flatpak = web_video.install_hint(which, windows=False, flatpak=True, nixos=False)
-    assert flatpak["host"] is True and flatpak["command"] == "sudo dnf install ffmpeg --allowerasing"
-    assert web_video.install_hint(_which({}), windows=False, flatpak=False, nixos=False)["command"] == ""
+    assert (
+        flatpak["host"] is True
+        and flatpak["command"] == "sudo dnf install ffmpeg --allowerasing"
+    )
+    assert (
+        web_video.install_hint(_which({}), windows=False, flatpak=False, nixos=False)[
+            "command"
+        ]
+        == ""
+    )
 
 
 # ── Conversion ──
@@ -251,7 +294,12 @@ INFO: web_video.FfmpegInfo = {
     "video_encoder": "libsvtav1",
     "audio_encoder": "libopus",
     "reason": "",
-    "install": {"command": "", "package_manager": "", "platform": "linux", "host": False},
+    "install": {
+        "command": "",
+        "package_manager": "",
+        "platform": "linux",
+        "host": False,
+    },
 }
 
 
@@ -291,7 +339,10 @@ class FakeTools:
             Path(cmd[-1]).write_bytes(b"converted")
         process = MagicMock()
         process.returncode = self.encode_code
-        process.communicate.return_value = (b"", b"boom\nencoder failed" if self.encode_code else b"")
+        process.communicate.return_value = (
+            b"",
+            b"boom\nencoder failed" if self.encode_code else b"",
+        )
         return process
 
 
@@ -321,7 +372,10 @@ def test_convert_replaces_the_file(clip):
     assert oct(clip.stat().st_mode & 0o777) == oct(0o640)
     assert result["size"] == len(b"converted")
     encode = tools.commands[1]
-    assert encode[encode.index("-c:v") + 1] == "libsvtav1" and encode[encode.index("-c:a") + 1] == "libopus"
+    assert (
+        encode[encode.index("-c:v") + 1] == "libsvtav1"
+        and encode[encode.index("-c:a") + 1] == "libopus"
+    )
     assert encode[-3:] == ["-f", "mp4", str(clip) + web_video.PARTIAL_SUFFIX]
     assert not Path(str(clip) + web_video.PARTIAL_SUFFIX).exists()
 
@@ -334,7 +388,10 @@ def test_ffmpeg_does_not_get_the_bundled_libraries(clip, monkeypatch):
     assert len(tools.envs) == 3
     for env in tools.envs:
         assert env is not None
-        assert env["LD_LIBRARY_PATH"] == "/usr/local/lib" and "LD_LIBRARY_PATH_ORIG" not in env
+        assert (
+            env["LD_LIBRARY_PATH"] == "/usr/local/lib"
+            and "LD_LIBRARY_PATH_ORIG" not in env
+        )
     monkeypatch.delenv("LD_LIBRARY_PATH_ORIG")
     with patch("core.web_video.subprocess.run", side_effect=FakeTools().run) as run:
         _ = web_video._run_text(["ffmpeg", "-encoders"], 5)  # pyright: ignore[reportPrivateUsage]
@@ -388,7 +445,9 @@ def test_cleanup_partials(tmp_path):
     (tmp_path / "a" / "x.mp4.wlib-partial").write_bytes(b"x")
     (tmp_path / "x.mp4").write_bytes(b"x")
     assert web_video.cleanup_partials(str(tmp_path)) == 1
-    assert (tmp_path / "x.mp4").exists() and not (tmp_path / "a" / "x.mp4.wlib-partial").exists()
+    assert (tmp_path / "x.mp4").exists() and not (
+        tmp_path / "a" / "x.mp4.wlib-partial"
+    ).exists()
 
 
 def test_flatpak_runs_ffmpeg_on_the_host_and_refuses_portal_paths(clip, monkeypatch):
@@ -398,25 +457,52 @@ def test_flatpak_runs_ffmpeg_on_the_host_and_refuses_portal_paths(clip, monkeypa
     assert result["ok"]
     assert all(cmd[0] == "env" and "flatpak-spawn" in cmd for cmd in tools.commands)
     assert web_video.portal_path_error("/run/user/1000/doc/abc/game", flatpak=True)
-    assert web_video.portal_path_error("/run/user/1000/doc/abc/game", flatpak=False) is None
+    assert (
+        web_video.portal_path_error("/run/user/1000/doc/abc/game", flatpak=False)
+        is None
+    )
     assert web_video.portal_path_error("/home/me/games/game", flatpak=True) is None
 
 
-@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="needs ffmpeg")
+@pytest.mark.skipif(
+    not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="needs ffmpeg"
+)
 def test_real_ffmpeg_converts_a_tiny_clip(tmp_path, monkeypatch):
     monkeypatch.setattr(web_video, "is_flatpak", lambda: False)
     info = web_video.probe_ffmpeg(shutil.which)
     if not info["available"]:
         pytest.skip("ffmpeg has no AV1/VP9 or Opus encoder")
-    encoders = web_video.parse_encoders(subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True).stdout)
+    encoders = web_video.parse_encoders(
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True
+        ).stdout
+    )
     if "libx264" not in encoders or "aac" not in encoders:
         pytest.skip("ffmpeg cannot make an H.264 test clip")
     clip = tmp_path / "clip.mp4"
     _ = subprocess.run(
         [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=128x72:rate=10",
-            "-f", "lavfi", "-i", "sine=frequency=440", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", str(clip),
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=128x72:rate=10",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440",
+            "-t",
+            "1",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            str(clip),
         ],
         check=True,
     )
@@ -427,13 +513,23 @@ def test_real_ffmpeg_converts_a_tiny_clip(tmp_path, monkeypatch):
 
 
 def test_cover_art_is_not_a_video_track():
-    text = json.dumps({
-        "streams": [
-            {"codec_type": "audio", "codec_name": "aac", "disposition": {"attached_pic": 0}},
-            {"codec_type": "video", "codec_name": "png", "disposition": {"attached_pic": 1}},
-        ],
-        "format": {"duration": "3.0"},
-    })
+    text = json.dumps(
+        {
+            "streams": [
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "disposition": {"attached_pic": 0},
+                },
+                {
+                    "codec_type": "video",
+                    "codec_name": "png",
+                    "disposition": {"attached_pic": 1},
+                },
+            ],
+            "format": {"duration": "3.0"},
+        }
+    )
     source = web_video.parse_probe(text)
     assert source["video"] == [] and source["audio"] == ["aac"]
     encode = web_video.encode_command(INFO, "in.m4a", "out.m4a.wlib-partial", source)

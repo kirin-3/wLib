@@ -5,6 +5,7 @@ Each extension install makes its own random token and sends it with every
 request. wLib serves a token only after the user allowed it once in the app.
 Only a SHA-256 of the token is stored, in a device-local file that is never
 exported or synced."""
+
 from __future__ import annotations
 
 import hashlib
@@ -124,7 +125,11 @@ class PairingStore:
                 exc,
             )
             raw = None
-        items = cast(dict[str, object], raw).get("paired") if isinstance(raw, dict) else None
+        items = (
+            cast(dict[str, object], raw).get("paired")
+            if isinstance(raw, dict)
+            else None
+        )
         for item in cast(list[object], items) if isinstance(items, list) else []:
             if not isinstance(item, dict):
                 continue
@@ -142,7 +147,8 @@ class PairingStore:
         self._paired = paired
         _log.info(
             "Allowed browser extensions: %s",
-            ", ".join(f"{entry['browser']} {entry['id']}" for entry in paired.values()) or "none",
+            ", ".join(f"{entry['browser']} {entry['id']}" for entry in paired.values())
+            or "none",
         )
         return paired
 
@@ -157,7 +163,9 @@ class PairingStore:
     def _drop_expired(self) -> None:
         """Forget unanswered requests older than PENDING_TTL_SECONDS (lock held)."""
         cutoff = time.monotonic() - PENDING_TTL_SECONDS
-        for digest in [key for key, since in self._pending_since.items() if since <= cutoff]:
+        for digest in [
+            key for key, since in self._pending_since.items() if since <= cutoff
+        ]:
             del self._pending_since[digest]
             _ = self._pending.pop(digest, None)
 
@@ -212,7 +220,11 @@ class PairingStore:
         with self._lock:
             self._drop_expired()
             digest = next(
-                (key for key, entry in self._pending.items() if entry["id"] == request_id),
+                (
+                    key
+                    for key, entry in self._pending.items()
+                    if entry["id"] == request_id
+                ),
                 None,
             )
             if digest is None:
@@ -222,7 +234,9 @@ class PairingStore:
                 self._forget_pending(digest)
                 self._denied.add(digest)
                 _log.info(
-                    "Refused %s browser extension %s until wLib restarts", entry["browser"], entry["id"]
+                    "Refused %s browser extension %s until wLib restarts",
+                    entry["browser"],
+                    entry["id"],
                 )
                 return True
             paired = dict(self._load())
@@ -246,7 +260,9 @@ class PairingStore:
         _log.info("Allowed %s browser extension %s", entry["browser"], entry["id"])
         for pairing_id in evicted:
             _log.info(
-                "Removed browser extension %s: more than %d extensions are allowed", pairing_id, MAX_PAIRED
+                "Removed browser extension %s: more than %d extensions are allowed",
+                pairing_id,
+                MAX_PAIRED,
             )
         _notify_removed(evicted)
         return True
@@ -264,7 +280,10 @@ class PairingStore:
                 self._save(paired)
             except OSError as exc:
                 _log.warning(
-                    "Could not remove browser extension %s from %s: %s", pairing_id, self._path, exc
+                    "Could not remove browser extension %s from %s: %s",
+                    pairing_id,
+                    self._path,
+                    exc,
                 )
                 return False
             self._paired = paired

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """UMU, Proton, Wine prefix tools, system dependencies and Cheat Engine."""
+
 from __future__ import annotations
 
 import hashlib
@@ -42,32 +43,65 @@ class RuntimesMixin(ApiBase):
             )
             if tool == "winetricks":
                 if not target["is_proton"] and not host_which("wine"):
-                    raise ValueError("Wine is not installed. Install Wine first, then try again.")
+                    raise ValueError(
+                        "Wine is not installed. Install Wine first, then try again."
+                    )
                 if not (host_which("zenity") or host_which("kdialog")):
-                    raise ValueError("Winetricks requires zenity or kdialog for its interface.")
+                    raise ValueError(
+                        "Winetricks requires zenity or kdialog for its interface."
+                    )
                 cmd, env = self._winetricks_command(target, env)
                 cmd.append("--gui")
             elif target["is_proton"]:
                 from core.umu import build_umu_invocation
-                cmd, env = build_umu_invocation("winecfg", prefix=target["base_prefix"], runner=target["proton_path"], environment=env)
+
+                cmd, env = build_umu_invocation(
+                    "winecfg",
+                    prefix=target["base_prefix"],
+                    runner=target["proton_path"],
+                    environment=env,
+                )
             else:
                 wine = host_which("wine")
                 if not wine:
-                    raise ValueError("Wine is not installed. Install Wine first, then try again.")
+                    raise ValueError(
+                        "Wine is not installed. Install Wine first, then try again."
+                    )
                 cmd = [wine, "winecfg"]
             from core.game_sandbox import normalize_prefix
+
             prefix = normalize_prefix(env["WINEPREFIX"])
             with self._status_lock:
-                if self._deps_install_status["running"] or self._rtp_install_status["running"]:
-                    return {"success": False, "error": "Another install is running. Wait for it to finish."}
+                if (
+                    self._deps_install_status["running"]
+                    or self._rtp_install_status["running"]
+                ):
+                    return {
+                        "success": False,
+                        "error": "Another install is running. Wait for it to finish.",
+                    }
                 if self._prefix_tool_running():
-                    return {"success": False, "error": "Close the open Wine prefix tool first."}
+                    return {
+                        "success": False,
+                        "error": "Close the open Wine prefix tool first.",
+                    }
                 title = self.launcher.game_using_prefix(prefix)
                 if title:
-                    return {"success": False, "error": f"{title} is already running on this Wine prefix."}
-                self._prefix_tool: subprocess.Popen[bytes] | None = subprocess.Popen(host_command(cmd, env=env, supervise=True), env=env, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return {
+                        "success": False,
+                        "error": f"{title} is already running on this Wine prefix.",
+                    }
+                self._prefix_tool: subprocess.Popen[bytes] | None = subprocess.Popen(
+                    host_command(cmd, env=env, supervise=True),
+                    env=env,
+                    start_new_session=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
                 self._prefix_tool_prefix: str = prefix
-                self._prefix_tool_name: str = "Winecfg" if tool == "winecfg" else "Winetricks"
+                self._prefix_tool_name: str = (
+                    "Winecfg" if tool == "winecfg" else "Winetricks"
+                )
             return {"success": True}
         except (OSError, ValueError) as exc:
             return {"success": False, "error": str(exc)}

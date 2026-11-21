@@ -15,13 +15,13 @@ def test_restore_into_an_empty_library_can_be_undone(tmp_path, monkeypatch):
     # A pull of an empty remote library cleared this one.
     for game in database.get_all_games():
         database.delete_game(int(str(game["id"])))
-    database.update_setting("custom_play_statuses", "[\"Later\"]")
+    database.update_setting("custom_play_statuses", '["Later"]')
 
     sync = SyncManager()
     result = sync.restore_snapshot(name)
     assert result["success"], result
     assert [game["title"] for game in database.get_all_games()] == ["Game"]
-    assert database.get_setting("custom_play_statuses") != "[\"Later\"]"
+    assert database.get_setting("custom_play_statuses") != '["Later"]'
 
     # The empty library the restore replaced is a snapshot of its own.
     snapshots = sync.list_snapshots()["snapshots"]
@@ -30,7 +30,7 @@ def test_restore_into_an_empty_library_can_be_undone(tmp_path, monkeypatch):
     assert undo["name"] != name and undo["games"] == 0
     assert sync.restore_snapshot(undo["name"])["success"]
     assert database.get_all_games() == []
-    assert database.get_setting("custom_play_statuses") == "[\"Later\"]"
+    assert database.get_setting("custom_play_statuses") == '["Later"]'
 
 
 def test_sync_snapshot_still_skips_an_empty_library(tmp_path, monkeypatch):

@@ -4,6 +4,7 @@
 ``Api`` only combines the feature mixins in ``core/api_mixins/``. Put a new method in
 the mixin for its feature, or in ``ApiBase`` (``core/api_mixins/base.py``) when two or
 more mixins use it."""
+
 from __future__ import annotations
 
 from core.api_mixins.downloads import DownloadsMixin

@@ -1,6 +1,7 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
 """H17: a save-editor backup restores into the folder it came from."""
+
 import json
 import shutil
 from pathlib import Path

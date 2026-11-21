@@ -10,5 +10,10 @@ def normalize_version(version: object) -> str:
 
 def actionable_remote_version(version: object) -> bool:
     return version is not None and str(version).strip().lower() not in (
-        "", "unknown", "n/a", "na", "none", "null"
+        "",
+        "unknown",
+        "n/a",
+        "na",
+        "none",
+        "null",
     )

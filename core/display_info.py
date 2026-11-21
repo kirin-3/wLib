@@ -4,6 +4,7 @@
 `main.py` sets it on the GUI thread; the launcher reads it from any thread to
 size gamescope when both gamescope resolutions are Auto.
 """
+
 from __future__ import annotations
 
 import threading

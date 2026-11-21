@@ -3,6 +3,7 @@
 
 main() binds it, then sets api_ref and window_ref once the API and the window exist.
 """
+
 from __future__ import annotations
 
 import json
@@ -183,7 +184,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         return urlsplit(self.path).path[:200] or "/"
 
     def _pairing_state(self, token: object) -> str:
-        """"paired", or why this caller may not use the extension endpoints.
+        """ "paired", or why this caller may not use the extension endpoints.
 
         An extension Origin alone proves nothing: every installed extension
         has one, and local programs send none. The caller must also hold a
@@ -207,8 +208,15 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             _log.warning("No wLib window to show the pairing request in yet")
         return state
 
-    def _log_pairing_refusal(self, token: object, origin: str, state: str, new_request: bool) -> None:
-        from core.extension_pairing import browser_name, pairing_code, token_hash, valid_token
+    def _log_pairing_refusal(
+        self, token: object, origin: str, state: str, new_request: bool
+    ) -> None:
+        from core.extension_pairing import (
+            browser_name,
+            pairing_code,
+            token_hash,
+            valid_token,
+        )
 
         browser = browser_name(origin)
         if not valid_token(token):
@@ -280,11 +288,20 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(url, str) or not url.strip():
             return None
 
-        from core.database import find_game_by_f95_url, find_game_by_lc_url, find_games_by_links, get_game
+        from core.database import (
+            find_game_by_f95_url,
+            find_game_by_lc_url,
+            find_games_by_links,
+            get_game,
+        )
         from core.game_lookup import resolve_page
         from core.store_links import parse_store_link
 
-        thread_game = find_game_by_lc_url(url) if lewdcorner.extract_thread_id(url) else find_game_by_f95_url(url)
+        thread_game = (
+            find_game_by_lc_url(url)
+            if lewdcorner.extract_thread_id(url)
+            else find_game_by_f95_url(url)
+        )
         if thread_game:
             return thread_game
         resolved = resolve_page(url, ids)
@@ -298,7 +315,14 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     host = None
                 if host in {"ryuugames.com", "www.ryuugames.com"}:
                     # A post permalink carries its own ID via the page or catalog.
-                    page = next((link for link in resolved["ids"] if link["source"] == "ryuugames"), None)
+                    page = next(
+                        (
+                            link
+                            for link in resolved["ids"]
+                            if link["source"] == "ryuugames"
+                        ),
+                        None,
+                    )
             if page is not None:
                 matches = find_games_by_links([page]) or matches
         return get_game(matches[0]) if matches else None
@@ -336,7 +360,13 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         return payload
 
     def _prepare_game_payload(self, raw: object) -> dict[str, object]:
-        from core.game_lookup import combined_thread_entry, f95_thread_entries, lc_thread_entries, lookup_lc_partner, resolve_page
+        from core.game_lookup import (
+            combined_thread_entry,
+            f95_thread_entries,
+            lc_thread_entries,
+            lookup_lc_partner,
+            resolve_page,
+        )
         from core.store_links import coerce_store_links
 
         if not isinstance(raw, dict):
@@ -345,17 +375,23 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         source_url = payload.get("url")
         page_url = str(payload.get("pageUrl") or source_url or "")
         lc_url = lewdcorner.normalize_thread_url(source_url)
-        f95_url = normalize_thread_url(source_url) if extract_thread_id(source_url) else ""
+        f95_url = (
+            normalize_thread_url(source_url) if extract_thread_id(source_url) else ""
+        )
         links = coerce_store_links(payload.get("links"))
         if not (lc_url or f95_url or links):
-            raise ValueError("An F95 or LewdCorner thread URL or store link is required")
+            raise ValueError(
+                "An F95 or LewdCorner thread URL or store link is required"
+            )
 
         partner = lookup_lc_partner(lc_url or f95_url) if lc_url or f95_url else {}
         payload["url"] = f95_url or partner.get("f95_url", "")
         payload["lc_url"] = lc_url or partner.get("lc_url", "")
         if partner.get("lc_url"):
             payload["lc_suggested"] = partner["lc_url"]
-        resolved = resolve_page(page_url, [f"{link['source']}:{link['id']}" for link in links])
+        resolved = resolve_page(
+            page_url, [f"{link['source']}:{link['id']}" for link in links]
+        )
         expanded = resolved["ids"]
         if lc_url:
             # A catalog title and developer, when there are ones, replace these below.
@@ -365,10 +401,14 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             # The page's Developer field wins over the title's last bracket group.
             if title_developer and not str(payload.get("developer") or "").strip():
                 payload["developer"] = title_developer
-            payload["screenshots"] = lewdcorner.page_screenshots(payload.get("screenshots"))
+            payload["screenshots"] = lewdcorner.page_screenshots(
+                payload.get("screenshots")
+            )
             raw_prefixes = payload.get("prefixes")
             if isinstance(raw_prefixes, list):
-                prefixes = _page_lc_prefixes(cast(list[object], raw_prefixes), payload.get("prefix_ids"))
+                prefixes = _page_lc_prefixes(
+                    cast(list[object], raw_prefixes), payload.get("prefix_ids")
+                )
                 engine, flags = lewdcorner.prefix_details(prefixes)
                 payload["engine"] = engine
                 payload["thread_completed"] = flags.completed
@@ -389,7 +429,11 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 lc_thread_entries([lc_id]).get(lc_id, {}),
             )
             for key, value in fallback.items():
-                if key != "links" and payload.get(key) in (None, "", []) and value is not None:
+                if (
+                    key != "links"
+                    and payload.get(key) in (None, "", [])
+                    and value is not None
+                ):
                     payload[key] = value
             entry = resolved["catalog_entry"]
             if not links:
@@ -401,23 +445,36 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             _ = payload.pop("screenshots", None)
         # The On Hold and Abandoned states come from one source: the page the
         # extension read, else the catalog entry, both values and their time together.
-        has_states = payload.get("thread_onhold") is not None and payload.get("thread_abandoned") is not None
+        has_states = (
+            payload.get("thread_onhold") is not None
+            and payload.get("thread_abandoned") is not None
+        )
         for key, value in entry.items():
             if key == "links" or key in _THREAD_STATE_KEYS:
                 continue
             if value or (key == "thread_completed" and value is False):
                 payload[key] = value
-        if not has_states and entry.get("thread_onhold") is not None and entry.get("thread_abandoned") is not None:
+        if (
+            not has_states
+            and entry.get("thread_onhold") is not None
+            and entry.get("thread_abandoned") is not None
+        ):
             for key in _THREAD_STATE_KEYS:
                 payload[key] = entry.get(key)
         payload["pageUrl"] = page_url
         payload["links"] = coerce_store_links([*links, *expanded])
         if not str(payload.get("title") or "").strip():
-            raise ValueError("A title and an F95 or LewdCorner thread URL or store link are required")
+            raise ValueError(
+                "A title and an F95 or LewdCorner thread URL or store link are required"
+            )
         return payload
 
     def _attach_lc(self, url: object) -> dict[str, object]:
-        from core.database import attach_lc_thread, find_game_by_f95_url, find_game_by_lc_url
+        from core.database import (
+            attach_lc_thread,
+            find_game_by_f95_url,
+            find_game_by_lc_url,
+        )
         from core.game_lookup import f95_for_lc
 
         thread_id = lewdcorner.extract_thread_id(url)
@@ -425,7 +482,11 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             raise ValueError("A LewdCorner thread URL is required")
         normalized = lewdcorner.normalize_thread_url(url)
         if find_game_by_lc_url(normalized):
-            return {"success": False, "error": "LewdCorner thread is already in wLib", "error_code": "duplicate_url"}
+            return {
+                "success": False,
+                "error": "LewdCorner thread is already in wLib",
+                "error_code": "duplicate_url",
+            }
         partner = f95_for_lc(thread_id)
         f95 = f"https://f95zone.to/threads/{partner}/" if partner else ""
         game = find_game_by_f95_url(f95) if f95 else None
@@ -497,9 +558,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _is_bridge_origin_allowed(self, origin: str) -> bool:
-        return origin.startswith(
-            ("chrome-extension://", "moz-extension://")
-        )
+        return origin.startswith(("chrome-extension://", "moz-extension://"))
 
     def _header_tokens(self, name: str) -> set[str]:
         """Lowercase comma-separated tokens of every ``name`` header."""
@@ -607,10 +666,21 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         fetch through the browser extension, kept as a copy. An unknown key
         or a failed fetch is a 404, with no request to anyone."""
         from core.extension_bridge import BridgeFailed, BridgeUnavailable
-        from core.game_covers import COVER_TYPES, LC_KEY_RE, fetch_lc_image, lc_copy_file, lc_image_key, validate_image_bytes
+        from core.game_covers import (
+            COVER_TYPES,
+            LC_KEY_RE,
+            fetch_lc_image,
+            lc_copy_file,
+            lc_image_key,
+            validate_image_bytes,
+        )
 
         api = api_ref
-        url = api.lc_image_keys.get(key) if api is not None and LC_KEY_RE.fullmatch(key) else None
+        url = (
+            api.lc_image_keys.get(key)
+            if api is not None and LC_KEY_RE.fullmatch(key)
+            else None
+        )
         if api is None or url is None:
             self.send_error(404)
             return
@@ -625,9 +695,15 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             else:
                 data = fetch_lc_image(url, background=False)
                 stored = api.cover_cache.store_lc_screenshot(key, data)
-                content_type = COVER_TYPES[stored.suffix[1:] if stored is not None else validate_image_bytes(data)]
+                content_type = COVER_TYPES[
+                    stored.suffix[1:]
+                    if stored is not None
+                    else validate_image_bytes(data)
+                ]
         except (OSError, ValueError, BridgeFailed, BridgeUnavailable) as exc:
-            logging.getLogger(__name__).info("LewdCorner screenshot %s not served: %s", key, exc)
+            logging.getLogger(__name__).info(
+                "LewdCorner screenshot %s not served: %s", key, exc
+            )
             self.send_error(404)
             return
         self.send_response(200)
@@ -743,11 +819,14 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                         from core.database import find_game_by_lc_url
 
                         check_payload["matches"] = {
-                            url: game["id"] for url in dict.fromkeys(query.get("url", [])[:250])
+                            url: game["id"]
+                            for url in dict.fromkeys(query.get("url", [])[:250])
                             if (game := find_game_by_lc_url(url)) is not None
                         }
                     else:
-                        check_payload = self._build_check_payload(check_url, query.get("id", []))
+                        check_payload = self._build_check_payload(
+                            check_url, query.get("id", [])
+                        )
                 except Exception as e:
                     print(f"[wLib] Database error during extension check: {e}")
                     check_payload = {"exists": False}
@@ -774,12 +853,18 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             if not self._runner_request():
                 self._reject_origin()
                 return
-            ready = api_ref is not None and window_ref is not None and self._wait_for_database()
+            ready = (
+                api_ref is not None
+                and window_ref is not None
+                and self._wait_for_database()
+            )
             self.send_response(200 if ready else 503)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             games = api_ref.get_running_games() if ready and api_ref is not None else []
-            _ = self.wfile.write(json.dumps({"success": ready, "games": games}).encode())
+            _ = self.wfile.write(
+                json.dumps({"success": ready, "games": games}).encode()
+            )
         elif urlparse(self.path).path == "/api/open":
             from urllib.parse import urlparse, parse_qs
 
@@ -797,7 +882,11 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 allowed_origin
             ):
                 return
-            resolved_url = lewdcorner.normalize_thread_url(game_url) or normalize_thread_url(game_url) or game_url
+            resolved_url = (
+                lewdcorner.normalize_thread_url(game_url)
+                or normalize_thread_url(game_url)
+                or game_url
+            )
             resolved_game_id: int | None = None
 
             success = True
@@ -907,13 +996,20 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("Invalid launch check")
                 check = cast(dict[str, object], raw_check)
                 launch_id = check.get("gameId")
-                if not isinstance(launch_id, int) or isinstance(launch_id, bool) or launch_id <= 0:
+                if (
+                    not isinstance(launch_id, int)
+                    or isinstance(launch_id, bool)
+                    or launch_id <= 0
+                ):
                     raise ValueError("Invalid game ID")
                 if api_ref is None:
                     # The server answers before Api() exists; the runner must
                     # not start a game the window has not checked.
                     check_status = 503
-                    check_result = {"success": False, "error": "wLib is still starting. Try again in a moment."}
+                    check_result = {
+                        "success": False,
+                        "error": "wLib is still starting. Try again in a moment.",
+                    }
                 else:
                     reason = api_ref.reserve_runner_launch(
                         launch_id,
@@ -926,7 +1022,10 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     if reason:
                         check_result = {"success": False, "error": reason}
             except (ValueError, TypeError, OSError):
-                check_status, check_result = 400, {"success": False, "error": "Invalid launch check"}
+                check_status, check_result = (
+                    400,
+                    {"success": False, "error": "Invalid launch check"},
+                )
             self.send_response(check_status)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -962,10 +1061,16 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 ):
                     api_ref.release_runner_launch(ended_id)
                 active_window = cast(ExtensionWindow, window_ref)
-                _ = active_window.evaluate_js("window.dispatchEvent(new Event('wlib-refresh-library'))")
+                _ = active_window.evaluate_js(
+                    "window.dispatchEvent(new Event('wlib-refresh-library'))"
+                )
                 if payload.get("state") == "error":
-                    detail = json.dumps({"error": str(payload.get("error") or "Launch failed")})
-                    _ = active_window.evaluate_js(f"window.dispatchEvent(new CustomEvent('wlib-launch-error', {{detail: {detail}}}))")
+                    detail = json.dumps(
+                        {"error": str(payload.get("error") or "Launch failed")}
+                    )
+                    _ = active_window.evaluate_js(
+                        f"window.dispatchEvent(new CustomEvent('wlib-launch-error', {{detail: {detail}}}))"
+                    )
                 runner_ok = True
                 runner_status = 200
             except (ValueError, TypeError, OSError):
@@ -986,7 +1091,9 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 content_length = int(self.headers.get("Content-Length", "0"))
                 if not 0 <= content_length <= MAX_EXTENSION_BODY_BYTES:
                     raise ValueError("Invalid Content-Length")
-                raw_payload = cast(object, json.loads(self.rfile.read(content_length).decode("utf-8")))
+                raw_payload = cast(
+                    object, json.loads(self.rfile.read(content_length).decode("utf-8"))
+                )
                 if not isinstance(raw_payload, dict):
                     raise ValueError("Request body must be a JSON object")
                 # Preparing the payload resolves store links, which reads the
@@ -994,7 +1101,10 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 # gets the documented 503 instead of a raw SQLite error.
                 if not self._wait_for_database() or api_ref is None:
                     status = 503
-                    wishlist_response = {"success": False, "error": "Application is not ready"}
+                    wishlist_response = {
+                        "success": False,
+                        "error": "Application is not ready",
+                    }
                 else:
                     body = cast(dict[str, object], raw_payload)
                     if body.get("action") == "attach_lc":
@@ -1008,7 +1118,8 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                             version=str(payload.get("version") or ""),
                             cover_image=str(payload.get("coverImage") or ""),
                             tags=", ".join(
-                                str(item) for item in cast(list[object], payload["tags"])
+                                str(item)
+                                for item in cast(list[object], payload["tags"])
                             )
                             if isinstance(payload.get("tags"), list)
                             else str(payload.get("tags") or ""),
@@ -1017,14 +1128,23 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                             engine=str(payload.get("engine") or ""),
                             links=payload.get("links"),
                             lc_url=str(payload.get("lc_url") or ""),
-                            thread_completed=cast(bool | None, payload.get("thread_completed")),
+                            thread_completed=cast(
+                                bool | None, payload.get("thread_completed")
+                            ),
                             screenshots=payload.get("screenshots"),
-                            thread_onhold=cast(bool | None, payload.get("thread_onhold")),
-                            thread_abandoned=cast(bool | None, payload.get("thread_abandoned")),
-                            thread_states_seen_at=str(payload.get("thread_states_seen_at") or ""),
+                            thread_onhold=cast(
+                                bool | None, payload.get("thread_onhold")
+                            ),
+                            thread_abandoned=cast(
+                                bool | None, payload.get("thread_abandoned")
+                            ),
+                            thread_states_seen_at=str(
+                                payload.get("thread_states_seen_at") or ""
+                            ),
                         )
                     if wishlist_response.get("attached") is True and not (
-                        body.get("action") == "attach_lc" or wishlist_response.get("attached_lc")
+                        body.get("action") == "attach_lc"
+                        or wishlist_response.get("attached_lc")
                     ):
                         wishlist_response = {
                             **wishlist_response,
@@ -1043,7 +1163,9 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                                 "window.dispatchEvent(new Event('wlib-refresh-library'))"
                             )
                         except Exception as e:
-                            print(f"[wLib] Failed to refresh library after wishlist: {e}")
+                            print(
+                                f"[wLib] Failed to refresh library after wishlist: {e}"
+                            )
             except Exception as e:
                 status = 400
                 wishlist_response = {"success": False, "error": str(e)}
@@ -1068,17 +1190,27 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     from core.database import find_game_by_lc_url
 
                     incoming_lc = lewdcorner.normalize_thread_url(
-                        cast(dict[str, object], payload).get("url") if isinstance(payload, dict) else None
+                        cast(dict[str, object], payload).get("url")
+                        if isinstance(payload, dict)
+                        else None
                     )
                     if incoming_lc and find_game_by_lc_url(incoming_lc):
                         status = 409
-                        response = {"success": False, "error": "LewdCorner thread is already in wLib",
-                                    "error_code": "duplicate_url"}
+                        response = {
+                            "success": False,
+                            "error": "LewdCorner thread is already in wLib",
+                            "error_code": "duplicate_url",
+                        }
                     else:
-                        self._open_add_dialog(self._prepare_game_payload(cast(object, payload)))
+                        self._open_add_dialog(
+                            self._prepare_game_payload(cast(object, payload))
+                        )
                 else:
                     status = 503
-                    response = {"success": False, "error": "Application window is not ready"}
+                    response = {
+                        "success": False,
+                        "error": "Application window is not ready",
+                    }
             except Exception as e:
                 status = 400
                 response = {"success": False, "error": str(e)}

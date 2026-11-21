@@ -36,7 +36,9 @@ def build_update_summary(
     if not counts:
         return None
     # A game can be in two lists (a new build and the Abandoned prefix); name it once.
-    titles = list(dict.fromkeys([*updated_titles, *completed_titles, *abandoned_titles]))
+    titles = list(
+        dict.fromkeys([*updated_titles, *completed_titles, *abandoned_titles])
+    )
     body = ", ".join(titles[:2])
     if len(titles) > 2:
         body += f" and {len(titles) - 2} more"

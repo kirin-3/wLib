@@ -12,7 +12,7 @@ from core.game_native_size import NativeSize, detect_native_size
         "// SceneManager._screenWidth = 816;\n// SceneManager._screenHeight = 624;",
         "/* SceneManager._screenWidth = 816;\nSceneManager._screenHeight = 624; */",
         r"""var note = 'It\'s old: SceneManager._screenWidth = 816; SceneManager._screenHeight = 624;';""",
-        r'''var note = "Old \"defaults\": SceneManager._screenWidth = 816; SceneManager._screenHeight = 624;";''',
+        r"""var note = "Old \"defaults\": SceneManager._screenWidth = 816; SceneManager._screenHeight = 624;";""",
         "var note = `SceneManager._screenWidth = 816;\nSceneManager._screenHeight = 624;`;",
     ],
     ids=["line-comment", "block-comment", "single-quoted", "double-quoted", "template"],
@@ -30,4 +30,6 @@ def test_mv_manager_size_ignores_inactive_assignments(tmp_path: Path, inactive: 
         encoding="utf-8",
     )
 
-    assert detect_native_size(str(tmp_path)) == NativeSize(1280, 720, "js/rpg_managers.js")
+    assert detect_native_size(str(tmp_path)) == NativeSize(
+        1280, 720, "js/rpg_managers.js"
+    )

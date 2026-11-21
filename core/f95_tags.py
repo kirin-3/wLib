@@ -12,6 +12,7 @@ back a baseline tag the user removed. A kept user tag counts only while it
 is also a current tag, so a stale entry is harmless as long as no other
 writer adds a tag to `tags` on the user's behalf.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
@@ -80,5 +81,7 @@ def merge_f95_tags(
         tag for tag in current_tags if _key(tag) in added
     ]
     f95_keys = {_key(tag) for tag in f95_tags}
-    new_kept = [tag for tag in current_tags if _key(tag) in added and _key(tag) in f95_keys]
+    new_kept = [
+        tag for tag in current_tags if _key(tag) in added and _key(tag) in f95_keys
+    ]
     return _clean(merged), f95_tags, new_kept

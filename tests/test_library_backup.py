@@ -83,7 +83,9 @@ def test_sandbox_backup_exports_preferences_without_storage(tmp_path, monkeypatc
 def test_locale_emulator_path_is_a_path_setting():
     update_setting("locale_emulator_path", r"D:\Tools\LE\LEProc.exe")
     backup = build_library_backup({"sections": [SECTION_SETTINGS_PATHS]})
-    assert backup["settings"]["paths"]["locale_emulator_path"] == r"D:\Tools\LE\LEProc.exe"
+    assert (
+        backup["settings"]["paths"]["locale_emulator_path"] == r"D:\Tools\LE\LEProc.exe"
+    )
     sync = build_sync_backup("2026-11-19T00:00:00Z", "test-device")
     assert "locale_emulator_path" not in json.dumps(sync)
 
@@ -1609,18 +1611,21 @@ def test_imported_lc_thread_change_forgets_old_completion_read(sync):
     assert "lc_thread_completed" not in metadata
     metadata.update(lc_url=new_lc_url, thread_completed=1)
 
-    assert apply_library_backup(backup, {"sections": [SECTION_METADATA]}, sync=sync)["updated"] == 1
+    assert (
+        apply_library_backup(backup, {"sections": [SECTION_METADATA]}, sync=sync)[
+            "updated"
+        ]
+        == 1
+    )
     _ = Api()._update_thread_edit_metadata_for_url(f95_url, {"thread_completed": False})
-    game, = get_all_games()
+    (game,) = get_all_games()
     assert game["lc_url"] == new_lc_url
     assert game["thread_completed"] == 1
     assert game["lc_thread_completed"] is None
 
 
 def test_tags_user_edited_round_trip_and_missing_field_preserves_local(tmp_path):
-    game_id = add_game(
-        "Tagged", "", f95_url="https://f95zone.to/threads/tagged.450/"
-    )
+    game_id = add_game("Tagged", "", f95_url="https://f95zone.to/threads/tagged.450/")
     assert game_id is not None
     conn = get_connection()
     conn.execute("UPDATE games SET tags_user_edited = 1 WHERE id = ?", (game_id,))
@@ -1735,7 +1740,9 @@ def test_user_f95_tags_round_trip(tmp_path):
     conn.execute("UPDATE games SET user_f95_tags = '' WHERE id = ?", (game_id,))
     conn.commit()
     conn.close()
-    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})["success"]
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})[
+        "success"
+    ]
     assert get_all_games()[0]["user_f95_tags"] == "sandbox"
 
 
@@ -1768,7 +1775,9 @@ def test_old_export_without_user_f95_tags_keeps_local_value(tmp_path):
             ]
         ),
     )
-    assert Api().import_library_backup(str(path), {"sections": [SECTION_METADATA]})["success"]
+    assert Api().import_library_backup(str(path), {"sections": [SECTION_METADATA]})[
+        "success"
+    ]
     games = {g["title"]: g for g in get_all_games()}
     assert games["Kept"]["user_f95_tags"] == "sandbox"
     assert games["New Game"]["user_f95_tags"] == ""
@@ -2479,9 +2488,7 @@ def test_import_duplicate_url_fill_missing_keeps_targets_from_same_import(tmp_pa
     )
     backup_path = write_backup(tmp_path / "targets.json", backup)
 
-    result = api.import_library_backup(
-        str(backup_path), {"merge_mode": "fill_missing"}
-    )
+    result = api.import_library_backup(str(backup_path), {"merge_mode": "fill_missing"})
 
     assert result["success"] is True
     targets = list_game_launch_targets(local_id)
@@ -2598,9 +2605,7 @@ def test_screenshots_fill_missing_and_missing_field(tmp_path):
     assert games["Empty"]["screenshots"] == ["https://example.com/filled.png"]
     assert games["Full"]["screenshots"] == ["https://example.com/kept.png"]
 
-    older = base_backup(
-        [{"metadata": {"title": "Full", "f95_url": full_url}}]
-    )
+    older = base_backup([{"metadata": {"title": "Full", "f95_url": full_url}}])
     older_path = write_backup(tmp_path / "older.json", older)
     result = api.import_library_backup(str(older_path))
     assert result["success"] is True
@@ -2610,7 +2615,10 @@ def test_screenshots_fill_missing_and_missing_field(tmp_path):
 def test_screenshots_malformed_values_dropped(tmp_path):
     from core.library_backup import _screenshots_json_text
 
-    assert _screenshots_json_text('["https://example.com/a.png", 7, "", "ftp://x/y"]') == '["https://example.com/a.png"]'
+    assert (
+        _screenshots_json_text('["https://example.com/a.png", 7, "", "ftp://x/y"]')
+        == '["https://example.com/a.png"]'
+    )
     assert _screenshots_json_text("not json") == "[]"
     many = [f"https://example.com/{i}.png" for i in range(25)]
     assert len(json.loads(_screenshots_json_text(many))) == 20
@@ -2691,7 +2699,10 @@ def test_export_carries_notes_but_not_attachments(tmp_path, monkeypatch):
     assert result["success"] is True
     exported_text = destination.read_text(encoding="utf-8")
     exported = json.loads(exported_text)
-    assert exported["games"][0]["user_state"]["progress"] == "# My notes\nSome **markdown**"
+    assert (
+        exported["games"][0]["user_state"]["progress"]
+        == "# My notes\nSome **markdown**"
+    )
     assert "walkthrough.pdf" not in exported_text
     assert "walkthrough contents" not in exported_text
     assert "%PDF" not in exported_text
@@ -2861,9 +2872,7 @@ def test_missing_save_path_override_warns_and_is_still_imported(tmp_path):
     )
 
     inspect = api.inspect_library_backup(str(path))
-    result = api.import_library_backup(
-        str(path), {"sections": [SECTION_LAUNCH_CONFIG]}
-    )
+    result = api.import_library_backup(str(path), {"sections": [SECTION_LAUNCH_CONFIG]})
 
     assert result["success"] is True
     warnings = [
@@ -2874,9 +2883,7 @@ def test_missing_save_path_override_warns_and_is_still_imported(tmp_path):
     assert [(w["type"], w["title"], w["path"]) for w in warnings] == [
         ("missing_path", "Missing saves", missing)
     ]
-    overrides = {
-        g["title"]: g["save_path_override"] for g in get_all_games()
-    }
+    overrides = {g["title"]: g["save_path_override"] for g in get_all_games()}
     assert overrides == {"Missing saves": missing, "Present saves": str(existing)}
 
 
@@ -2927,11 +2934,20 @@ def test_unusable_imported_save_path_override_keeps_local_value(tmp_path, kind):
         base_backup(
             [
                 {
-                    "metadata": {"title": "Local", "f95_url": "https://f95zone.to/threads/x.1/"},
-                    SECTION_LAUNCH_CONFIG: {"save_path_override": bad, "command_line_args": "-x"},
+                    "metadata": {
+                        "title": "Local",
+                        "f95_url": "https://f95zone.to/threads/x.1/",
+                    },
+                    SECTION_LAUNCH_CONFIG: {
+                        "save_path_override": bad,
+                        "command_line_args": "-x",
+                    },
                 },
                 {
-                    "metadata": {"title": "New", "f95_url": "https://f95zone.to/threads/y.2/"},
+                    "metadata": {
+                        "title": "New",
+                        "f95_url": "https://f95zone.to/threads/y.2/",
+                    },
                     SECTION_LAUNCH_CONFIG: {"save_path_override": bad},
                 },
             ]
@@ -3318,11 +3334,17 @@ def test_library_folder_import_with_only_foreign_folders_keeps_local(tmp_path):
 
 def test_cached_covers_never_export_or_import():
     from core import database
-    from core.library_backup import build_library_backup, build_sync_backup, apply_library_backup
+    from core.library_backup import (
+        build_library_backup,
+        build_sync_backup,
+        apply_library_backup,
+    )
 
     database.init_db()
     url = "https://attachments.f95zone.to/cache.png"
-    game_id = database.add_game("Device cache", "", "https://f95zone.to/threads/987654/", cover_image=url)
+    game_id = database.add_game(
+        "Device cache", "", "https://f95zone.to/threads/987654/", cover_image=url
+    )
     name = "b" * 32 + ".png"
     assert database.set_game_cover_cache(game_id, url, name)
     before = database.get_setting("sync_local_modified_at")
@@ -3341,7 +3363,9 @@ def test_note_links_backup_round_trip_and_old_backup_preserves_local():
     update_game(game_id, {"note_links": links})
     backup = build_library_backup()
     assert backup["games"][0]["user_state"]["note_links"] == links
-    old = base_backup([{"metadata": {"title": "Note link backup"}, "user_state": {"progress": "old"}}])
+    old = base_backup(
+        [{"metadata": {"title": "Note link backup"}, "user_state": {"progress": "old"}}]
+    )
     apply_library_backup(old)
     assert get_all_games()[0]["note_links"] == links
     update_game(game_id, {"note_links": []})
@@ -3352,7 +3376,9 @@ def test_note_links_backup_round_trip_and_old_backup_preserves_local():
 def test_note_links_fill_missing():
     game_id = add_game("Fill links", "")
     links = [{"url": "https://example.com", "label": ""}]
-    backup = base_backup([{"metadata": {"title": "Fill links"}, "user_state": {"note_links": links}}])
+    backup = base_backup(
+        [{"metadata": {"title": "Fill links"}, "user_state": {"note_links": links}}]
+    )
     apply_library_backup(backup, merge_mode="fill_missing")
     assert next(g for g in get_all_games() if g["id"] == game_id)["note_links"] == links
 
@@ -3376,7 +3402,15 @@ def test_performance_tools_backup_and_old_import():
     update_game(game_id, {"mangohud": "off"})
     update_setting("gamemode_enabled", "true")
     update_setting("mangohud_enabled", "true")
-    backup = build_library_backup({"sections": [SECTION_METADATA, SECTION_LAUNCH_CONFIG, SECTION_SETTINGS_GENERAL]})
+    backup = build_library_backup(
+        {
+            "sections": [
+                SECTION_METADATA,
+                SECTION_LAUNCH_CONFIG,
+                SECTION_SETTINGS_GENERAL,
+            ]
+        }
+    )
     assert backup["games"][0]["launch_config"]["mangohud"] == "off"
     assert backup["settings"]["general"]["gamemode_enabled"] == "true"
     assert backup["settings"]["general"]["mangohud_enabled"] == "true"
@@ -3387,21 +3421,23 @@ def test_performance_tools_backup_and_old_import():
     assert get_all_games()[0]["mangohud"] == "off"
     assert get_setting("gamemode_enabled") == "true"
     assert get_setting("mangohud_enabled") == "true"
-    old = base_backup([{"metadata": {"title": "Old"}, "launch_config": {"launch_mode": "native"}}])
+    old = base_backup(
+        [{"metadata": {"title": "Old"}, "launch_config": {"launch_mode": "native"}}]
+    )
     apply_library_backup(old)
     imported = next(game for game in get_all_games() if game["title"] == "Old")
     assert imported["gamemode"] == imported["mangohud"] == "default"
 
 
 def test_download_staging_not_exported(tmp_path, monkeypatch):
-    monkeypatch.setattr('core.database.DATA_DIR', str(tmp_path))
-    stage = tmp_path / 'downloads'
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path))
+    stage = tmp_path / "downloads"
     stage.mkdir()
-    (stage / 'private-update.zip').write_bytes(b'PRIVATE_DOWNLOAD_CONTENT')
-    backup = json.dumps(build_library_backup({'sections': [SECTION_METADATA]}))
-    sync = json.dumps(build_sync_backup('2026-11-03T00:00:00Z', 'device'))
-    assert 'private-update.zip' not in backup + sync
-    assert 'PRIVATE_DOWNLOAD_CONTENT' not in backup + sync
+    (stage / "private-update.zip").write_bytes(b"PRIVATE_DOWNLOAD_CONTENT")
+    backup = json.dumps(build_library_backup({"sections": [SECTION_METADATA]}))
+    sync = json.dumps(build_sync_backup("2026-11-03T00:00:00Z", "device"))
+    assert "private-update.zip" not in backup + sync
+    assert "PRIVATE_DOWNLOAD_CONTENT" not in backup + sync
 
 
 def test_sync_follows_a_game_renamed_on_another_device():
@@ -3459,7 +3495,13 @@ def test_repeated_thread_url_does_not_abort_import():
     replace_game_links(
         local_id,
         "backup",
-        [{"source": "steam", "id": "123", "url": "https://store.steampowered.com/app/123/"}],
+        [
+            {
+                "source": "steam",
+                "id": "123",
+                "url": "https://store.steampowered.com/app/123/",
+            }
+        ],
     )
     payload = base_backup(
         [
@@ -3501,7 +3543,9 @@ def test_init_db_backfills_missing_sync_identities():
     conn = get_connection()
     try:
         with conn:
-            _ = conn.execute("UPDATE games SET sync_uid = NULL WHERE id = ?", (game_id,))
+            _ = conn.execute(
+                "UPDATE games SET sync_uid = NULL WHERE id = ?", (game_id,)
+            )
     finally:
         conn.close()
     before = get_setting("sync_local_modified_at")
@@ -3553,7 +3597,10 @@ def test_export_adds_time_zone_to_old_local_times():
     conn.commit()
     conn.close()
     backup = build_library_backup({"sections": ["user_state", "launch_targets"]})
-    state = cast(dict[str, object], cast(list[dict[str, object]], backup["games"])[0]["user_state"])
+    state = cast(
+        dict[str, object],
+        cast(list[dict[str, object]], backup["games"])[0]["user_state"],
+    )
     last_played = datetime.fromisoformat(str(state["last_played"]))
     assert last_played.tzinfo is not None
     assert last_played == datetime(2026, 1, 2, 3, 4, 5).astimezone()
@@ -3606,11 +3653,15 @@ def test_merge_import_keeps_local_collections_and_blank_lists():
     from core.database import set_game_collections
 
     set_game_collections(game_id, ["Local"])
-    backup = build_library_backup({"sections": [SECTION_USER_STATE, "settings_general"]})
+    backup = build_library_backup(
+        {"sections": [SECTION_USER_STATE, "settings_general"]}
+    )
     backup["settings"]["general"]["collections"] = "[]"
     backup["settings"]["general"]["custom_play_statuses"] = ""
     backup["games"] = []
-    _ = apply_library_backup(backup, {"sections": [SECTION_USER_STATE, "settings_general"]})
+    _ = apply_library_backup(
+        backup, {"sections": [SECTION_USER_STATE, "settings_general"]}
+    )
     assert get_collections() == ["Local"]
     assert get_all_games()[0]["collections"] == ["Local"]
 
@@ -3625,8 +3676,14 @@ def test_fill_missing_fills_launch_defaults_nobody_chose():
     config = {"launch_mode": "wine_proton", "gamemode": "on", "mangohud": "on"}
     payload = base_backup(
         [
-            {"metadata": {"title": "Launch", "f95_url": url}, SECTION_LAUNCH_CONFIG: config},
-            {"metadata": {"title": "Kept", "f95_url": kept_url}, SECTION_LAUNCH_CONFIG: config},
+            {
+                "metadata": {"title": "Launch", "f95_url": url},
+                SECTION_LAUNCH_CONFIG: config,
+            },
+            {
+                "metadata": {"title": "Kept", "f95_url": kept_url},
+                SECTION_LAUNCH_CONFIG: config,
+            },
         ]
     )
     _ = apply_library_backup(
@@ -3665,7 +3722,15 @@ def test_html_player_backup_sync_and_old_import():
     update_game(game_id, {"html_player": "browser"})
     update_setting("html_builtin_player", "false")
     update_setting("html_player_notice_shown", "true")
-    backup = build_library_backup({"sections": [SECTION_METADATA, SECTION_LAUNCH_CONFIG, SECTION_SETTINGS_GENERAL]})
+    backup = build_library_backup(
+        {
+            "sections": [
+                SECTION_METADATA,
+                SECTION_LAUNCH_CONFIG,
+                SECTION_SETTINGS_GENERAL,
+            ]
+        }
+    )
     assert backup["games"][0]["launch_config"]["html_player"] == "browser"
     assert backup["settings"]["general"]["html_builtin_player"] == "false"
     # The note flag is device-local.
@@ -3677,7 +3742,9 @@ def test_html_player_backup_sync_and_old_import():
     apply_library_backup(backup)
     assert get_all_games()[0]["html_player"] == "browser"
     assert get_setting("html_builtin_player") == "false"
-    bad = base_backup([{"metadata": {"title": "Bad"}, "launch_config": {"html_player": "netscape"}}])
+    bad = base_backup(
+        [{"metadata": {"title": "Bad"}, "launch_config": {"html_player": "netscape"}}]
+    )
     apply_library_backup(bad)
     assert next(g for g in get_all_games() if g["title"] == "Bad")["html_player"] == ""
     old = base_backup([{"metadata": {"title": "Old"}, "launch_config": {}}])
@@ -3700,15 +3767,29 @@ def test_web_player_devtools_setting_exports_imports_and_syncs():
 
 
 def test_sync_payload_without_html_player_keeps_local_choice():
-    game_id = add_game("Web2", "/game/index.html", f95_url="https://f95zone.to/threads/web2.777/")
+    game_id = add_game(
+        "Web2", "/game/index.html", f95_url="https://f95zone.to/threads/web2.777/"
+    )
     update_game(game_id, {"html_player": "browser"})
-    payload = base_backup([{"metadata": {"title": "Web2", "f95_url": "https://f95zone.to/threads/web2.777/"}, "user_state": {"play_status": "Playing"}}])
+    payload = base_backup(
+        [
+            {
+                "metadata": {
+                    "title": "Web2",
+                    "f95_url": "https://f95zone.to/threads/web2.777/",
+                },
+                "user_state": {"play_status": "Playing"},
+            }
+        ]
+    )
     apply_library_backup(payload, {"sections": ["user_state"]})
     assert get_all_games()[0]["html_player"] == "browser"
 
 
 def _label(game_id: int) -> str:
-    return next(g for g in get_all_games() if g["id"] == game_id)["default_target_label"]
+    return next(g for g in get_all_games() if g["id"] == game_id)[
+        "default_target_label"
+    ]
 
 
 def test_default_target_label_round_trips_with_launch_targets_section(tmp_path):
@@ -3723,12 +3804,16 @@ def test_default_target_label_round_trips_with_launch_targets_section(tmp_path):
     without = api.export_library_backup(
         {"sections": [SECTION_METADATA]}, str(tmp_path / "without")
     )
-    assert json.loads(Path(str(exported["path"])).read_text())["games"][0][
+    assert (
+        json.loads(Path(str(exported["path"])).read_text())["games"][0][
+            "default_target_label"
+        ]
+        == "Season 1"
+    )
+    assert (
         "default_target_label"
-    ] == "Season 1"
-    assert "default_target_label" not in json.loads(
-        Path(str(without["path"])).read_text()
-    )["games"][0]
+        not in json.loads(Path(str(without["path"])).read_text())["games"][0]
+    )
 
     # Section selected: the backup's name replaces the local one.
     update_game(game_id, {"default_target_label": "Local"})
@@ -3740,7 +3825,9 @@ def test_default_target_label_round_trips_with_launch_targets_section(tmp_path):
 
     # Section not selected: the local name stays.
     update_game(game_id, {"default_target_label": "Local"})
-    result = api.import_library_backup(str(exported["path"]), {"sections": [SECTION_METADATA]})
+    result = api.import_library_backup(
+        str(exported["path"]), {"sections": [SECTION_METADATA]}
+    )
     assert result["success"] is True
     assert _label(game_id) == "Local"
 
@@ -3771,22 +3858,38 @@ def test_torrent_export_settings_never_leave_the_device(tmp_path, monkeypatch):
     )
     sync = build_sync_backup("2026-01-01T00:00:00Z", "device")
     text = json.dumps(backup) + json.dumps(sync)
-    for value in ("torrent_watch_folder", "torrent_export_warning_accepted", "watch-folder-SECRET"):
+    for value in (
+        "torrent_watch_folder",
+        "torrent_export_warning_accepted",
+        "watch-folder-SECRET",
+    ):
         assert value not in text
 
 
 def test_gamescope_backup_round_trip_into_empty_library():
     from core.database import get_connection
 
-    game_id = add_game("Pixel", "/game/Game.exe", f95_url="https://f95zone.to/threads/pixel.4242/")
+    game_id = add_game(
+        "Pixel", "/game/Game.exe", f95_url="https://f95zone.to/threads/pixel.4242/"
+    )
     update_game(
         game_id,
-        {"gamescope": "on", "gamescope_resolution": "816x624", "gamescope_scaler": "integer"},
+        {
+            "gamescope": "on",
+            "gamescope_resolution": "816x624",
+            "gamescope_scaler": "integer",
+        },
     )
     update_setting("gamescope_enabled", "true")
     update_setting("gamescope_filter", "nearest")
     backup = build_library_backup(
-        {"sections": [SECTION_METADATA, SECTION_LAUNCH_CONFIG, SECTION_SETTINGS_GENERAL]}
+        {
+            "sections": [
+                SECTION_METADATA,
+                SECTION_LAUNCH_CONFIG,
+                SECTION_SETTINGS_GENERAL,
+            ]
+        }
     )
     assert backup["games"][0]["launch_config"]["gamescope"] == "on"
     assert backup["games"][0]["launch_config"]["gamescope_resolution"] == "816x624"
@@ -3795,8 +3898,12 @@ def test_gamescope_backup_round_trip_into_empty_library():
     # file open, and Windows cannot delete an open database in teardown.
     with closing(get_connection()) as conn:
         conn.execute("DELETE FROM games")
-        conn.execute("UPDATE settings SET value = 'false' WHERE key = 'gamescope_enabled'")
-        conn.execute("UPDATE settings SET value = 'linear' WHERE key = 'gamescope_filter'")
+        conn.execute(
+            "UPDATE settings SET value = 'false' WHERE key = 'gamescope_enabled'"
+        )
+        conn.execute(
+            "UPDATE settings SET value = 'linear' WHERE key = 'gamescope_filter'"
+        )
         conn.commit()
     apply_library_backup(backup)
     imported = get_all_games()[0]
@@ -3808,11 +3915,21 @@ def test_gamescope_backup_round_trip_into_empty_library():
 
 
 def test_gamescope_older_backup_and_invalid_values_import_as_defaults():
-    old = base_backup([{"metadata": {"title": "Old"}, "launch_config": {"launch_mode": "native"}}])
+    old = base_backup(
+        [{"metadata": {"title": "Old"}, "launch_config": {"launch_mode": "native"}}]
+    )
     apply_library_backup(old)
     imported = next(game for game in get_all_games() if game["title"] == "Old")
     assert imported["gamescope"] == "default"
-    assert [imported[c] for c in ("gamescope_resolution", "gamescope_scaler", "gamescope_filter", "gamescope_args")] == ["", "", "", ""]
+    assert [
+        imported[c]
+        for c in (
+            "gamescope_resolution",
+            "gamescope_scaler",
+            "gamescope_filter",
+            "gamescope_args",
+        )
+    ] == ["", "", "", ""]
     bad = base_backup(
         [
             {
@@ -3826,8 +3943,23 @@ def test_gamescope_older_backup_and_invalid_values_import_as_defaults():
             }
         ]
     )
-    bad["settings"] = {"general": {"gamescope_scaler": "bogus", "gamescope_fps_limit": "9999", "gamescope_window_mode": "huge"}}
-    apply_library_backup(bad, {"sections": [SECTION_METADATA, SECTION_LAUNCH_CONFIG, SECTION_SETTINGS_GENERAL]})
+    bad["settings"] = {
+        "general": {
+            "gamescope_scaler": "bogus",
+            "gamescope_fps_limit": "9999",
+            "gamescope_window_mode": "huge",
+        }
+    }
+    apply_library_backup(
+        bad,
+        {
+            "sections": [
+                SECTION_METADATA,
+                SECTION_LAUNCH_CONFIG,
+                SECTION_SETTINGS_GENERAL,
+            ]
+        },
+    )
     imported = next(game for game in get_all_games() if game["title"] == "Bad")
     assert imported["gamescope"] == "default"
     assert imported["gamescope_scaler"] == ""
@@ -3964,14 +4096,18 @@ def test_lc_backup_round_trip_merge_and_restore(tmp_path, monkeypatch):
     update_setting("lc_enabled", "1")
     update_setting("lc_plus", "1")
     update_setting("lc_plus_mode", "yes")
-    backup = build_library_backup({"sections": [SECTION_METADATA, SECTION_SETTINGS_GENERAL]})
+    backup = build_library_backup(
+        {"sections": [SECTION_METADATA, SECTION_SETTINGS_GENERAL]}
+    )
     assert backup["games"][0]["metadata"]["lc_dismissed"] == "22"
     assert backup["settings"]["general"]["lc_plus"] == "1"
     assert "lc_feed_read_at" not in backup["settings"]["general"]
 
     monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "restored.db"))
     init_db()
-    result = apply_library_backup(backup, {"sections": [SECTION_METADATA, SECTION_SETTINGS_GENERAL]})
+    result = apply_library_backup(
+        backup, {"sections": [SECTION_METADATA, SECTION_SETTINGS_GENERAL]}
+    )
     assert result["created"] == 1
     restored = get_all_games()[0]
     assert {key: restored[key] for key in versions} == versions
@@ -3981,9 +4117,16 @@ def test_lc_backup_round_trip_merge_and_restore(tmp_path, monkeypatch):
     assert restored["lc_dismissed"] == "22"
     assert get_setting("lc_enabled") == get_setting("lc_plus") == "1"
 
-    incoming = base_backup([{"metadata": {
-        "title": "Renamed", "lc_url": "https://www.lewdcorner.com/threads/example.21/post-3",
-    }}])
+    incoming = base_backup(
+        [
+            {
+                "metadata": {
+                    "title": "Renamed",
+                    "lc_url": "https://www.lewdcorner.com/threads/example.21/post-3",
+                }
+            }
+        ]
+    )
     result = apply_library_backup(incoming, {"sections": [SECTION_METADATA]})
     assert result["updated"] == 1
     assert get_all_games()[0]["title"] == "Renamed"
@@ -3991,7 +4134,12 @@ def test_lc_backup_round_trip_merge_and_restore(tmp_path, monkeypatch):
 
     old = base_backup([{"metadata": {"title": "Old backup game"}}])
     assert apply_library_backup(old, {"sections": [SECTION_METADATA]})["created"] == 1
-    assert next(game for game in get_all_games() if game["title"] == "Old backup game")["lc_url"] == ""
+    assert (
+        next(game for game in get_all_games() if game["title"] == "Old backup game")[
+            "lc_url"
+        ]
+        == ""
+    )
 
 
 def test_conflicting_lc_and_f95_matches_are_ambiguous():
@@ -3999,7 +4147,9 @@ def test_conflicting_lc_and_f95_matches_are_ambiguous():
     f95_url = "https://f95zone.to/threads/101/"
     add_game("LC", "", lc_url=lc_url)
     add_game("F95", "", f95_url=f95_url)
-    backup = base_backup([{"metadata": {"title": "Conflicting", "f95_url": f95_url, "lc_url": lc_url}}])
+    backup = base_backup(
+        [{"metadata": {"title": "Conflicting", "f95_url": f95_url, "lc_url": lc_url}}]
+    )
     result = apply_library_backup(backup, {"sections": [SECTION_METADATA]})
     assert result["ambiguous"] == result["skipped"] == 1
     assert {game["title"] for game in get_all_games()} == {"LC", "F95"}
@@ -4012,10 +4162,18 @@ def test_manual_backup_with_matching_uid_keeps_thread_conflict_ambiguous(tmp_pat
     add_game("F95", "", f95_url=f95_url)
     before = get_all_games()
     uid = next(game for game in before if game["id"] == lc_id)["sync_uid"]
-    backup = base_backup([{
-        "uid": uid,
-        "metadata": {"title": "Conflicting", "f95_url": f95_url, "lc_url": lc_url},
-    }])
+    backup = base_backup(
+        [
+            {
+                "uid": uid,
+                "metadata": {
+                    "title": "Conflicting",
+                    "f95_url": f95_url,
+                    "lc_url": lc_url,
+                },
+            }
+        ]
+    )
     path = write_backup(tmp_path / "conflicting.json", backup)
 
     api = Api()
@@ -4034,10 +4192,14 @@ def test_sync_uid_match_wins_over_thread_conflict(mirror):
     lc_id = add_game("LC", "", lc_url=lc_url)
     f95_id = add_game("F95", "/games/f95/run.sh", f95_url=f95_url)
     uid = next(game for game in get_all_games() if game["id"] == lc_id)["sync_uid"]
-    backup = base_backup([{
-        "uid": uid,
-        "metadata": {"title": "Synced", "f95_url": f95_url, "lc_url": lc_url},
-    }])
+    backup = base_backup(
+        [
+            {
+                "uid": uid,
+                "metadata": {"title": "Synced", "f95_url": f95_url, "lc_url": lc_url},
+            }
+        ]
+    )
     result = apply_library_backup(
         backup, {"sections": [SECTION_METADATA]}, mirror=mirror, sync=True
     )
@@ -4054,14 +4216,20 @@ def test_sync_uid_match_wins_over_thread_conflict(mirror):
 
 
 def test_legacy_backup_restores_f95_latest_as_an_undated_version():
-    backup = base_backup([{"metadata": {
-        "title": "Legacy F95 game",
-        "f95_url": "https://f95zone.to/threads/42/",
-        "latest_version": "0.5",
-    }}])
+    backup = base_backup(
+        [
+            {
+                "metadata": {
+                    "title": "Legacy F95 game",
+                    "f95_url": "https://f95zone.to/threads/42/",
+                    "latest_version": "0.5",
+                }
+            }
+        ]
+    )
     result = apply_library_backup(backup, {"sections": [SECTION_METADATA]})
     assert result["created"] == 1
-    restored, = get_all_games()
+    (restored,) = get_all_games()
     assert restored["f95_latest_version"] == restored["latest_version"] == "0.5"
     assert restored["latest_site"] == "f95"
     assert restored["f95_latest_at"] == ""
@@ -4069,7 +4237,9 @@ def test_legacy_backup_restores_f95_latest_as_an_undated_version():
 
 def test_thread_states_backup_round_trip_and_older_backup(tmp_path):
     ids = [
-        add_game(f"State {i}", "", f95_url=f"https://f95zone.to/threads/state.{500 + i}/")
+        add_game(
+            f"State {i}", "", f95_url=f"https://f95zone.to/threads/state.{500 + i}/"
+        )
         for i in range(3)
     ]
     from core.database import get_game, update_game
@@ -4081,15 +4251,28 @@ def test_thread_states_backup_round_trip_and_older_backup(tmp_path):
     path = Path(str(exported["path"]))
     backup = json.loads(path.read_text(encoding="utf-8"))
     by_title = {game["metadata"]["title"]: game["metadata"] for game in backup["games"]}
-    assert (by_title["State 0"]["thread_onhold"], by_title["State 0"]["thread_abandoned"]) == (None, None)
-    assert (by_title["State 1"]["thread_onhold"], by_title["State 1"]["thread_abandoned"]) == (1, 0)
-    assert (by_title["State 2"]["thread_onhold"], by_title["State 2"]["thread_abandoned"]) == (0, 1)
+    assert (
+        by_title["State 0"]["thread_onhold"],
+        by_title["State 0"]["thread_abandoned"],
+    ) == (None, None)
+    assert (
+        by_title["State 1"]["thread_onhold"],
+        by_title["State 1"]["thread_abandoned"],
+    ) == (1, 0)
+    assert (
+        by_title["State 2"]["thread_onhold"],
+        by_title["State 2"]["thread_abandoned"],
+    ) == (0, 1)
 
     # Overwrite import restores every value, including unknown.
     update_game(ids[0], {"thread_onhold": 1, "thread_abandoned": 1})
     update_game(ids[1], {"thread_onhold": None, "thread_abandoned": None})
-    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})["success"]
-    states = [(get_game(i)["thread_onhold"], get_game(i)["thread_abandoned"]) for i in ids]
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})[
+        "success"
+    ]
+    states = [
+        (get_game(i)["thread_onhold"], get_game(i)["thread_abandoned"]) for i in ids
+    ]
     assert states == [(None, None), (1, 0), (0, 1)]
 
     # A backup made before these states existed keeps the stored values.
@@ -4097,15 +4280,23 @@ def test_thread_states_backup_round_trip_and_older_backup(tmp_path):
         del game["metadata"]["thread_onhold"]
         del game["metadata"]["thread_abandoned"]
     path.write_text(json.dumps(backup), encoding="utf-8")
-    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})["success"]
-    assert [(get_game(i)["thread_onhold"], get_game(i)["thread_abandoned"]) for i in ids] == states
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})[
+        "success"
+    ]
+    assert [
+        (get_game(i)["thread_onhold"], get_game(i)["thread_abandoned"]) for i in ids
+    ] == states
 
     # The same older backup gives unknown states to new games.
     with closing(get_connection()) as conn:
         conn.execute("DELETE FROM games")
         conn.commit()
-    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})["success"]
-    assert {(g["thread_onhold"], g["thread_abandoned"]) for g in get_all_games()} == {(None, None)}
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})[
+        "success"
+    ]
+    assert {(g["thread_onhold"], g["thread_abandoned"]) for g in get_all_games()} == {
+        (None, None)
+    }
 
 
 def _general_backup(general: dict[str, object]) -> dict[str, object]:
@@ -4115,18 +4306,28 @@ def _general_backup(general: dict[str, object]) -> dict[str, object]:
     return backup
 
 
-@pytest.mark.parametrize(("old", "mode"), [("0", "auto"), ("1", "yes"), (False, "auto"), (True, "yes")])
+@pytest.mark.parametrize(
+    ("old", "mode"), [("0", "auto"), ("1", "yes"), (False, "auto"), (True, "yes")]
+)
 def test_old_backup_lc_plus_maps_to_the_mode(old, mode):
     update_setting("lc_plus_mode", "no")
-    apply_library_backup(_general_backup({"lc_plus": old}), {"sections": [SECTION_SETTINGS_GENERAL]})
+    apply_library_backup(
+        _general_backup({"lc_plus": old}), {"sections": [SECTION_SETTINGS_GENERAL]}
+    )
     assert get_setting("lc_plus_mode") == mode
     assert get_setting("lc_plus") == ("1" if mode == "yes" else "0")
 
 
 def test_backup_lc_plus_mode_wins_and_unknown_is_auto():
-    apply_library_backup(_general_backup({"lc_plus": "1", "lc_plus_mode": "no"}), {"sections": [SECTION_SETTINGS_GENERAL]})
+    apply_library_backup(
+        _general_backup({"lc_plus": "1", "lc_plus_mode": "no"}),
+        {"sections": [SECTION_SETTINGS_GENERAL]},
+    )
     assert (get_setting("lc_plus_mode"), get_setting("lc_plus")) == ("no", "0")
-    apply_library_backup(_general_backup({"lc_plus_mode": "sometimes"}), {"sections": [SECTION_SETTINGS_GENERAL]})
+    apply_library_backup(
+        _general_backup({"lc_plus_mode": "sometimes"}),
+        {"sections": [SECTION_SETTINGS_GENERAL]},
+    )
     assert get_setting("lc_plus_mode") == "auto"
 
 
@@ -4134,7 +4335,9 @@ def test_export_keeps_the_lc_plus_mode_but_not_the_detected_tier():
     update_setting("lc_plus_mode", "auto")
     update_setting("lc_plus_detected", "plus")
     update_setting("lc_plus_detected_at", "2026-11-19T10:00:00Z")
-    general = build_library_backup({"sections": [SECTION_SETTINGS_GENERAL]})["settings"]["general"]
+    general = build_library_backup({"sections": [SECTION_SETTINGS_GENERAL]})[
+        "settings"
+    ]["general"]
     assert general["lc_plus_mode"] == "auto"
     assert "lc_plus_detected" not in general and "lc_plus_detected_at" not in general
     assert "plus" not in json.dumps(general).replace("lc_plus", "")
@@ -4142,5 +4345,7 @@ def test_export_keeps_the_lc_plus_mode_but_not_the_detected_tier():
 
 def test_restore_maps_engine_other_to_others():
     backup = base_backup([{"metadata": {"title": "LC game", "engine": "Other"}}])
-    assert apply_library_backup(backup, {"sections": [SECTION_METADATA]})["created"] == 1
+    assert (
+        apply_library_backup(backup, {"sections": [SECTION_METADATA]})["created"] == 1
+    )
     assert get_all_games()[0]["engine"] == "Others"

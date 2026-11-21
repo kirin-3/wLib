@@ -72,7 +72,11 @@ def _fingerprints(folder):
 @pytest.mark.parametrize("windows", [False, True])
 def test_gamelist_does_not_search_default_locations(monkeypatch, windows):
     monkeypatch.setattr("core.external_import.is_windows", lambda: windows)
-    assert locate_external_library("gamelist") == {"source": "gamelist", "path": "", "checked": []}
+    assert locate_external_library("gamelist") == {
+        "source": "gamelist",
+        "path": "",
+        "checked": [],
+    }
 
 
 def test_gamelist_maps_store_and_thread_metadata_without_play_status(tmp_path):
@@ -95,7 +99,9 @@ def test_gamelist_maps_store_and_thread_metadata_without_play_status(tmp_path):
             developer="",
             version="",
         ),
-        gamelist_record(3, name="Store only", url="", homepage="https://vndb.org/v2345"),
+        gamelist_record(
+            3, name="Store only", url="", homepage="https://vndb.org/v2345"
+        ),
         memo=gamelist_memo(b" [Completed];RPGM;Unity;3d game"),
     )
     backup, stats = read_external_library("gamelist", str(path))
@@ -107,14 +113,17 @@ def test_gamelist_maps_store_and_thread_metadata_without_play_status(tmp_path):
             "f95_url": "https://f95zone.to/threads/7005/",
             "version": "Final",
             "developer": "Sample Studio",
-            "links": [{"source": "vndb", "id": "v1234", "url": "https://vndb.org/v1234"}],
+            "links": [
+                {"source": "vndb", "id": "v1234", "url": "https://vndb.org/v1234"}
+            ],
             "thread_completed": 1,
             "engine": "RPGM",
         },
         "user_state": {"date_added": "2018-01-08T13:20:01"},
     }
     assert games["Invalid date"]["metadata"] == {
-        "title": "Invalid date", "f95_url": "https://f95zone.to/threads/7006/",
+        "title": "Invalid date",
+        "f95_url": "https://f95zone.to/threads/7006/",
     }
     assert "user_state" not in games["Invalid date"]
     assert "f95_url" not in games["Store only"]["metadata"]
@@ -178,14 +187,16 @@ def test_gamelist_reports_unreadable_and_keeps_source_files_unchanged(tmp_path):
     assert result["created"] == 1
     assert result["skipped_unreadable"] == 1
     assert _fingerprints(source_dir) == before
-    game, = get_all_games()
+    (game,) = get_all_games()
     assert game["thread_completed"] == 1
     assert game["engine"] == "RPGM"
     assert game["play_status"] == "Not Started"
 
 
 def test_gamelist_overwrite_keeps_local_executable_and_launch_targets(tmp_path):
-    game_id = add_game("Local", "/games/local/game.sh", "https://f95zone.to/threads/1234/")
+    game_id = add_game(
+        "Local", "/games/local/game.sh", "https://f95zone.to/threads/1234/"
+    )
     _ = add_game_launch_target(game_id, "Bonus", "/games/local/bonus.sh")
     path = write_gamelist(tmp_path, gamelist_record(name="Local"))
     result = import_external_library(
@@ -197,31 +208,46 @@ def test_gamelist_overwrite_keeps_local_executable_and_launch_targets(tmp_path):
         },
     )
     assert result["updated"] == 1
-    game, = get_all_games()
+    (game,) = get_all_games()
     assert game["exe_path"] == "/games/local/game.sh"
-    assert [target["label"] for target in list_game_launch_targets(game_id)] == ["Bonus"]
+    assert [target["label"] for target in list_game_launch_targets(game_id)] == [
+        "Bonus"
+    ]
 
 
 def test_existing_source_defaults_unreadable_to_zero():
     path = str(SMALL_PLAYNITE / "games.db")
-    assert inspect_external_library("playnite", path)["counts"]["skipped_unreadable"] == 0
+    assert (
+        inspect_external_library("playnite", path)["counts"]["skipped_unreadable"] == 0
+    )
     assert import_external_library("playnite", path)["skipped_unreadable"] == 0
 
 
 @pytest.mark.parametrize("merge_mode", ["overwrite", "fill_missing"])
-def test_playnite_missing_lookups_preserve_local_fields(tmp_path, monkeypatch, merge_mode):
+def test_playnite_missing_lookups_preserve_local_fields(
+    tmp_path, monkeypatch, merge_mode
+):
     from core import database
 
     monkeypatch.setattr(database, "DATA_DIR", str(tmp_path / "data"))
     game_id = add_game("Local", "", "https://f95zone.to/threads/12345/")
     database.create_collection("Keep", game_id)
-    database.update_game(game_id, {
-        "developer": "Local studio", "engine": "Ren'Py", "thread_completed": 1,
-        "play_status": "Completed",
-    })
-    result = import_external_library("playnite", str(SMALL_PLAYNITE / "games.db"), {
-        "merge_mode": merge_mode,
-    })
+    database.update_game(
+        game_id,
+        {
+            "developer": "Local studio",
+            "engine": "Ren'Py",
+            "thread_completed": 1,
+            "play_status": "Completed",
+        },
+    )
+    result = import_external_library(
+        "playnite",
+        str(SMALL_PLAYNITE / "games.db"),
+        {
+            "merge_mode": merge_mode,
+        },
+    )
     assert result["created"] == 1
     game = database.get_game(game_id)
     assert game["developer"] == "Local studio"
@@ -235,7 +261,11 @@ def test_playnite_missing_lookups_preserve_local_fields(tmp_path, monkeypatch, m
 def test_playnite_requires_game_collection_but_allows_zero_games(tmp_path, present):
     from core.backup_format import BackupValidationError
 
-    source = SMALL_PLAYNITE.parent / "empty-games.db" if present else SMALL_PLAYNITE / "categories.db"
+    source = (
+        SMALL_PLAYNITE.parent / "empty-games.db"
+        if present
+        else SMALL_PLAYNITE / "categories.db"
+    )
     shutil.copy2(source, tmp_path / "games.db")
     if present:
         preview = inspect_external_library("playnite", str(tmp_path / "games.db"))
@@ -246,9 +276,17 @@ def test_playnite_requires_game_collection_but_allows_zero_games(tmp_path, prese
     assert not get_all_games()
 
 
-@pytest.mark.parametrize("optional_file", [
-    "completionstatuses", "companies", "categories", "tags", "features", "genres",
-])
+@pytest.mark.parametrize(
+    "optional_file",
+    [
+        "completionstatuses",
+        "companies",
+        "categories",
+        "tags",
+        "features",
+        "genres",
+    ],
+)
 def test_playnite_missing_optional_file(tmp_path, optional_file):
     library = tmp_path / "library"
     shutil.copytree(SMALL_PLAYNITE, library)
@@ -257,13 +295,22 @@ def test_playnite_missing_optional_file(tmp_path, optional_file):
     assert len(backup["games"]) == 2
 
 
-@pytest.mark.parametrize("mutation,message", [
-    ("signature", "not a Playnite library"), ("version", "not a Playnite library"),
-    ("directory", "not a Playnite library"), ("present", "not a Playnite library"),
-    ("encrypted", "Encrypted"), ("locked", "Close Playnite"),
-    ("newer", "newer than wLib"), ("older", "Update Playnite"),
-])
-def test_playnite_invalid_optional_is_not_ignored(tmp_path, monkeypatch, mutation, message):
+@pytest.mark.parametrize(
+    "mutation,message",
+    [
+        ("signature", "not a Playnite library"),
+        ("version", "not a Playnite library"),
+        ("directory", "not a Playnite library"),
+        ("present", "not a Playnite library"),
+        ("encrypted", "Encrypted"),
+        ("locked", "Close Playnite"),
+        ("newer", "newer than wLib"),
+        ("older", "Update Playnite"),
+    ],
+)
+def test_playnite_invalid_optional_is_not_ignored(
+    tmp_path, monkeypatch, mutation, message
+):
     from core import database, game_covers
     from core.backup_format import BackupValidationError
 
@@ -286,7 +333,9 @@ def test_playnite_invalid_optional_is_not_ignored(tmp_path, monkeypatch, mutatio
     elif mutation == "locked":
         data[4095] = 1
     else:
-        (library / "database.json").write_text(json.dumps({"Version": 5 if mutation == "newer" else 3}))
+        (library / "database.json").write_text(
+            json.dumps({"Version": 5 if mutation == "newer" else 3})
+        )
     (library / "categories.db").write_bytes(data)
     before = _fingerprints(library)
     for operation in (inspect_external_library, import_external_library):
@@ -317,7 +366,12 @@ def test_playnite_avif_preview_import_merge_and_rollback(tmp_path, monkeypatch):
         assert game["cover_local"].endswith(".avif")
         assert game_covers.cover_path(game["cover_local"]).read_bytes() == expected
     old_names = {g["cover_local"] for g in get_all_games()}
-    assert import_external_library("playnite", source, {"merge_mode": "fill_missing"})["covers_copied"] == 0
+    assert (
+        import_external_library("playnite", source, {"merge_mode": "fill_missing"})[
+            "covers_copied"
+        ]
+        == 0
+    )
     assert {p.name for p in game_covers.covers_dir().iterdir()} == old_names
     assert import_external_library("playnite", source)["covers_copied"] == 2
     assert all(not game_covers.cover_path(name).exists() for name in old_names)
@@ -332,7 +386,9 @@ def test_playnite_avif_preview_import_merge_and_rollback(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="injected failure"):
         import_external_library("playnite", source)
     assert get_all_games() == previous
-    assert {p.name for p in game_covers.covers_dir().iterdir()} == {g["cover_local"] for g in previous}
+    assert {p.name for p in game_covers.covers_dir().iterdir()} == {
+        g["cover_local"] for g in previous
+    }
     assert _fingerprints(SMALL_PLAYNITE) == before
 
 
@@ -574,7 +630,9 @@ def test_playnite_action_working_dir_windows_and_fallback(tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize("fixture", [PLAYNITE_FIXTURE, SMALL_PLAYNITE])
-def test_playnite_failed_new_import_removes_copies_and_rows(tmp_path, monkeypatch, fixture):
+def test_playnite_failed_new_import_removes_copies_and_rows(
+    tmp_path, monkeypatch, fixture
+):
     from core import database, game_covers
 
     monkeypatch.setattr(database, "DATA_DIR", str(tmp_path / "data"))
@@ -591,13 +649,25 @@ def test_playnite_failed_new_import_removes_copies_and_rows(tmp_path, monkeypatc
     assert list(game_covers.covers_dir().iterdir()) == []
 
 
-@pytest.mark.parametrize("status,expected", [("Beaten", "Completed"), ("playing", "Playing"), ("Waiting For Update", "Waiting For Update"), ("Not Started", None), ("Played", None), ("Not Played", None), ("custom", None)])
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        ("Beaten", "Completed"),
+        ("playing", "Playing"),
+        ("Waiting For Update", "Waiting For Update"),
+        ("Not Started", None),
+        ("Played", None),
+        ("Not Played", None),
+        ("custom", None),
+    ],
+)
 def test_playnite_status_mapping(status, expected, tmp_path):
     from core.external_import import _translate_playnite_game
 
     game, _ = _translate_playnite_game(
         {"Name": "F95-12345", "CompletionStatusId": "test"},
-        {"completionstatuses": {"test": status}}, str(tmp_path),
+        {"completionstatuses": {"test": status}},
+        str(tmp_path),
     )
     assert game.get("user_state", {}).get("play_status") == expected
 
@@ -1853,9 +1923,7 @@ def test_playnite_string_enum_play_actions_are_imported(tmp_path, monkeypatch):
     )
     assert game is not None
     assert dropped == 0
-    assert (
-        game["executable_paths"]["exe_path"] == "/opt/games/sakura/game.sh"
-    )
+    assert game["executable_paths"]["exe_path"] == "/opt/games/sakura/game.sh"
     assert game["launch_targets"] == [
         {"label": "Play (32-bit)", "exe_path": "/opt/games/sakura/game32.sh"}
     ]
@@ -1933,7 +2001,12 @@ def test_xlibrary_reader_imports_store_links_and_link_only_games(tmp_path):
     [
         "library#1.db",
         # Windows does not allow "?" in file names.
-        pytest.param("what?.db", marks=pytest.mark.skipif(os.name == "nt", reason="not a valid Windows file name")),
+        pytest.param(
+            "what?.db",
+            marks=pytest.mark.skipif(
+                os.name == "nt", reason="not a valid Windows file name"
+            ),
+        ),
         "100%.db",
     ],
 )
@@ -1947,7 +2020,9 @@ def test_open_snapshot_reads_files_with_uri_characters_in_the_name(tmp_path, nam
     conn.close()
 
     with open_snapshot(str(source)) as snapshot:
-        assert [row["title"] for row in snapshot.execute("SELECT title FROM games")] == ["Demo"]
+        assert [
+            row["title"] for row in snapshot.execute("SELECT title FROM games")
+        ] == ["Demo"]
         with pytest.raises(sqlite3.OperationalError):
             snapshot.execute("INSERT INTO games VALUES ('x')")
 
@@ -1956,10 +2031,14 @@ def test_atlas_import_keeps_lc_and_matches_lc_only(tmp_path):
     source = tmp_path / "data.db"
     _write_atlas_db(source)
     with sqlite3.connect(source) as conn:
-        conn.execute("CREATE TABLE atlas_mappings (record_id INTEGER, atlas_id INTEGER)")
+        conn.execute(
+            "CREATE TABLE atlas_mappings (record_id INTEGER, atlas_id INTEGER)"
+        )
         conn.execute("CREATE TABLE lewdcorner_data (lc_id INTEGER, atlas_id INTEGER)")
         conn.executemany("INSERT INTO atlas_mappings VALUES (?,?)", [(1, 10), (2, 20)])
-        conn.executemany("INSERT INTO lewdcorner_data VALUES (?,?)", [(5583, 10), (99, 20)])
+        conn.executemany(
+            "INSERT INTO lewdcorner_data VALUES (?,?)", [(5583, 10), (99, 20)]
+        )
         conn.execute("DELETE FROM versions WHERE record_id = 2")
     backup, stats = read_external_library("atlas", str(source))
     assert stats["skipped_no_identity"] == 0

@@ -18,7 +18,9 @@ class SourceContext:
     now: Callable[[], str]
     rows: int = 0
 
-    def upsert(self, table: str, key: str, rows: Sequence[Mapping[str, object]]) -> None:
+    def upsert(
+        self, table: str, key: str, rows: Sequence[Mapping[str, object]]
+    ) -> None:
         self.rows += self.catalog.upsert(table, key, rows, self.now())
 
 
@@ -55,4 +57,3 @@ class Source(Protocol):
     def reset_sweep(self, ctx: SourceContext) -> None:
         """Clear the sweep cursor after a completed sweep."""
         ...
-

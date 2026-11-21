@@ -20,7 +20,19 @@ GAMESCOPE_PIXEL = {
     "fps_limit": "",
     "args": [],
 }
-GAMESCOPE_PREFIX = ["/usr/bin/gamescope", "-f", "-w", "816", "-h", "624", "-S", "integer", "-F", "nearest", "--"]
+GAMESCOPE_PREFIX = [
+    "/usr/bin/gamescope",
+    "-f",
+    "-w",
+    "816",
+    "-h",
+    "624",
+    "-S",
+    "integer",
+    "-F",
+    "nearest",
+    "--",
+]
 
 
 @pytest.fixture
@@ -29,35 +41,54 @@ def gamescope_host(monkeypatch, tmp_path):
     monkeypatch.setattr("core.launcher.is_windows", lambda: False)
     monkeypatch.setattr("core.launcher.get_setting", lambda _key: None)
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr("core.launcher.gamescope_mod.in_gamescope_session", lambda: False)
+    monkeypatch.setattr(
+        "core.launcher.gamescope_mod.in_gamescope_session", lambda: False
+    )
     monkeypatch.setattr("core.launcher.display_info.screen_size", lambda: None)
 
 
 def _launch_command(mode: str, args: str) -> list[str]:
-    with (patch("os.path.exists", return_value=True),
-          patch("os.access", return_value=True),
-          patch("core.launcher.host_which", side_effect=lambda name: f"/usr/bin/{name}"),
-          patch("subprocess.Popen") as popen, patch("threading.Thread")):
-        result = Launcher().launch("/opt/game/game.sh", args, launch_mode=mode, gamescope=GAMESCOPE_PIXEL)
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=True),
+        patch("core.launcher.host_which", side_effect=lambda name: f"/usr/bin/{name}"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch(
+            "/opt/game/game.sh", args, launch_mode=mode, gamescope=GAMESCOPE_PIXEL
+        )
     assert result["success"]
     return popen.call_args.args[0]
 
 
-@pytest.mark.parametrize(("mode", "args"), [
-    ("native", "%command% --profile gamescope"),
-    ("native", "--profile gamescope"),
-])
+@pytest.mark.parametrize(
+    ("mode", "args"),
+    [
+        ("native", "%command% --profile gamescope"),
+        ("native", "--profile gamescope"),
+    ],
+)
 def test_game_argument_named_gamescope_keeps_the_wrapper(gamescope_host, mode, args):
     command = _launch_command(mode, args)
     assert command[: len(GAMESCOPE_PREFIX)] == GAMESCOPE_PREFIX
-    assert command[len(GAMESCOPE_PREFIX):] == ["/opt/game/game.sh", "--profile", "gamescope"]
+    assert command[len(GAMESCOPE_PREFIX) :] == [
+        "/opt/game/game.sh",
+        "--profile",
+        "gamescope",
+    ]
 
 
-@pytest.mark.parametrize(("mode", "args"), [
-    ("native", "/usr/bin/gamescope -f -- %command%"),
-    ("custom", "/usr/bin/gamescope -f -- /opt/game/game.sh"),
-])
-def test_command_prefix_that_runs_gamescope_skips_the_wrapper(gamescope_host, mode, args):
+@pytest.mark.parametrize(
+    ("mode", "args"),
+    [
+        ("native", "/usr/bin/gamescope -f -- %command%"),
+        ("custom", "/usr/bin/gamescope -f -- /opt/game/game.sh"),
+    ],
+)
+def test_command_prefix_that_runs_gamescope_skips_the_wrapper(
+    gamescope_host, mode, args
+):
     command = _launch_command(mode, args)
     assert command[0] == "/usr/bin/gamescope"
     assert command.count("/usr/bin/gamescope") == 1
@@ -114,8 +145,19 @@ def test_wine_wait_ignores_the_gamescope_reaper(tmp_path):
     reaper = tmp_path / "gamescopereaper"
     reaper.symlink_to("/bin/sleep")
     leader = subprocess.Popen(
-        ["sh", "-c", '"$1" 1000 & shift; exec sh -c "$@"', "sh", str(reaper),
-         GAMESCOPE_WINE_WAIT, "sh", str(ws), "sh", "-c", "exit 7"],
+        [
+            "sh",
+            "-c",
+            '"$1" 1000 & shift; exec sh -c "$@"',
+            "sh",
+            str(reaper),
+            GAMESCOPE_WINE_WAIT,
+            "sh",
+            str(ws),
+            "sh",
+            "-c",
+            "exit 7",
+        ],
         start_new_session=True,
     )
     try:

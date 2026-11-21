@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The torrent helper sends "finished" only after a confirmed disk cache flush."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -43,7 +44,9 @@ class Clock:
         return self.now
 
 
-def make_engine(monkeypatch: pytest.MonkeyPatch, state: str = "seeding") -> tuple[Any, FakeHandle, list[dict[str, object]], Clock]:
+def make_engine(
+    monkeypatch: pytest.MonkeyPatch, state: str = "seeding"
+) -> tuple[Any, FakeHandle, list[dict[str, object]], Clock]:
     events: list[dict[str, object]] = []
     clock = Clock()
     monkeypatch.setattr(th.time, "monotonic", clock)
@@ -51,7 +54,11 @@ def make_engine(monkeypatch: pytest.MonkeyPatch, state: str = "seeding") -> tupl
     engine._session = FakeSession()
     handle = FakeHandle()
     engine._entries["j"] = th._Entry("j", "/nowhere", handle)  # pyright: ignore[reportArgumentType]
-    engine._status = lambda entry: {"id": entry.job_id, "state": state, "finished": True}
+    engine._status = lambda entry: {
+        "id": entry.job_id,
+        "state": state,
+        "finished": True,
+    }
     return engine, handle, events, clock
 
 
@@ -59,7 +66,9 @@ def names(events: list[dict[str, object]]) -> list[object]:
     return [e["event"] for e in events if e["event"] != "status"]
 
 
-def test_no_finished_without_flush_alert_and_flush_is_asked_again(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_finished_without_flush_alert_and_flush_is_asked_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     engine, handle, events, clock = make_engine(monkeypatch)
     engine.tick()
     assert handle.flushes == 1
@@ -79,13 +88,22 @@ def test_flush_alert_sends_finished(monkeypatch: pytest.MonkeyPatch) -> None:
     assert names(events) == ["finished"]
 
 
-def test_flush_timeout_drops_torrent_and_reports_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_flush_timeout_drops_torrent_and_reports_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     engine, handle, events, clock = make_engine(monkeypatch)
     engine.tick()
     clock.now += th.FLUSH_GIVE_UP + 1
     engine.tick()
     errors = [e for e in events if e["event"] == "error"]
-    assert errors == [{"event": "error", "message": th.MSG_FLUSH_TIMEOUT, "id": "j", "code": "flush_timeout"}]
+    assert errors == [
+        {
+            "event": "error",
+            "message": th.MSG_FLUSH_TIMEOUT,
+            "id": "j",
+            "code": "flush_timeout",
+        }
+    ]
     assert "finished" not in names(events)
     assert "j" not in engine._entries and engine._session.removed == [handle]
     assert all(t["id"] != "j" for t in events[-1]["torrents"])  # pyright: ignore[reportGeneralTypeIssues]

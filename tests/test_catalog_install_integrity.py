@@ -67,7 +67,9 @@ def test_sidecar_without_fingerprint_keeps_the_catalog_and_records_it(tmp_path, 
         assert json.load(handle)[SIDECAR_DB_SHA256] == recorded
 
 
-def test_failed_second_temp_file_closes_and_removes_the_first(tmp_path, server, monkeypatch):
+def test_failed_second_temp_file_closes_and_removes_the_first(
+    tmp_path, server, monkeypatch
+):
     server.publish(tmp_path, "2026-10-27T05:00:00Z", titles=("A",))
     client = _client(tmp_path)
     real_mkstemp = tempfile.mkstemp

@@ -89,7 +89,9 @@ def cover_path(name: object, *, folder: Path | None = None) -> Path | None:
     return child_in_folder(folder or covers_dir().resolve(), name)
 
 
-def cover_file(name: object, *, folder: Path | None = None) -> tuple[Path, os.stat_result] | None:
+def cover_file(
+    name: object, *, folder: Path | None = None
+) -> tuple[Path, os.stat_result] | None:
     """A local cover that exists as a regular file, with its stat."""
     if not isinstance(name, str) or not COVER_NAME_RE.fullmatch(name):
         return None
@@ -147,8 +149,11 @@ def _image_type(header: bytes) -> str:
 
 def _inspect_image(stream: BinaryIO) -> tuple[str, bytes]:
     """Read a bounded prefix once, shared by validation and byte-preserving copy."""
-    source_size = (len(stream.getbuffer()) if isinstance(stream, io.BytesIO)
-                   else os.fstat(stream.fileno()).st_size)
+    source_size = (
+        len(stream.getbuffer())
+        if isinstance(stream, io.BytesIO)
+        else os.fstat(stream.fileno()).st_size
+    )
     if source_size > MAX_COVER_SIZE:
         raise ValueError("The image is larger than 20 MiB.")
     header = stream.read(12)
@@ -173,11 +178,7 @@ def _open_image_source(path: str | Path) -> BinaryIO:
     O_NONBLOCK makes the open itself safe, then the fstat check rejects
     anything that is not a regular file.
     """
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_NONBLOCK", 0)
-        | getattr(os, "O_BINARY", 0)
-    )
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
     fd = os.open(os.fspath(path), flags)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -263,7 +264,9 @@ def cached_cover_path(name: object, *, folder: Path | None = None) -> Path | Non
     return child_in_folder(folder or cache_covers_dir().resolve(), name)
 
 
-def cached_cover_file(name: object, *, folder: Path | None = None) -> tuple[Path, os.stat_result] | None:
+def cached_cover_file(
+    name: object, *, folder: Path | None = None
+) -> tuple[Path, os.stat_result] | None:
     """A cached cover that exists as a regular file, with its stat."""
     if not isinstance(name, str) or not COVER_NAME_RE.fullmatch(name):
         return None
@@ -302,7 +305,9 @@ def store_lc_copy(key: str, data: bytes) -> Path:
     if not LC_KEY_RE.fullmatch(key):
         raise ValueError("Invalid LewdCorner image key")
     with io.BytesIO(data) as source:
-        return cache_covers_dir() / _store_cover(source, cache_covers_dir(), f"lc-{key}")
+        return cache_covers_dir() / _store_cover(
+            source, cache_covers_dir(), f"lc-{key}"
+        )
 
 
 def fetch_lc_image(url: str, *, background: bool) -> bytes:
@@ -317,7 +322,9 @@ def fetch_lc_image(url: str, *, background: bool) -> bytes:
     if answer.status != 200:
         raise ValueError(f"LewdCorner answered HTTP {answer.status}")
     if content_type not in COVER_TYPES.values():
-        raise ValueError(f"LewdCorner answered {content_type or 'no content type'}, not an image")
+        raise ValueError(
+            f"LewdCorner answered {content_type or 'no content type'}, not an image"
+        )
     if not answer.body or len(answer.body) > MAX_COVER_SIZE:
         raise ValueError("The LewdCorner image is empty or larger than 20 MiB")
     _ = validate_image_bytes(answer.body)
@@ -369,7 +376,8 @@ ERROR_RETRY_SECONDS = 60
 
 class CoverCacheService:
     def __init__(
-        self, on_change: Callable[[], None] | None = None,
+        self,
+        on_change: Callable[[], None] | None = None,
         lc_screenshot_urls: Callable[[], Iterable[str]] | None = None,
         on_lc_cover: Callable[[], None] | None = None,
     ) -> None:
@@ -391,7 +399,9 @@ class CoverCacheService:
 
     def start(self) -> None:
         if self._thread is None and not self._stop.is_set():
-            self._thread = threading.Thread(target=self._run, name="cover-cache", daemon=True)
+            self._thread = threading.Thread(
+                target=self._run, name="cover-cache", daemon=True
+            )
             self._thread.start()
             self.wake()
 
@@ -420,8 +430,14 @@ class CoverCacheService:
                     sizes.append(path.stat().st_size)
                 except OSError:
                     pass
-            return {"success": True, "count": len(sizes), "bytes": sum(sizes),
-                    "running": bool(self._thread and self._thread.is_alive() and not self.disabled)}
+            return {
+                "success": True,
+                "count": len(sizes),
+                "bytes": sum(sizes),
+                "running": bool(
+                    self._thread and self._thread.is_alive() and not self.disabled
+                ),
+            }
 
     def purge(self) -> None:
         with self._store_lock:
@@ -450,7 +466,11 @@ class CoverCacheService:
         folder = cache_covers_dir()
         if not folder.exists():
             return []
-        return [path for path in folder.iterdir() if LC_COPY_RE.fullmatch(path.name) and path.is_file()]
+        return [
+            path
+            for path in folder.iterdir()
+            if LC_COPY_RE.fullmatch(path.name) and path.is_file()
+        ]
 
     def _sweep(self) -> None:
         with self._store_lock:
@@ -467,7 +487,11 @@ class CoverCacheService:
         """Delete LC screenshot copies that no library game shows any more."""
         if self.lc_screenshot_urls is None:
             return
-        keys = {lc_image_key(url) for url in self.lc_screenshot_urls() if lewdcorner.fetchable_image_url(url)}
+        keys = {
+            lc_image_key(url)
+            for url in self.lc_screenshot_urls()
+            if lewdcorner.fetchable_image_url(url)
+        }
         with self._store_lock:
             for path in self._lc_copies():
                 match = LC_COPY_RE.fullmatch(path.name)
@@ -500,7 +524,12 @@ class CoverCacheService:
                 if self.disabled or self._stop.is_set():
                     return
                 path = cached_cover_path(game.get("cover_cache"))
-                if url and game.get("cover_cache_url") == url and path is not None and path.is_file():
+                if (
+                    url
+                    and game.get("cover_cache_url") == url
+                    and path is not None
+                    and path.is_file()
+                ):
                     continue
                 delete_cached_cover(game.get("cover_cache"))
                 database.clear_game_cover_cache(game_id)
@@ -510,18 +539,28 @@ class CoverCacheService:
                 # Other LC images (thumbnails, proxy images) are never fetched.
                 if lewdcorner.fetchable_image_url(url):
                     lc_work.append((game_id, url))
-            elif not self._fetch_and_store(game_id, url, lambda url: f95_get_bytes(url, MAX_COVER_SIZE), waiting):
+            elif not self._fetch_and_store(
+                game_id, url, lambda url: f95_get_bytes(url, MAX_COVER_SIZE), waiting
+            ):
                 return
         for index, (game_id, url) in enumerate(lc_work):
             # A missing extension is not a failure: the URL waits, without a
             # timer, until an extension with LC image support connects. The
             # hourly limit is not a failure either: the rest waits for it.
             # Waiting URLs keep their failure counts.
-            if time.monotonic() < self._lc_resume_at or not extension_bridge.can_fetch_lc_images():
+            if (
+                time.monotonic() < self._lc_resume_at
+                or not extension_bridge.can_fetch_lc_images()
+            ):
                 waiting.update(url for _game_id, url in lc_work[index:])
                 break
             try:
-                if not self._fetch_and_store(game_id, url, lambda url: fetch_lc_image(url, background=True), waiting):
+                if not self._fetch_and_store(
+                    game_id,
+                    url,
+                    lambda url: fetch_lc_image(url, background=True),
+                    waiting,
+                ):
                     return
                 if self.on_lc_cover is not None and url not in self._failed:
                     self.on_lc_cover()
@@ -536,7 +575,11 @@ class CoverCacheService:
             del self._failed[url]
 
     def _fetch_and_store(
-        self, game_id: int, url: str, download: Callable[[str], bytes], waiting: set[str],
+        self,
+        game_id: int,
+        url: str,
+        download: Callable[[str], bytes],
+        waiting: set[str],
     ) -> bool:
         """Cache one remote cover; False when the pass must stop (purge or stop).
 
@@ -566,7 +609,10 @@ class CoverCacheService:
                     delete_cached_cover(name)
                     raise
             _ = self._failed.pop(url, None)
-        except (extension_bridge.BridgeUnavailable, extension_bridge.LcImageLimitReached):
+        except (
+            extension_bridge.BridgeUnavailable,
+            extension_bridge.LcImageLimitReached,
+        ):
             raise
         except Exception as exc:
             count = (failure[0] if failure else 0) + 1

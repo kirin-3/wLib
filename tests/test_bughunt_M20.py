@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A broken event pipe must not stop the torrent helper from saving resume data."""
+
 from __future__ import annotations
 
 import io

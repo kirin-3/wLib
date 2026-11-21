@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Library sync, JSON backup and import from other apps."""
+
 from __future__ import annotations
 
 import sys
@@ -271,7 +272,11 @@ class SyncMixin(ApiBase):
         added_ids = cast(list[int], result["added_ids"])
         metadata_check = "none"
         if added_ids:
-            metadata_check = "started" if self.check_all_updates(added_ids, skip_archived=True).get("success") else "busy"
+            metadata_check = (
+                "started"
+                if self.check_all_updates(added_ids, skip_archived=True).get("success")
+                else "busy"
+            )
         self._refresh_synced_library()
         return {
             "success": True,
@@ -300,7 +305,10 @@ class SyncMixin(ApiBase):
             if (
                 isinstance(game_id, int)
                 and game_id in wanted
-                and ((isinstance(url, str) and url.strip()) or lewdcorner.lc_active(game, lc_enabled))
+                and (
+                    (isinstance(url, str) and url.strip())
+                    or lewdcorner.lc_active(game, lc_enabled)
+                )
             ):
                 ids_with_url.append(game_id)
         return ids_with_url

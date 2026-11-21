@@ -34,7 +34,9 @@ def test_failed_update_keeps_the_previous_backup_and_restore_works(tmp_path):
     assert (root / "winhttp.dll").read_text() == "v2"
     assert not (root / ".wlib-bepinex-old-backup").exists()
     # The backup from the v2 update (holding v1) is still there.
-    assert (root / "BepInEx.wlib-backup/BepInEx/core/BepInEx.Core.dll").read_text() == "v1"
+    assert (
+        root / "BepInEx.wlib-backup/BepInEx/core/BepInEx.Core.dll"
+    ).read_text() == "v1"
 
     restore(str(root))
     assert core.read_text() == "v1"
@@ -79,7 +81,9 @@ def test_restore_rolls_back_when_a_move_fails(tmp_path, monkeypatch):
     real_move = shutil.move
 
     def failing_move(source, destination):
-        if str(destination).endswith("BepInEx.Core.dll") and "wlib-backup" in str(source):
+        if str(destination).endswith("BepInEx.Core.dll") and "wlib-backup" in str(
+            source
+        ):
             raise OSError("disk error")
         return real_move(source, destination)
 

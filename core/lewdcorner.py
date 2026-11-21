@@ -18,12 +18,28 @@ _THREAD_PATH = re.compile(r"^/threads/(?:[^/]+\.)?([0-9]+)(?:/.*)?$", re.IGNOREC
 # SQLite stores thread IDs as signed 64-bit integers; a larger ID is no real thread.
 MAX_THREAD_ID = 2**63 - 1
 LC_ENGINE_PREFIXES = (
-    "Flash", "HTML", "Java", "QSP", "RAGS", "RPGM", "Ren'Py", "Unity",
-    "Unreal Engine", "WebGL", "Wolf RPG", "Godot", "ADRIFT", "Tads", "Other",
+    "Flash",
+    "HTML",
+    "Java",
+    "QSP",
+    "RAGS",
+    "RPGM",
+    "Ren'Py",
+    "Unity",
+    "Unreal Engine",
+    "WebGL",
+    "Wolf RPG",
+    "Godot",
+    "ADRIFT",
+    "Tads",
+    "Other",
 )
 # LC's engine "Other" is the engine F95 names "Others".
 _ENGINE_NAMES = {"Other": "Others"}
-_ENGINES = {normalize_prefix_label(name): _ENGINE_NAMES.get(name, name) for name in LC_ENGINE_PREFIXES}
+_ENGINES = {
+    normalize_prefix_label(name): _ENGINE_NAMES.get(name, name)
+    for name in LC_ENGINE_PREFIXES
+}
 # LC prefix ids that share an engine's name but are not an engine: 29 is the
 # render prefix "Other Render Engine", which LC labels "Other" like engine 22.
 LC_NON_ENGINE_PREFIX_IDS = frozenset({29})
@@ -43,9 +59,15 @@ def lc_prefix(name: object, prefix_id: object = None) -> LcPrefix | None:
     number: int | None = None
     if isinstance(prefix_id, int) and not isinstance(prefix_id, bool):
         number = prefix_id
-    elif isinstance(prefix_id, str) and prefix_id.strip().isascii() and prefix_id.strip().isdigit():
+    elif (
+        isinstance(prefix_id, str)
+        and prefix_id.strip().isascii()
+        and prefix_id.strip().isdigit()
+    ):
         number = int(prefix_id.strip())
     return LcPrefix(name.strip(), number)
+
+
 LC_SETTINGS = ("lc_enabled", "lc_plus")
 # "LC Plus" is Auto, Yes or No. `lc_plus` keeps "1" only for Yes, so an older
 # wLib that reads it keeps an explicit Yes. The detected tier is device-local.
@@ -189,7 +211,12 @@ def page_screenshots(raw: object) -> list[str]:
         if not isinstance(item, str):
             continue
         url = item.strip()
-        if len(url) <= 2048 and url.lower().startswith("https://") and not any(c.isspace() for c in url) and url not in urls:
+        if (
+            len(url) <= 2048
+            and url.lower().startswith("https://")
+            and not any(c.isspace() for c in url)
+            and url not in urls
+        ):
             urls.append(url)
             if len(urls) >= MAX_PAGE_SCREENSHOTS:
                 break
@@ -202,7 +229,10 @@ def prefix_details(prefixes: Iterable[LcPrefix | str]) -> tuple[str, ThreadPrefi
     A prefix with a known non-engine id (the render "Other") never sets the
     engine; a prefix without an id is matched by its name alone.
     """
-    items = [prefix if isinstance(prefix, LcPrefix) else LcPrefix(str(prefix or "")) for prefix in prefixes]
+    items = [
+        prefix if isinstance(prefix, LcPrefix) else LcPrefix(str(prefix or ""))
+        for prefix in prefixes
+    ]
     engine = next(
         (
             _ENGINES[label]
@@ -321,7 +351,9 @@ def parse_feed_page(body: str) -> FeedPage:
         if at:
             dates.append(at)
         thread_id = str(item.get("id") or "").lstrip("0")
-        if str(item.get("node_id")) not in GAME_NODES or not re.fullmatch(r"[0-9]+", thread_id):
+        if str(item.get("node_id")) not in GAME_NODES or not re.fullmatch(
+            r"[0-9]+", thread_id
+        ):
             continue
         badges = item.get("badges")
         prefixes: list[LcPrefix] = []
@@ -331,13 +363,21 @@ def parse_feed_page(body: str) -> FeedPage:
                     entry = cast(dict[str, object], badge)
                     if prefix := lc_prefix(entry.get("name"), entry.get("id")):
                         prefixes.append(prefix)
-        _ = versions.setdefault(thread_id, LcVersion(
-            version=str(item.get("version") or "").strip(),
-            at=at,
-            premium=item.get("is_premium") is True,
-            prefixes=tuple(prefixes),
-        ))
-    return FeedPage(versions, min(dates, default=""), max(dates, default=""), page.get("hasMore") is True)
+        _ = versions.setdefault(
+            thread_id,
+            LcVersion(
+                version=str(item.get("version") or "").strip(),
+                at=at,
+                premium=item.get("is_premium") is True,
+                prefixes=tuple(prefixes),
+            ),
+        )
+    return FeedPage(
+        versions,
+        min(dates, default=""),
+        max(dates, default=""),
+        page.get("hasMore") is True,
+    )
 
 
 @final
@@ -366,7 +406,9 @@ class _ThreadPage(HTMLParser):
         classes = (attr.get("class") or "").split()
         if tag == "html":
             self.template = attr.get("data-template") or ""
-            node = re.fullmatch(r"node-([0-9]{1,9})", attr.get("data-container-key") or "")
+            node = re.fullmatch(
+                r"node-([0-9]{1,9})", attr.get("data-container-key") or ""
+            )
             self.node = int(node.group(1)) if node else None
             match attr.get("data-logged-in"):
                 case "true":
@@ -466,4 +508,6 @@ def parse_thread_page(
         raise LcUpdateError("lc_extract_failed")
     if status != 200 or (not page.version_read and page.template != "thread_view"):
         raise LcUpdateError("lc_extract_failed")
-    return LcVersion("".join(page.version).strip(), premium=premium, prefixes=tuple(page.prefixes))
+    return LcVersion(
+        "".join(page.version).strip(), premium=premium, prefixes=tuple(page.prefixes)
+    )

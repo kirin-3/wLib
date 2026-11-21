@@ -46,7 +46,9 @@ def _request(endpoint, page, ids):
     "page, own_link, ids",
     [(DLSITE, DLSITE, []), (RYUU_POST, RYUU_SHORTLINK, ["ryuugames:42"])],
 )
-def test_extension_prefers_page_identity(endpoint, page, own_link, ids, tmp_path, monkeypatch):
+def test_extension_prefers_page_identity(
+    endpoint, page, own_link, ids, tmp_path, monkeypatch
+):
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "wlib.db"))
     database.init_db()
     with closing(sqlite3.connect(tmp_path / "catalog.db")) as catalog, catalog:
@@ -66,7 +68,9 @@ def test_extension_prefers_page_identity(endpoint, page, own_link, ids, tmp_path
             """ VALUES (42, 'Work', 'Work', '["v1"]', ?, '', '')""",
             (RYUU_POST,),
         )
-        catalog.execute("INSERT INTO links VALUES ('vndb', 'v1', 'dlsite', 'RJ123', 'vndb')")
+        catalog.execute(
+            "INSERT INTO links VALUES ('vndb', 'v1', 'dlsite', 'RJ123', 'vndb')"
+        )
 
     related = database.add_game("Related work", "")
     exact = database.add_game("Exact work", "/game")

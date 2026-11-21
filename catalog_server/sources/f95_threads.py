@@ -29,14 +29,21 @@ OVERVIEW_MAX_CHARS = 10_000
 QUEUE_CHUNK = 50
 
 _LOGGED_IN_RE = re.compile(r'<html[^>]*\sdata-logged-in="(true|false)"')
-_FIRST_POST_RE = re.compile(r'<article\b[^>]*\bmessage--post\b[^>]*>', re.S)
+_FIRST_POST_RE = re.compile(r"<article\b[^>]*\bmessage--post\b[^>]*>", re.S)
 _LABEL_RE = re.compile(r"^([A-Za-z][A-Za-z ]{0,30}?)\s*:\s*(.*)$")
 
 _ORIGINAL_TITLE_LABELS = frozenset(
     {"original title", "original name", "japanese title", "native title"}
 )
 _ALIAS_LABELS = frozenset(
-    {"aliases", "alias", "also known as", "aka", "alternative title", "alternative titles"}
+    {
+        "aliases",
+        "alias",
+        "also known as",
+        "aka",
+        "alternative title",
+        "alternative titles",
+    }
 )
 _LANGUAGE_LABELS = frozenset({"language", "languages"})
 # Lines whose links belong to the game or its developer, not to a translator.
@@ -44,8 +51,9 @@ _ID_LINK_LABELS = frozenset({"developer", "developers", "publisher", "store", "s
 _ALIAS_SPLIT_RE = re.compile(r"\s*(?:,|;|\||\s/\s)\s*")
 
 _SKIP_TAGS = frozenset({"noscript", "script", "style", "button", "iframe", "template"})
-_BLOCK_TAGS = frozenset({"div", "p", "li", "ul", "ol", "blockquote", "table", "tr", "h1",
-                         "h2", "h3", "h4"})
+_BLOCK_TAGS = frozenset(
+    {"div", "p", "li", "ul", "ol", "blockquote", "table", "tr", "h1", "h2", "h3", "h4"}
+)
 
 
 class _PostText(HTMLParser):
@@ -186,12 +194,16 @@ class F95ThreadsSource:
 
     def _read(self, ctx: SourceContext, thread_id: int, thread_ts: int) -> None:
         response = ctx.pacer.request(
-            self.name, THREAD_URL.format(thread_id=thread_id), ok_statuses=MISSING_STATUSES
+            self.name,
+            THREAD_URL.format(thread_id=thread_id),
+            ok_statuses=MISSING_STATUSES,
         )
         login = _LOGGED_IN_RE.search(response.text())
         if login is None:
             # Not an F95 page at all, e.g. a Cloudflare challenge: stop, store nothing.
-            raise ValueError(f"F95 answered HTTP {response.status} without its own page")
+            raise ValueError(
+                f"F95 answered HTTP {response.status} without its own page"
+            )
         if login.group(1) != "true":
             # Without the login F95 hides the links; never store such a page.
             raise ValueError(NO_LOGIN)
@@ -200,12 +212,17 @@ class F95ThreadsSource:
             details: dict[str, object] = {"status": "missing"}
         else:
             try:
-                details = {"status": "ok", **parse_first_post(first_post_html(response.text()))}
+                details = {
+                    "status": "ok",
+                    **parse_first_post(first_post_html(response.text())),
+                }
             except ValueError:
                 # Kept so one odd page does not block the queue; read again when it changes.
                 log.warning("f95_threads: no first post on thread %s", thread_id)
                 details = {"status": "unreadable"}
-        ctx.rows += ctx.catalog.upsert_f95_details(thread_id, thread_ts, ctx.now(), details)
+        ctx.rows += ctx.catalog.upsert_f95_details(
+            thread_id, thread_ts, ctx.now(), details
+        )
 
     def incremental(self, ctx: SourceContext) -> None:
         if "f95" in ctx.pacer.paused:

@@ -51,7 +51,9 @@ class CoverFolders(NamedTuple):
 
 def resolve_cover_folders() -> CoverFolders:
     """Resolve the three cover folders once, for a pass over many games."""
-    return CoverFolders(covers_dir().resolve(), cache_covers_dir().resolve(), cards_dir().resolve())
+    return CoverFolders(
+        covers_dir().resolve(), cache_covers_dir().resolve(), cards_dir().resolve()
+    )
 
 
 def card_path(name: object, *, folder: Path | None = None) -> Path | None:
@@ -69,7 +71,9 @@ def card_file(name: object, *, folder: Path | None = None) -> Path | None:
     return None if found is None else found[0]
 
 
-def card_paths(source_name: object, *, folder: Path | None = None) -> tuple[Path, Path] | None:
+def card_paths(
+    source_name: object, *, folder: Path | None = None
+) -> tuple[Path, Path] | None:
     """(still, animated) copy paths for a cover file name, or None if invalid."""
     if not isinstance(source_name, str) or not _SOURCE_RE.fullmatch(source_name):
         return None
@@ -134,13 +138,18 @@ def _is_animated_uncached(path: Path) -> bool:
         head = handle.read(64)
     if suffix == ".webp":
         # The extended header (VP8X) carries an animation flag.
-        return head[:4] == b"RIFF" and head[8:16] == b"WEBPVP8X" and len(head) > 20 and bool(head[20] & 0x02)
+        return (
+            head[:4] == b"RIFF"
+            and head[8:16] == b"WEBPVP8X"
+            and len(head) > 20
+            and bool(head[20] & 0x02)
+        )
     if suffix == ".avif":
         # An image sequence lists the `avis` brand in its `ftyp` box.
         if head[4:8] != b"ftyp":
             return False
         size = int.from_bytes(head[:4], "big")
-        return b"avis" in head[8:min(size, len(head))]
+        return b"avis" in head[8 : min(size, len(head))]
     return False
 
 
@@ -173,7 +182,9 @@ def webp_writer_available() -> bool:
     try:
         from PyQt6.QtGui import QImageWriter
 
-        return b"webp" in {fmt.data().lower() for fmt in QImageWriter.supportedImageFormats()}
+        return b"webp" in {
+            fmt.data().lower() for fmt in QImageWriter.supportedImageFormats()
+        }
     except Exception:
         return False
 
@@ -197,7 +208,9 @@ def _write_atomic(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".card-", delete=False) as out:
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent, prefix=".card-", delete=False
+        ) as out:
             temp = out.name
             _ = out.write(data)
         os.replace(temp, path)
@@ -244,7 +257,9 @@ def make_card_copies(source_path: str | Path) -> tuple[bool, bool]:
             if image.size() == size:
                 return image
             return image.scaled(
-                size, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
+                size,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
             )
 
         still = _encode(shrink(first))
@@ -266,11 +281,15 @@ def make_card_copies(source_path: str | Path) -> tuple[bool, bool]:
                 repeats = reader.loopCount()
                 # Qt counts repeats after the first play. WebP counts total plays.
                 loop_count = 0 if repeats < 0 else min(repeats + 1, MAX_LOOP_COUNT)
-                animated = mux_animated_webp(frames, delays, target_w, target_h, loop_count)
+                animated = mux_animated_webp(
+                    frames, delays, target_w, target_h, loop_count
+                )
                 if len(animated) > MAX_OUTPUT_BYTES:
                     animated = None
             except Exception as exc:
-                logging.getLogger(__name__).info("No animated card copy for %s: %s", source.name, exc)
+                logging.getLogger(__name__).info(
+                    "No animated card copy for %s: %s", source.name, exc
+                )
                 animated = None
         if animated is not None:
             _write_atomic(anim_path, animated)
@@ -316,7 +335,8 @@ def sweep_orphans() -> int:
     removed = 0
     for entry in folder.iterdir():
         orphan = bool(
-            CARD_NAME_RE.fullmatch(entry.name) and entry.name.split(".", 1)[0] not in stems
+            CARD_NAME_RE.fullmatch(entry.name)
+            and entry.name.split(".", 1)[0] not in stems
         ) or (entry.name.startswith(".card-") and _is_stale(entry))
         if orphan and (entry.is_file() or entry.is_symlink()):
             try:
@@ -338,7 +358,11 @@ def pending_sources() -> list[Path]:
         for name in sorted(names):
             paths = card_paths(name)
             source = folder / name
-            if paths is None or paths[0].exists() or source.suffix.lower() not in _CHECK_EXTENSIONS:
+            if (
+                paths is None
+                or paths[0].exists()
+                or source.suffix.lower() not in _CHECK_EXTENSIONS
+            ):
                 continue
             if source.is_file():
                 out.append(source)
@@ -370,9 +394,13 @@ class CoverCardService:
             return
         if not webp_writer_available():
             self.disabled = True
-            logging.getLogger(__name__).info("Card copies disabled: Qt has no WebP writer")
+            logging.getLogger(__name__).info(
+                "Card copies disabled: Qt has no WebP writer"
+            )
             return
-        self._thread = threading.Thread(target=self._run, name="cover-cards", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="cover-cards", daemon=True
+        )
         self._thread.start()
         self.wake()
 
@@ -396,7 +424,11 @@ class CoverCardService:
         if not self._dirty:
             return
         now = self._clock()
-        if not force and self._last_notify is not None and now - self._last_notify < NOTIFY_INTERVAL_SECONDS:
+        if (
+            not force
+            and self._last_notify is not None
+            and now - self._last_notify < NOTIFY_INTERVAL_SECONDS
+        ):
             return
         self._dirty = False
         self._last_notify = now

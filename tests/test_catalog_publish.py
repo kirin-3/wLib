@@ -53,14 +53,22 @@ def test_snapshot_then_manifest_with_relative_path(tmp_path):
     storage = MemoryStorage()
     snapshot = _snapshot(tmp_path)
     manifest = publish(storage, snapshot, SOURCES)
-    assert storage.order == ["v1/snapshots/catalog-20261027T051209Z.sqlite.xz", "v1/manifest.json"]
-    assert storage.objects[storage.order[0]]["cache"] == "public, max-age=31536000, immutable"
+    assert storage.order == [
+        "v1/snapshots/catalog-20261027T051209Z.sqlite.xz",
+        "v1/manifest.json",
+    ]
+    assert (
+        storage.objects[storage.order[0]]["cache"]
+        == "public, max-age=31536000, immutable"
+    )
     assert storage.objects["v1/manifest.json"]["cache"] == "public, max-age=300"
     stored = json.loads(storage.objects["v1/manifest.json"]["data"])
     assert stored == manifest
     assert stored["schema_version"] == 1
     assert stored["generated_at"] == "2026-10-27T05:12:09Z"
-    assert stored["snapshot"]["path"] == "v1/snapshots/catalog-20261027T051209Z.sqlite.xz"
+    assert (
+        stored["snapshot"]["path"] == "v1/snapshots/catalog-20261027T051209Z.sqlite.xz"
+    )
     assert not stored["snapshot"]["path"].startswith(("/", "http"))
     assert stored["snapshot"]["sha256"] == snapshot.sha256
     assert stored["snapshot"]["size"] == snapshot.size
@@ -83,7 +91,9 @@ def test_retention_keeps_the_four_newest(tmp_path):
     kept = sorted(storage.list_keys("v1/snapshots/"))
     assert len(kept) == 4
     assert "v1/snapshots/catalog-20261021T050000Z.sqlite.xz" not in kept
-    current = json.loads(storage.objects["v1/manifest.json"]["data"])["snapshot"]["path"]
+    current = json.loads(storage.objects["v1/manifest.json"]["data"])["snapshot"][
+        "path"
+    ]
     assert current == kept[-1]
 
 
@@ -128,7 +138,9 @@ def test_publish_refusal_rules():
 
     assert publish_refusal(None, counts(f95=0, dlsite=0)) == "the catalog is empty"
     assert publish_refusal(None, counts(f95=10)) == ""
-    assert publish_refusal(counts(f95=1000, dlsite=50), counts(f95=600, dlsite=50)) == ""
+    assert (
+        publish_refusal(counts(f95=1000, dlsite=50), counts(f95=600, dlsite=50)) == ""
+    )
     assert (
         publish_refusal(counts(f95=28000, dlsite=50), counts(f95=8100, dlsite=50))
         == "f95 dropped from 28000 to 8100 rows"

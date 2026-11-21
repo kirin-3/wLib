@@ -129,8 +129,7 @@ def test_post_mentioning_a_login_requirement_is_not_a_login_wall(thread_html):
         "Mirror note: you must be logged in to get the patch file.<br>",
     ).replace(
         "</head>",
-        '<meta name="description" content="You must be logged in to download.">'
-        "</head>",
+        '<meta name="description" content="You must be logged in to download."></head>',
     )
     issue = scraper._classify_page_issue(200, scraper._page_title(html), html)
     assert issue is None
@@ -385,9 +384,7 @@ def test_challenge_does_not_fallback_and_next_chunk_continues(monkeypatch):
     scraper_module._f95_last_request_finished = None
     get = MagicMock(side_effect=[(503, "cf-challenge"), checker_response(["101"])])
     monkeypatch.setattr(scraper_module, "_f95_get", get)
-    monkeypatch.setattr(
-        scraper_module.extension_bridge, "is_available", lambda: False
-    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: False)
     urls = [f"https://f95zone.to/threads/{i}/" for i in range(1, 102)]
     results = Scraper().check_versions(urls)
     assert all(results[url]["code"] == "blocked" for url in urls[:100])
@@ -472,7 +469,8 @@ def test_cancellation_stops_page_fallbacks(monkeypatch, thread_html):
 
 
 @pytest.mark.parametrize(
-    "response", [(400, "error"), (200, "not json"), (200, '{"status":"error","msg":"x"}')]
+    "response",
+    [(400, "error"), (200, "not json"), (200, '{"status":"error","msg":"x"}')],
 )
 def test_unexpected_batch_checker_reply_does_not_fan_out(monkeypatch, response):
     get = MagicMock(return_value=response)
@@ -709,9 +707,7 @@ def test_urllib_and_extension_requests_serialize_and_space(monkeypatch):
     monkeypatch.setattr(scraper_module, "urlopen", fake_urlopen)
     monkeypatch.setattr(bridge_module, "fetch", fake_fetch)
     threads = [
-        threading.Thread(
-            target=scraper_module._f95_get, args=("https://f95zone.to/",)
-        ),
+        threading.Thread(target=scraper_module._f95_get, args=("https://f95zone.to/",)),
         threading.Thread(
             target=scraper_module._f95_get_via_extension,
             args=("https://f95zone.to/threads/1/",),
@@ -745,9 +741,7 @@ def test_challenged_page_recovered_through_extension(monkeypatch, thread_html):
         "_f95_get_via_extension",
         MagicMock(return_value=(200, thread_html)),
     )
-    monkeypatch.setattr(
-        scraper_module.extension_bridge, "is_available", lambda: True
-    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
     result = Scraper().get_thread_metadata("https://f95zone.to/threads/1/")
     assert result["success"] is True
     assert result["version"] == "1.10"
@@ -767,9 +761,7 @@ def test_login_page_recovered_through_extension(monkeypatch, thread_html):
         "_f95_get_via_extension",
         MagicMock(return_value=(200, thread_html)),
     )
-    monkeypatch.setattr(
-        scraper_module.extension_bridge, "is_available", lambda: True
-    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
     result = Scraper().get_thread_metadata("https://f95zone.to/threads/1/")
     assert result["success"] is True
     assert "browser_fallback" not in result
@@ -786,9 +778,7 @@ def test_extension_also_challenged_reports_blocked_failed(monkeypatch):
         "_f95_get_via_extension",
         MagicMock(return_value=(503, "cf-challenge")),
     )
-    monkeypatch.setattr(
-        scraper_module.extension_bridge, "is_available", lambda: True
-    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
     result = Scraper().get_thread_metadata("https://f95zone.to/threads/1/")
     assert result["code"] == "blocked"
     assert result.get("browser_fallback") == "failed"
@@ -807,9 +797,7 @@ def test_extension_also_login_reports_logged_out(monkeypatch):
         "_f95_get_via_extension",
         MagicMock(return_value=(200, "<title>Log in</title>")),
     )
-    monkeypatch.setattr(
-        scraper_module.extension_bridge, "is_available", lambda: True
-    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
     result = Scraper().get_thread_metadata("https://f95zone.to/threads/1/")
     assert result["code"] == "login_required"
     assert result.get("browser_fallback") == "logged_out"
@@ -825,9 +813,7 @@ def test_extension_login_page_in_batch_skips_page_fallback(monkeypatch):
     )
     via_extension = MagicMock(return_value=(403, "<title>Log in</title>"))
     monkeypatch.setattr(scraper_module, "_f95_get_via_extension", via_extension)
-    monkeypatch.setattr(
-        scraper_module.extension_bridge, "is_available", lambda: True
-    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
     urls = ["https://f95zone.to/threads/1/", "https://f95zone.to/threads/2/"]
     results = Scraper().check_versions(urls)
     assert all(r.get("browser_fallback") == "logged_out" for r in results.values())
@@ -859,9 +845,7 @@ def test_extension_fetch_records_signed_in_state(monkeypatch, body, expected):
         "record_fetch_outcome",
         lambda *args, **_kwargs: recorded.append(args),
     )
-    status, _ = scraper_module._f95_get_via_extension(
-        "https://f95zone.to/threads/1/"
-    )
+    status, _ = scraper_module._f95_get_via_extension("https://f95zone.to/threads/1/")
     assert status == 200
     assert recorded == [(200, expected, "")]
     _reset_scraper_globals()
@@ -915,9 +899,7 @@ def test_no_extension_reports_unavailable(monkeypatch):
     monkeypatch.setattr(
         scraper_module, "_f95_get", MagicMock(return_value=(503, "cf-challenge"))
     )
-    monkeypatch.setattr(
-        scraper_module.extension_bridge, "is_available", lambda: False
-    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: False)
     result = Scraper().get_thread_metadata("https://f95zone.to/threads/1/")
     assert result["code"] == "blocked"
     assert result.get("browser_fallback") == "unavailable"
@@ -930,9 +912,7 @@ def test_blocked_batch_retried_as_one_extension_request(monkeypatch):
     via = MagicMock(return_value=checker_response(["1", "2", "3"]))
     monkeypatch.setattr(scraper_module, "_f95_get", get)
     monkeypatch.setattr(scraper_module, "_f95_get_via_extension", via)
-    monkeypatch.setattr(
-        scraper_module.extension_bridge, "is_available", lambda: True
-    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
     urls = [f"https://f95zone.to/threads/{i}/" for i in (1, 2, 3)]
     results = Scraper().check_versions(urls)
     assert all(r["version"] == "1.10" for r in results.values())
@@ -966,9 +946,8 @@ def test_not_found_and_network_errors_do_not_fallback(monkeypatch):
         Scraper().get_thread_metadata("https://f95zone.to/threads/1/")["code"]
         == "not_found"
     )
-    assert (
-        "browser_fallback"
-        not in Scraper().get_thread_metadata("https://f95zone.to/threads/1/")
+    assert "browser_fallback" not in Scraper().get_thread_metadata(
+        "https://f95zone.to/threads/1/"
     )
     via.assert_not_called()
     from core.scraper import _F95RequestError
@@ -993,9 +972,7 @@ def test_extension_first_window_skips_urllib_then_expires(monkeypatch, thread_ht
     via = MagicMock(return_value=(200, thread_html))
     monkeypatch.setattr(scraper_module, "_f95_get", get)
     monkeypatch.setattr(scraper_module, "_f95_get_via_extension", via)
-    monkeypatch.setattr(
-        scraper_module.extension_bridge, "is_available", lambda: True
-    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
     scraper = Scraper()
     first = scraper.get_thread_metadata("https://f95zone.to/threads/1/")
     assert first["success"] is True
@@ -1046,9 +1023,7 @@ def test_login_required_does_not_open_window(monkeypatch, thread_html):
     via = MagicMock(return_value=(200, thread_html))
     monkeypatch.setattr(scraper_module, "_f95_get", get)
     monkeypatch.setattr(scraper_module, "_f95_get_via_extension", via)
-    monkeypatch.setattr(
-        scraper_module.extension_bridge, "is_available", lambda: True
-    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
     scraper = Scraper()
     assert scraper.get_thread_metadata("https://f95zone.to/threads/1/")["success"]
     assert scraper_module._prefer_extension_until is None
@@ -1085,9 +1060,7 @@ def test_window_opened_while_waiting_for_turn_applies_to_queued_request(monkeypa
 
     monkeypatch.setattr(scraper_module, "_f95_get", fake_get)
     monkeypatch.setattr(scraper_module, "_f95_get_via_extension", fake_extension)
-    monkeypatch.setattr(
-        scraper_module.extension_bridge, "is_available", lambda: True
-    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
     results: list[tuple[int, str, str | None]] = []
     scraper = Scraper()
 
@@ -1129,16 +1102,21 @@ def test_screenshots_exclude_cover_smilie_and_reply(thread_html):
 
 def test_screenshots_thumb_stripped_and_external_verbatim(thread_html):
     result = Scraper()._extract_page(thread_html)
-    assert "https://attachments.f95zone.to/2026/01/shot1-full.jpg" in result["screenshots"]
+    assert (
+        "https://attachments.f95zone.to/2026/01/shot1-full.jpg" in result["screenshots"]
+    )
     assert not any("/thumb/" in url for url in result["screenshots"])
     assert "https://example.com/external-shot.png" in result["screenshots"]
 
 
 def test_screenshots_dedupe_thumb_and_full(thread_html):
     result = Scraper()._extract_page(thread_html)
-    assert result["screenshots"].count(
-        "https://attachments.f95zone.to/2026/01/shot1-full.jpg"
-    ) == 1
+    assert (
+        result["screenshots"].count(
+            "https://attachments.f95zone.to/2026/01/shot1-full.jpg"
+        )
+        == 1
+    )
 
 
 def test_screenshots_cap_at_20():
@@ -1174,9 +1152,7 @@ def test_screenshots_empty_for_post_without_images():
 def test_screenshots_carry_through_page_fallback_without_extra_request(
     monkeypatch, thread_html
 ):
-    get = MagicMock(
-        side_effect=[(200, '{"status":"ok","msg":{}}'), (200, thread_html)]
-    )
+    get = MagicMock(side_effect=[(200, '{"status":"ok","msg":{}}'), (200, thread_html)])
     monkeypatch.setattr(scraper_module, "_f95_get", get)
     scraper = Scraper()
     result = scraper.get_thread_version(
@@ -1191,12 +1167,8 @@ def test_screenshots_carry_through_page_fallback_without_extra_request(
     assert get.call_count == 2
 
 
-def test_screenshots_carry_through_batch_and_metadata_fetch(
-    monkeypatch, thread_html
-):
-    get = MagicMock(
-        side_effect=[checker_response(["1"]), (200, thread_html)]
-    )
+def test_screenshots_carry_through_batch_and_metadata_fetch(monkeypatch, thread_html):
+    get = MagicMock(side_effect=[checker_response(["1"]), (200, thread_html)])
     monkeypatch.setattr(scraper_module, "_f95_get", get)
     scraper = Scraper()
     result = scraper.get_thread_version(
@@ -1211,12 +1183,8 @@ def test_screenshots_carry_through_batch_and_metadata_fetch(
     assert get.call_count == 2
 
 
-def test_check_versions_page_fallback_carries_screenshots(
-    monkeypatch, thread_html
-):
-    get = MagicMock(
-        side_effect=[(200, '{"status":"ok","msg":{}}'), (200, thread_html)]
-    )
+def test_check_versions_page_fallback_carries_screenshots(monkeypatch, thread_html):
+    get = MagicMock(side_effect=[(200, '{"status":"ok","msg":{}}'), (200, thread_html)])
     monkeypatch.setattr(scraper_module, "_f95_get", get)
     results = Scraper().check_versions(["https://f95zone.to/threads/1/"])
     assert results["https://f95zone.to/threads/1/"]["screenshots"] == [
@@ -1393,8 +1361,13 @@ def test_guest_page_cover_falls_back_to_catalog(monkeypatch):
     _reset_scraper_globals()
 
 
-@pytest.mark.parametrize("status,body,accepted", [(200, b"image", True), (403, b"blocked", False), (200, b"x" * 11, False)])
-def test_binary_cover_fetch_bounded_without_fallback(monkeypatch, status, body, accepted):
+@pytest.mark.parametrize(
+    "status,body,accepted",
+    [(200, b"image", True), (403, b"blocked", False), (200, b"x" * 11, False)],
+)
+def test_binary_cover_fetch_bounded_without_fallback(
+    monkeypatch, status, body, accepted
+):
     monkeypatch.setattr(scraper_module, "_f95_last_request_finished", None)
     response = MagicMock()
     response.status = status
@@ -1404,7 +1377,10 @@ def test_binary_cover_fetch_bounded_without_fallback(monkeypatch, status, body, 
     fallback = MagicMock(side_effect=AssertionError("No extension for covers"))
     monkeypatch.setattr(scraper_module.extension_bridge, "fetch", fallback)
     if accepted:
-        assert scraper_module.f95_get_bytes("https://attachments.f95zone.to/a.png", 10) == body
+        assert (
+            scraper_module.f95_get_bytes("https://attachments.f95zone.to/a.png", 10)
+            == body
+        )
     else:
         with pytest.raises(ValueError):
             scraper_module.f95_get_bytes("https://attachments.f95zone.to/a.png", 10)
@@ -1419,6 +1395,7 @@ def test_cover_and_foreground_requests_paced_with_foreground_priority(monkeypatc
     monkeypatch.setattr(scraper_module, "get_request_interval_seconds", lambda: 0.03)
     entered, release = threading.Event(), threading.Event()
     events = []
+
     def urlopen(request, **kwargs):
         kind = "cover" if "attachments" in request.full_url else "page"
         events.append((kind + "-start", time.monotonic()))
@@ -1428,16 +1405,27 @@ def test_cover_and_foreground_requests_paced_with_foreground_priority(monkeypatc
         response = MagicMock()
         response.status = 200
         response.headers.get_content_charset.return_value = "utf-8"
+
         def read(*args):
             events.append((kind + "-finish", time.monotonic()))
             return b"image"
+
         response.read.side_effect = read
         response.__enter__.return_value = response
         return response
+
     monkeypatch.setattr(scraper_module, "urlopen", urlopen)
-    first = threading.Thread(target=scraper_module.f95_get_bytes, args=("https://attachments.f95zone.to/1.png", 100))
-    next_cover = threading.Thread(target=scraper_module.f95_get_bytes, args=("https://attachments.f95zone.to/2.png", 100))
-    foreground = threading.Thread(target=scraper_module._f95_get, args=("https://f95zone.to/threads/1/",))
+    first = threading.Thread(
+        target=scraper_module.f95_get_bytes,
+        args=("https://attachments.f95zone.to/1.png", 100),
+    )
+    next_cover = threading.Thread(
+        target=scraper_module.f95_get_bytes,
+        args=("https://attachments.f95zone.to/2.png", 100),
+    )
+    foreground = threading.Thread(
+        target=scraper_module._f95_get, args=("https://f95zone.to/threads/1/",)
+    )
     first.start()
     assert entered.wait(3)
     next_cover.start()
@@ -1454,7 +1442,14 @@ def test_cover_and_foreground_requests_paced_with_foreground_priority(monkeypatc
     for thread in (first, next_cover, foreground):
         thread.join(3)
         assert not thread.is_alive()
-    assert [kind for kind, _ in events] == ["cover-start", "cover-finish", "page-start", "page-finish", "cover-start", "cover-finish"]
+    assert [kind for kind, _ in events] == [
+        "cover-start",
+        "cover-finish",
+        "page-start",
+        "page-finish",
+        "cover-start",
+        "cover-finish",
+    ]
     assert events[2][1] - events[1][1] >= 0.03
     assert events[4][1] - events[3][1] >= 0.03
 
@@ -1506,16 +1501,31 @@ def test_fetch_thread_download_links_extension_only(monkeypatch, caplog):
     calls = []
     monkeypatch.setattr(module.extension_bridge, "is_available", lambda: False)
     monkeypatch.setattr(module, "_f95_get_via_extension", lambda url: calls.append(url))
-    result = module.fetch_thread_download_links("https://f95zone.to/threads/example.123/")
+    result = module.fetch_thread_download_links(
+        "https://f95zone.to/threads/example.123/"
+    )
     assert result["code"] == "extension_unavailable"
     assert not calls
     monkeypatch.setattr(module.extension_bridge, "is_available", lambda: True)
     fixtures = Path(__file__).parent / "fixtures" / "f95_download_links"
-    monkeypatch.setattr(module, "_f95_get_via_extension", lambda url: (200, (fixtures / "guest.html").read_text()))
-    assert module.fetch_thread_download_links("https://f95zone.to/threads/123/")["code"] == "login_required"
-    monkeypatch.setattr(module, "_f95_get_via_extension", lambda url: (200, (fixtures / "signed_in.html").read_text()))
+    monkeypatch.setattr(
+        module,
+        "_f95_get_via_extension",
+        lambda url: (200, (fixtures / "guest.html").read_text()),
+    )
+    assert (
+        module.fetch_thread_download_links("https://f95zone.to/threads/123/")["code"]
+        == "login_required"
+    )
+    monkeypatch.setattr(
+        module,
+        "_f95_get_via_extension",
+        lambda url: (200, (fixtures / "signed_in.html").read_text()),
+    )
     with caplog.at_level("INFO", logger="wlib.scraper"):
-        result = module.fetch_thread_download_links("https://f95zone.to/threads/example.123/")
+        result = module.fetch_thread_download_links(
+            "https://f95zone.to/threads/example.123/"
+        )
     assert result["success"] is True
     assert "Thread 123: found 7 download links" in caplog.text
     assert "https://" not in caplog.text
@@ -1530,14 +1540,18 @@ def test_download_resolve_releases_pacing_while_waiting(monkeypatch):
     conn = bridge.BridgeConnection(send_text=lambda _: sent.set())
     bridge.reset_for_tests()
     bridge._register_connection(conn)
-    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True})
+    bridge._handle_message(
+        conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True}
+    )
     monkeypatch.setattr(module, "get_request_interval_seconds", lambda: 0)
     errors = []
+
     def run():
         try:
             module.resolve_download_link("https://f95zone.to/dl/1/?fake", "mega")
         except bridge.BridgeFailed as exc:
             errors.append(str(exc))
+
     thread = threading.Thread(target=run)
     thread.start()
     try:
@@ -1552,9 +1566,13 @@ def test_download_resolve_releases_pacing_while_waiting(monkeypatch):
 
 def test_hidden_attachments_with_catalog_cover_skip_extension(monkeypatch):
     _reset_scraper_globals()
-    monkeypatch.setattr(scraper_module, "_f95_get", MagicMock(return_value=(200, _GUEST_HIDDEN_PAGE)))
+    monkeypatch.setattr(
+        scraper_module, "_f95_get", MagicMock(return_value=(200, _GUEST_HIDDEN_PAGE))
+    )
     monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
-    monkeypatch.setattr("core.game_lookup.f95_thread_cover", lambda _: "https://example.com/cover.png")
+    monkeypatch.setattr(
+        "core.game_lookup.f95_thread_cover", lambda _: "https://example.com/cover.png"
+    )
     via_ext = MagicMock(return_value=(200, _SIGNED_IN_PAGE))
     monkeypatch.setattr(scraper_module, "_f95_get_via_extension", via_ext)
     assert Scraper()._get_page("1")["cover_image"] == "https://example.com/cover.png"
@@ -1574,9 +1592,7 @@ def test_checker_outage_does_not_fan_out_to_pages(monkeypatch, failure):
     scraper_module._f95_last_request_finished = None
     get = MagicMock(side_effect=[failure])
     monkeypatch.setattr(scraper_module, "_f95_get", get)
-    monkeypatch.setattr(
-        scraper_module.extension_bridge, "is_available", lambda: False
-    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: False)
     urls = [f"https://f95zone.to/threads/{i}/" for i in range(1, 6)]
     results = Scraper().check_versions(urls)
     assert get.call_count == 1
@@ -1615,7 +1631,7 @@ def test_src_lookup_ignores_data_src():
 def test_unclosed_tag_in_spoiler_keeps_later_store_links():
     html = (
         '<div class="bbCodeSpoiler"><div>hidden <b>unclosed</div></div>'
-        "<div><b>Store</b>: <a href=\"https://store.steampowered.com/app/123/\">Steam</a></div>"
+        '<div><b>Store</b>: <a href="https://store.steampowered.com/app/123/">Steam</a></div>'
     )
     links = scraper_module._StoreHeaderParser().collect(html)
     assert [(link["source"], link["id"]) for link in links] == [("steam", "123")]
@@ -1685,10 +1701,15 @@ def test_list_request_and_thread_request_do_not_overlap(monkeypatch):
         return 200, "<html></html>"
 
     monkeypatch.setattr(scraper_module, "_urllib_f95_get", thread_page)
-    worker = threading.Thread(target=lambda: scraper_module.run_paced_f95_request(slow_list_page))
+    worker = threading.Thread(
+        target=lambda: scraper_module.run_paced_f95_request(slow_list_page)
+    )
     worker.start()
     assert list_started.wait(2)
-    assert scraper_module._f95_get("https://f95zone.to/threads/1/") == (200, "<html></html>")
+    assert scraper_module._f95_get("https://f95zone.to/threads/1/") == (
+        200,
+        "<html></html>",
+    )
     worker.join(2)
     assert [name for name, _, _ in spans] == ["list", "thread"]
     assert spans[1][1] >= spans[0][2]

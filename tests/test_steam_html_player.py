@@ -12,7 +12,9 @@ from core.steam_shortcuts import read_vdf, sync_games
 
 @pytest.mark.parametrize("enabled", [False, True])
 def test_saving_html_player_default_reconciles_steam_shortcut(
-    enabled: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database.init_db()
     database.update_setting("steam_games_mode", "all-installed")

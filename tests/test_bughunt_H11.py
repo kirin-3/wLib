@@ -34,16 +34,24 @@ def catalog(tmp_path, monkeypatch):
 
 def test_lc_url_parser_rejects_ids_beyond_sqlite_range():
     assert lewdcorner.extract_thread_id(f"https://lewdcorner.com/threads/{HUGE}/") == ""
-    assert lewdcorner.extract_thread_id(f"https://lewdcorner.com/threads/x.{HUGE}/") == ""
-    assert lewdcorner.normalize_thread_url(f"https://lewdcorner.com/threads/{HUGE}/") == ""
+    assert (
+        lewdcorner.extract_thread_id(f"https://lewdcorner.com/threads/x.{HUGE}/") == ""
+    )
+    assert (
+        lewdcorner.normalize_thread_url(f"https://lewdcorner.com/threads/{HUGE}/") == ""
+    )
     assert lewdcorner.extract_thread_id(f"https://lewdcorner.com/threads/{MAX}/") == MAX
-    assert lewdcorner.extract_thread_id(f"https://lewdcorner.com/threads/000{MAX}/") == MAX
+    assert (
+        lewdcorner.extract_thread_id(f"https://lewdcorner.com/threads/000{MAX}/") == MAX
+    )
 
 
 def test_catalog_reads_skip_ids_beyond_sqlite_range(catalog):
     assert game_lookup.lc_thread_tiers(["21", HUGE]) == {"21": "Free"}
     assert game_lookup.lc_thread_screenshots(HUGE) is None
-    assert game_lookup.lc_threads_screenshots(["21", HUGE]) == {"21": ["https://example.org/a.webp"]}
+    assert game_lookup.lc_threads_screenshots(["21", HUGE]) == {
+        "21": ["https://example.org/a.webp"]
+    }
     assert game_lookup.f95_thread_screenshots(HUGE) is None
     assert game_lookup.f95_thread_cover(HUGE) == ""
     assert game_lookup.f95_thread_cover("5") == "https://example.org/c.webp"
@@ -55,7 +63,9 @@ def test_f95_catalog_cover_accepts_decimal_digits_in_thread_id(catalog):
 
 def test_very_long_thread_ids_are_ignored(catalog):
     digits = "9" * 5000
-    assert lewdcorner.extract_thread_id(f"https://lewdcorner.com/threads/{digits}/") == ""
+    assert (
+        lewdcorner.extract_thread_id(f"https://lewdcorner.com/threads/{digits}/") == ""
+    )
     assert game_lookup.f95_thread_cover(digits) == ""
     assert game_lookup.lc_thread_tiers(["21", digits]) == {"21": "Free"}
 
@@ -63,14 +73,20 @@ def test_very_long_thread_ids_are_ignored(catalog):
 def test_library_loads_with_a_stored_oversized_lc_url(catalog):
     from core.api import Api
 
-    good = database.add_game("Good", "", lc_url="https://lewdcorner.com/threads/21/", lc_mode="off")
+    good = database.add_game(
+        "Good", "", lc_url="https://lewdcorner.com/threads/21/", lc_mode="off"
+    )
     bad = database.add_game("Bad", "")
     assert good is not None and bad is not None
     # An older build could store this URL; write it the way such a row looks.
     with closing_db() as conn:
         conn.execute(
             "UPDATE games SET lc_url = ?, f95_url = ? WHERE id = ?",
-            (f"https://lewdcorner.com/threads/{HUGE}/", f"https://f95zone.to/threads/{HUGE}/", bad),
+            (
+                f"https://lewdcorner.com/threads/{HUGE}/",
+                f"https://f95zone.to/threads/{HUGE}/",
+                bad,
+            ),
         )
         conn.commit()
 

@@ -32,9 +32,7 @@ log = logging.getLogger(__name__)
 
 # Games+ and AI Games+, in sweep order.
 FORUMS: tuple[int, ...] = (119, 213)
-LISTING_URL = (
-    "https://lewdcorner.com/forums/{node}/{page}?order=latest_update_date&direction=desc"
-)
+LISTING_URL = "https://lewdcorner.com/forums/{node}/{page}?order=latest_update_date&direction=desc"
 TIER = "Premium"
 # Threads per listing page.
 PER_PAGE = 20
@@ -46,7 +44,8 @@ _FORUM_VIEW_RE = re.compile(r'\sdata-template="forum_view"')
 _GUEST_RE = re.compile(r'\sdata-logged-in="false"')
 _CARD_SPLIT = '<div class="lcForumCard">'
 _TITLE_RE = re.compile(
-    r'<h3 class="lcForumCardTitle"><a href="/threads/[^"]*?\.(\d+)/">(.*?)</a></h3>', re.S
+    r'<h3 class="lcForumCardTitle"><a href="/threads/[^"]*?\.(\d+)/">(.*?)</a></h3>',
+    re.S,
 )
 _LABEL_RE = re.compile(r'<span class="label\b[^"]*"[^>]*>(.*?)</span>', re.S)
 _LABEL_APPEND_RE = re.compile(r'<span class="label-append">.*?</span>', re.S)
@@ -186,7 +185,10 @@ class LcPlusSource:
             raise
         if listing.skipped:
             log.warning(
-                "lc_plus: %d cards on forum %d page %d did not parse", listing.skipped, node, page
+                "lc_plus: %d cards on forum %d page %d did not parse",
+                listing.skipped,
+                node,
+                page,
             )
         return listing
 
@@ -206,7 +208,9 @@ class LcPlusSource:
         if dropped:
             log.info(
                 "lc_plus: dropped labels without one prefix ID: %s",
-                ", ".join(f"{label} ({count})" for label, count in sorted(dropped.items())),
+                ", ".join(
+                    f"{label} ({count})" for label, count in sorted(dropped.items())
+                ),
             )
         return found
 
@@ -233,7 +237,9 @@ class LcPlusSource:
                 "thread_id": card.thread_id,
                 "title": card.title,
                 "creator": card.creator,
-                "updated_at": datetime.fromtimestamp(card.ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "updated_at": datetime.fromtimestamp(card.ts, UTC).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
                 "ts": card.ts,
                 "node_id": node,
                 "tier": TIER,
@@ -293,12 +299,16 @@ class LcPlusSource:
             elif 0 < len(listing.cards) + listing.skipped < PER_PAGE:
                 total = page
             else:
-                raise ValueError(f"LC forum {node} returned page {page} without page links")
+                raise ValueError(
+                    f"LC forum {node} returned page {page} without page links"
+                )
         total = max(total, page)
         ctx.state.put(self.name, "sweep_total_pages", total)
         if not listing.cards and page < total:
             # An empty page inside the listing is a failed request, not the end.
-            raise ValueError(f"LC forum {node} returned an empty page {page} of {total}")
+            raise ValueError(
+                f"LC forum {node} returned an empty page {page} of {total}"
+            )
         _ = self._store(ctx, node, listing.cards)
         if page < total:
             ctx.state.put(self.name, "sweep_page", page + 1)

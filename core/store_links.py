@@ -64,7 +64,9 @@ def parse_store_link(url: str) -> StoreLink | None:
         # An IPv6 literal needs its brackets in the rebuilt URL; without them
         # the stored 'other' URL is not a valid address and cannot be opened.
         netloc_host = f"[{host}]" if ":" in host else host
-        netloc = netloc_host if port is None or default_port else f"{netloc_host}:{port}"
+        netloc = (
+            netloc_host if port is None or default_port else f"{netloc_host}:{port}"
+        )
     except ValueError:
         return None
     path = parts.path or "/"
@@ -102,10 +104,14 @@ def parse_store_link(url: str) -> StoreLink | None:
         match = re.search(r"/cid=([a-z_0-9]+)(?:/|$)", path, re.I | re.ASCII)
         if not match:
             for key, value in parse_qsl(parts.query):
-                if key.lower() == "cid" and re.fullmatch(r"[a-z_0-9]+", value, re.I | re.ASCII):
+                if key.lower() == "cid" and re.fullmatch(
+                    r"[a-z_0-9]+", value, re.I | re.ASCII
+                ):
                     identity = value.lower()
                     # Query-form product links need their cid to remain navigable.
-                    clean_url = urlunsplit((scheme, netloc, path, f"cid={identity}", ""))
+                    clean_url = urlunsplit(
+                        (scheme, netloc, path, f"cid={identity}", "")
+                    )
                     return {"source": "fanza", "id": identity, "url": clean_url}
             match = re.search(r"/detail/([a-z_0-9]+)(?:/|$)", path, re.I)
         if not match:

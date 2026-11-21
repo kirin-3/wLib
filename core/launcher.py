@@ -50,7 +50,9 @@ from .host_platform import (
 SANDBOX_LIST_FAILURE_LIMIT = 60
 
 
-def wrap_performance_tools(cmd: list[str], tools: list[str], user_args: list[str]) -> list[str]:
+def wrap_performance_tools(
+    cmd: list[str], tools: list[str], user_args: list[str]
+) -> list[str]:
     existing = {os.path.basename(arg) for arg in user_args}
     return [*(tool for tool in tools if os.path.basename(tool) not in existing), *cmd]
 
@@ -96,7 +98,10 @@ def gamescope_native_size(
     native = (found.width, found.height) if found else None
     size, why = gamescope_mod.auto_game_size(options, screen_size, native)
     if found and why == gamescope_mod.GAME_SIZE_NATIVE:
-        return native, f"Gamescope game size {found.width}x{found.height} from {found.source}"
+        return (
+            native,
+            f"Gamescope game size {found.width}x{found.height} from {found.source}",
+        )
     if found and why == gamescope_mod.GAME_SIZE_TOO_LARGE and size:
         return native, (
             f"Gamescope game size: native {found.width}x{found.height} ({found.source}) "
@@ -167,7 +172,9 @@ def pop_launch_env(args: list[str], launch_mode: str) -> dict[str, str]:
     return user_env
 
 
-def launch_env_overrides(command_line_args: object, launch_mode: object) -> dict[str, str]:
+def launch_env_overrides(
+    command_line_args: object, launch_mode: object
+) -> dict[str, str]:
     """The VAR=value overrides a launch with these saved settings applies.
 
     Prefix tools and installers use this so they change the same prefix as
@@ -696,7 +703,11 @@ def self_command(flag: str) -> list[str]:
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # A venv's python is a symlink chain that a sandbox does not contain, so run
     # the real interpreter and hand it the venv's packages (see self_env).
-    interpreter = os.path.realpath(sys.executable) if sys.prefix != sys.base_prefix else sys.executable
+    interpreter = (
+        os.path.realpath(sys.executable)
+        if sys.prefix != sys.base_prefix
+        else sys.executable
+    )
     return [interpreter, os.path.join(repo_root, "main.py"), flag]
 
 
@@ -841,6 +852,7 @@ _WINE_BACKGROUND_NAMES = frozenset(
     }
 )
 
+
 def _sh_any_case(name: str) -> str:
     return "".join(f"[{c.lower()}{c.upper()}]" if c.isalpha() else c for c in name)
 
@@ -853,7 +865,7 @@ def _sh_any_case(name: str) -> str:
 # cannot be read. Arguments: <wineserver> <game command...>.
 GAMESCOPE_WINE_WAIT = (
     'ws=$1; shift; "$@"; s=$?\n'
-    'me=; read -r me 2>/dev/null < /proc/$$/stat\n'
+    "me=; read -r me 2>/dev/null < /proc/$$/stat\n"
     "set -- ${me##*) }; pg=$3\n"
     'if [ -z "$pg" ]; then "$ws" -w; exit $s; fi\n'
     "while :; do\n"
@@ -864,9 +876,9 @@ GAMESCOPE_WINE_WAIT = (
     '    [ "$p" = "$$" ] && continue\n'
     "    set -- ${l##*) }\n"
     '    [ "$3" = "$pg" ] || continue\n'
-    '    case $1 in Z|X) continue ;; esac\n'
+    "    case $1 in Z|X) continue ;; esac\n"
     "    c=${l#*(}; c=${c%) *}\n"
-    f'    case $c in {"|".join(_sh_any_case(n) for n in sorted(_WINE_BACKGROUND_NAMES))}) continue ;; esac\n'
+    f"    case $c in {'|'.join(_sh_any_case(n) for n in sorted(_WINE_BACKGROUND_NAMES))}) continue ;; esac\n"
     "    found=1; break\n"
     "  done\n"
     '  [ -n "$found" ] || break\n'
@@ -874,7 +886,6 @@ GAMESCOPE_WINE_WAIT = (
     "done\n"
     "exit $s"
 )
-
 
 
 def _wine_group_pids(pgid: int) -> tuple[list[int], list[int]] | None:
@@ -895,7 +906,9 @@ def _wine_group_pids(pgid: int) -> tuple[list[int], list[int]] | None:
         if not name.isdigit():
             continue
         try:
-            with open(f"/proc/{name}/stat", encoding="utf-8", errors="replace") as stat_file:
+            with open(
+                f"/proc/{name}/stat", encoding="utf-8", errors="replace"
+            ) as stat_file:
                 stat = str(stat_file.read())
         except (OSError, ValueError):
             continue
@@ -1021,7 +1034,9 @@ class Launcher:
         self.prefix_guard: Callable[[str, int | None], str | None] | None = None
         # Called as external_guard(entry, game_id) after prefix_guard; lets a
         # separate launcher process (the Steam runner) ask the main app.
-        self.external_guard: Callable[[RunningGame, int | None], str | None] | None = None
+        self.external_guard: Callable[[RunningGame, int | None], str | None] | None = (
+            None
+        )
         # Games another wLib process launched, keyed by game ID, so prefix
         # checks here also see them. external_alive(game_id) drops the entry
         # of a runner that died without reporting its end.
@@ -1043,7 +1058,14 @@ class Launcher:
             return None
         with self._running_lock:
             self._prune_external_locked()
-            return next((entry.title for entry in (*self._running.values(), *self._external.values()) if game_sandbox.normalize_prefix(entry.prefix) == normalized), None)
+            return next(
+                (
+                    entry.title
+                    for entry in (*self._running.values(), *self._external.values())
+                    if game_sandbox.normalize_prefix(entry.prefix) == normalized
+                ),
+                None,
+            )
 
     def _prefix_conflict_locked(
         self, entry: "RunningGame", game_id: int | None
@@ -1363,8 +1385,12 @@ class Launcher:
             pid = proc.pid
             try:
                 if running.sandbox_box:
-                    game_sandbox.terminate_box(running.sandbox_tool, running.sandbox_box)
-                elif is_windows() and running.job is not None and running.job.stop_game():
+                    game_sandbox.terminate_box(
+                        running.sandbox_tool, running.sandbox_box
+                    )
+                elif (
+                    is_windows() and running.job is not None and running.job.stop_game()
+                ):
                     # Also ends what a launcher that already exited started.
                     pass
                 elif is_windows():
@@ -1396,7 +1422,11 @@ class Launcher:
                     killpg = cast(Callable[[int, int], None], getattr(os, "killpg"))
                     # Another game on this prefix relies on the wineserver and
                     # services in this group, so signal only this game's processes.
-                    spare_wine = prefix_shared and not running.host_native and not running.sandboxed
+                    spare_wine = (
+                        prefix_shared
+                        and not running.host_native
+                        and not running.sandboxed
+                    )
 
                     def signal_game(sig: int) -> None:
                         members = _wine_group_pids(pid) if spare_wine else None
@@ -1681,7 +1711,8 @@ class Launcher:
             launch_mode,
             html_player,
             # Only HTML follows the setting; skip the lookup for other targets.
-            ext not in (".html", ".htm") or get_setting("html_builtin_player") != "false",
+            ext not in (".html", ".htm")
+            or get_setting("html_builtin_player") != "false",
             windows=is_windows(),
         )
         browser_launch = web_kind == "browser"
@@ -1691,17 +1722,25 @@ class Launcher:
         sandboxed = bool(sandbox_enabled and not browser_launch)
         performance_tools: list[str] = []
         performance_notes: list[str] = []
-        for enabled, binary, name in ((gamemode, "gamemoderun", "GameMode"), (mangohud, "mangohud", "MangoHud")):
+        for enabled, binary, name in (
+            (gamemode, "gamemoderun", "GameMode"),
+            (mangohud, "mangohud", "MangoHud"),
+        ):
             if not enabled:
                 continue
             reason = (
-                "Windows" if is_windows()
-                else "browser launch" if browser_launch
+                "Windows"
+                if is_windows()
+                else "browser launch"
+                if browser_launch
                 # The Flatpak player runs inside the app, where host tools are absent.
-                else "Flatpak web player" if flatpak_player
-                else "sandboxed" if binary == "gamemoderun" and sandboxed
+                else "Flatpak web player"
+                if flatpak_player
+                else "sandboxed"
+                if binary == "gamemoderun" and sandboxed
                 # MangoHud's preload shim makes NW.js spin at startup with no window.
-                else "NW.js hangs with it" if binary == "mangohud" and launch_mode == "rpgmaker_linux"
+                else "NW.js hangs with it"
+                if binary == "mangohud" and launch_mode == "rpgmaker_linux"
                 else ""
             )
             if not reason:
@@ -1740,7 +1779,9 @@ class Launcher:
                 gamescope_path = host_which("gamescope")
                 if gamescope_path:
                     screen = display_info.screen_size()
-                    native, size_note = gamescope_native_size(gamescope, screen, game_dir)
+                    native, size_note = gamescope_native_size(
+                        gamescope, screen, game_dir
+                    )
                     if size_note:
                         performance_notes.append(size_note)
                         print(size_note)
@@ -1749,7 +1790,11 @@ class Launcher:
                     )
                 else:
                     reason = "not installed"
-            note = f"Gamescope skipped: {reason}" if reason else f"Gamescope: {shlex.join(gamescope_cmd)} --"
+            note = (
+                f"Gamescope skipped: {reason}"
+                if reason
+                else f"Gamescope: {shlex.join(gamescope_cmd)} --"
+            )
             performance_notes.append(note)
             print(note)
         block = bool(block_network and not browser_launch)
@@ -1898,7 +1943,11 @@ class Launcher:
                 if self.prefix_guard:
                     error = self.prefix_guard(prefix, game_id)
                     if error:
-                        return {"success": False, "code": "prefix_in_use" if prefix else "game_busy", "error": error}
+                        return {
+                            "success": False,
+                            "code": "prefix_in_use" if prefix else "game_busy",
+                            "error": error,
+                        }
                 with self._running_lock:
                     if game_id in self._running:
                         return {
@@ -1919,9 +1968,16 @@ class Launcher:
                     error = self.external_guard(entry, game_id)
                     if error:
                         with self._running_lock:
-                            if game_id is not None and self._running.get(game_id) is entry:
+                            if (
+                                game_id is not None
+                                and self._running.get(game_id) is entry
+                            ):
                                 del self._running[game_id]
-                        return {"success": False, "code": "prefix_in_use" if prefix else "game_busy", "error": error}
+                        return {
+                            "success": False,
+                            "code": "prefix_in_use" if prefix else "game_busy",
+                            "error": error,
+                        }
             try:
                 if sandboxed and sandbox_status is not None and is_windows():
                     assert game_id is not None
@@ -2024,8 +2080,20 @@ class Launcher:
                         gamescope=bool(gamescope_cmd),
                     )
                 if gamescope_cmd:
-                    if is_wine_executable and not sandboxed and not umu_run and kill_info:
-                        cmd = ["sh", "-c", GAMESCOPE_WINE_WAIT, "sh", kill_info[0], *cmd]
+                    if (
+                        is_wine_executable
+                        and not sandboxed
+                        and not umu_run
+                        and kill_info
+                    ):
+                        cmd = [
+                            "sh",
+                            "-c",
+                            GAMESCOPE_WINE_WAIT,
+                            "sh",
+                            kill_info[0],
+                            *cmd,
+                        ]
                     # gamescope runs on the host, around bwrap when bwrap is used.
                     cmd = [*gamescope_cmd, "--", *cmd]
                 if enable_logging:
@@ -2143,7 +2211,11 @@ class Launcher:
                     return {
                         "success": False,
                         "error": (
-                            ("The sandbox or gamescope" if gamescope_cmd else "The sandbox")
+                            (
+                                "The sandbox or gamescope"
+                                if gamescope_cmd
+                                else "The sandbox"
+                            )
                             + f" exited before the game started (status {failed_status})."
                             + (" See the debug log." if log_file is not None else "")
                         ),
@@ -2333,7 +2405,10 @@ class Launcher:
                     else:
                         if game_proc.returncode != 0:
                             with self._running_lock:
-                                if game_id is not None and self._running.get(game_id) is entry:
+                                if (
+                                    game_id is not None
+                                    and self._running.get(game_id) is entry
+                                ):
                                     del self._running[game_id]
                             if log_file is not None:
                                 log_file.close()
@@ -2404,7 +2479,12 @@ class Launcher:
 
         def execute_web_player() -> dict[str, object]:
             """Run the built-in player as a tracked process (sandbox, No internet, Stop)."""
-            if check_web_media and ext in (".html", ".htm") and game_id is not None and game_id > 0:
+            if (
+                check_web_media
+                and ext in (".html", ".htm")
+                and game_id is not None
+                and game_id > 0
+            ):
                 # Only window launches set the flag: they can show the dialog.
                 from core.web_video import launch_check
 
@@ -2626,8 +2706,10 @@ class Launcher:
                 return execute_process(command, process_env)
             if run_japanese_locale:
                 kind = (
-                    "HTML" if ext in (".html", ".htm")
-                    else "web player" if web_kind == "builtin"
+                    "HTML"
+                    if ext in (".html", ".htm")
+                    else "web player"
+                    if web_kind == "builtin"
                     else ext
                 )
                 note = f"Locale Emulator skipped: {kind} targets are not supported"

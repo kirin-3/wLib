@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The supervisor against the real `--torrent-helper` process (no fake in between)."""
+
 import time
 
 import libtorrent as lt
@@ -9,7 +10,10 @@ from core.downloads import torrent_settings, torrents
 from core.downloads.bencode import parse_torrent
 from core.downloads.torrents import TorrentSupervisor
 
-pytestmark = [pytest.mark.slow, pytest.mark.filterwarnings("ignore::DeprecationWarning")]
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.filterwarnings("ignore::DeprecationWarning"),
+]
 
 
 def make_torrent(root, payload):
@@ -61,7 +65,21 @@ def test_real_helper_finishes_seeds_and_stops_at_ratio(tmp_path, monkeypatch, ca
         # Resume data is written while the torrent seeds (the real helper saves right after it finishes).
         wait_for(lambda: (folder / "resume.dat").is_file())
         # Reaching the ratio target stops the real torrent.
-        sup._on_event({"event": "status", "torrents": [{"id": job_id, "state": "seeding", "size": len(payload), "uploaded": len(payload), "up": 0, "peers": 0}]})  # pyright: ignore[reportPrivateUsage]
+        sup._on_event(
+            {
+                "event": "status",
+                "torrents": [
+                    {
+                        "id": job_id,
+                        "state": "seeding",
+                        "size": len(payload),
+                        "uploaded": len(payload),
+                        "up": 0,
+                        "peers": 0,
+                    }
+                ],
+            }
+        )  # pyright: ignore[reportPrivateUsage]
         assert snap()["seed_state"] == "ended"
         assert (folder / "state.json").is_file()
     finally:

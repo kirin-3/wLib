@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared archive transfer and validation."""
+
 from __future__ import annotations
 
 import errno
@@ -230,9 +231,15 @@ def transfer(
             if info.size is not None and offset > info.size:
                 part.unlink()
                 offset = 0
+
         def check_space() -> None:
-            if info.size is not None and shutil.disk_usage(directory).free < info.size - offset:
-                raise DownloadError(f"Not enough disk space: {info.size - offset} bytes needed")
+            if (
+                info.size is not None
+                and shutil.disk_usage(directory).free < info.size - offset
+            ):
+                raise DownloadError(
+                    f"Not enough disk space: {info.size - offset} bytes needed"
+                )
 
         check_space()
         stream: BinaryIO | None = None
@@ -341,7 +348,9 @@ def transfer(
             os.replace(part, target)
         return target
     except DownloadError as exc:
-        if str(exc) in ("cancelled", "file invalid") or str(exc).startswith("Not enough"):
+        if str(exc) in ("cancelled", "file invalid") or str(exc).startswith(
+            "Not enough"
+        ):
             keep_part = False
         raise
     except BaseException:

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Browser extension files and pairing."""
+
 from __future__ import annotations
 
 import os
@@ -68,7 +69,12 @@ class ExtensionMixin(ApiBase):
                     cast(object, json.loads(xpi.read("manifest.json")))
                 )
         except (
-            OSError, ValueError, KeyError, RuntimeError, zipfile.BadZipFile, zlib.error
+            OSError,
+            ValueError,
+            KeyError,
+            RuntimeError,
+            zipfile.BadZipFile,
+            zlib.error,
         ):
             return ""
 

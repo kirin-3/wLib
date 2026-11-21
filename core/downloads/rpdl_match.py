@@ -5,6 +5,7 @@ RPDL titles are release names such as `Eternum-0.8-pc` or
 `AeternumTheAwakening-2.2`: spaces are dropped, words may run together in
 CamelCase, and a version and platform words follow a dash.
 """
+
 from __future__ import annotations
 
 import re
@@ -22,20 +23,77 @@ AMBIGUITY_GAP = 8
 MARKER_PENALTY = 40
 SEQUEL_PENALTY = 35
 
-RELEASE_WORDS = frozenset({
-    "pc", "win", "win32", "win64", "windows", "linux", "mac", "macos", "osx", "android", "apk",
-    "x86", "x64", "final", "public", "patreon", "fix", "fixed", "hotfix", "beta", "alpha",
-    "full", "uncensored", "uncen", "steam", "gog", "repack", "multi", "compressed", "extras",
-    "unofficial", "ported", "port", "eng", "english",
-})
-MARKER_WORDS = frozenset({
-    "ost", "soundtrack", "dlc", "demo", "bundle", "season", "episode", "trainer", "artbook",
-    "walkthrough",
-})
+RELEASE_WORDS = frozenset(
+    {
+        "pc",
+        "win",
+        "win32",
+        "win64",
+        "windows",
+        "linux",
+        "mac",
+        "macos",
+        "osx",
+        "android",
+        "apk",
+        "x86",
+        "x64",
+        "final",
+        "public",
+        "patreon",
+        "fix",
+        "fixed",
+        "hotfix",
+        "beta",
+        "alpha",
+        "full",
+        "uncensored",
+        "uncen",
+        "steam",
+        "gog",
+        "repack",
+        "multi",
+        "compressed",
+        "extras",
+        "unofficial",
+        "ported",
+        "port",
+        "eng",
+        "english",
+    }
+)
+MARKER_WORDS = frozenset(
+    {
+        "ost",
+        "soundtrack",
+        "dlc",
+        "demo",
+        "bundle",
+        "season",
+        "episode",
+        "trainer",
+        "artbook",
+        "walkthrough",
+    }
+)
 _ROMAN = {
-    "ii": "2", "iii": "3", "iv": "4", "vi": "6", "vii": "7", "viii": "8", "ix": "9",
-    "xi": "11", "xii": "12", "xiii": "13", "xiv": "14", "xv": "15", "xvi": "16",
-    "xvii": "17", "xviii": "18", "xix": "19", "xx": "20",
+    "ii": "2",
+    "iii": "3",
+    "iv": "4",
+    "vi": "6",
+    "vii": "7",
+    "viii": "8",
+    "ix": "9",
+    "xi": "11",
+    "xii": "12",
+    "xiii": "13",
+    "xiv": "14",
+    "xv": "15",
+    "xvi": "16",
+    "xvii": "17",
+    "xviii": "18",
+    "xix": "19",
+    "xx": "20",
 }
 _ROMAN_FOR_NUMBER = {number: roman for roman, number in _ROMAN.items()}
 _VERSION_TOKEN = re.compile(r"^v?\d+(?:\.\d+)+[a-z]*$|^v\d+[a-z]*$")
@@ -67,10 +125,19 @@ def name_tokens(title: str) -> tuple[list[str], set[str]]:
         if _VERSION_TOKEN.match(word) and (versioned or len(tokens) > 0 or "." in word):
             versioned = True
             continue
-        if word in RELEASE_WORDS or _FIX_TOKEN.match(word) or _CHAPTER_TOKEN.match(word):
+        if (
+            word in RELEASE_WORDS
+            or _FIX_TOKEN.match(word)
+            or _CHAPTER_TOKEN.match(word)
+        ):
             continue
         # Drop short release suffixes after the version, but keep `DLC`/`OST` as markers.
-        if versioned and not word.isdigit() and len(word) <= 3 and word not in MARKER_WORDS:
+        if (
+            versioned
+            and not word.isdigit()
+            and len(word) <= 3
+            and word not in MARKER_WORDS
+        ):
             continue
         # `Season2` or `Game2` as one word: split off the number so the
         # marker and sequel checks see it.
@@ -95,7 +162,12 @@ def _token_match(a: str, b: str) -> bool:
         return True
     if a.isdigit() or b.isdigit():
         return False
-    return a[0] == b[0] and len(a) > 3 and len(b) > 3 and SequenceMatcher(None, a, b).ratio() >= 0.85
+    return (
+        a[0] == b[0]
+        and len(a) > 3
+        and len(b) > 3
+        and SequenceMatcher(None, a, b).ratio() >= 0.85
+    )
 
 
 def _overlap(game: Sequence[str], other: Sequence[str]) -> int:
@@ -135,7 +207,9 @@ def title_score(game_title: str, result_title: str) -> int:
 
 # normalize_version() drops spaces ("1.0 Final" -> "1.0final"), so a suffix
 # word can follow a digit directly; only another letter rules it out.
-_VERSION_WORDS = re.compile(r"(?<![a-z])(?:hotfix|fixed|fix|final|beta|alpha|public|patreon)\d*(?![a-z])")
+_VERSION_WORDS = re.compile(
+    r"(?<![a-z])(?:hotfix|fixed|fix|final|beta|alpha|public|patreon)\d*(?![a-z])"
+)
 _VERSION_IN_TITLE = re.compile(
     r"(?<![\w.])v?(\d+(?:[._]\d+)*[a-z]?)(?:[-_ ]?(?:hotfix|fixed|fix|final|beta|alpha|public|patreon)\d*)*(?![\w.]*\d)",
     re.IGNORECASE,
@@ -154,7 +228,11 @@ def canonical_version(version: object) -> str:
 def _name_number_spans(title: str, game_title: str) -> set[tuple[int, int]]:
     """Where the game title's own numbers (`Game 2`) first appear in a listing title."""
     digits = set(re.findall(r"\d+", game_title))
-    numbers = [token for token in name_tokens(game_title)[0] if token.isdigit() and token in digits]
+    numbers = [
+        token
+        for token in name_tokens(game_title)[0]
+        if token.isdigit() and token in digits
+    ]
     spans: set[tuple[int, int]] = set()
     start = 0
     for number in numbers:
@@ -172,7 +250,9 @@ def _name_number_spans(title: str, game_title: str) -> set[tuple[int, int]]:
 def versions_in_title(title: str, game_title: str = "") -> list[str]:
     """Versions in a listing title; a number that belongs to `game_title` is not a version."""
     text = _BRACKETS.sub(" ", title)
-    name_spans: set[tuple[int, int]] = _name_number_spans(text, game_title) if game_title else set()
+    name_spans: set[tuple[int, int]] = (
+        _name_number_spans(text, game_title) if game_title else set()
+    )
     found: list[str] = []
     for match in _VERSION_IN_TITLE.finditer(text):
         if match.span(1) in name_spans:
@@ -232,7 +312,9 @@ def rank(
     for raw in results:
         title = str(raw.get("title") or "")
         seeders = _int(raw.get("seeders"))
-        has_version = listing_has_version(title, version, game_title) if want_version else None
+        has_version = (
+            listing_has_version(title, version, game_title) if want_version else None
+        )
         score = title_score(game_title, title)
         if score:
             score += 4 if has_version else 0
@@ -244,21 +326,37 @@ def rank(
         item.update(score=score, version_match=has_version, no_seeders=seeders == 0)
         scored.append(item)
     # The 100 cap can erase the version bonus, so a version match breaks score ties before seeders.
-    scored.sort(key=lambda r: (
-        -_int(r["score"]), r["version_match"] is not True, -_int(r.get("seeders")), -_int(r.get("date")),
-    ))
+    scored.sort(
+        key=lambda r: (
+            -_int(r["score"]),
+            r["version_match"] is not True,
+            -_int(r.get("seeders")),
+            -_int(r.get("date")),
+        )
+    )
     shown = scored[:MAX_SHOWN]
     eligible = [
-        r for r in shown
-        if _int(r["seeders"]) > 0 and (r["version_match"] is not False) and _int(r["score"]) >= PRESELECT_AT
+        r
+        for r in shown
+        if _int(r["seeders"]) > 0
+        and (r["version_match"] is not False)
+        and _int(r["score"]) >= PRESELECT_AT
     ]
     preselected: int | None = None
     if eligible:
         top = eligible[0]
-        close = [r for r in eligible[1:] if _int(top["score"]) - _int(r["score"]) <= AMBIGUITY_GAP]
+        close = [
+            r
+            for r in eligible[1:]
+            if _int(top["score"]) - _int(r["score"]) <= AMBIGUITY_GAP
+        ]
         if not close:
             preselected = _int(top["id"])
-    return {"results": shown, "preselected_id": preselected, "needs_choice": bool(shown) and preselected is None}
+    return {
+        "results": shown,
+        "preselected_id": preselected,
+        "needs_choice": bool(shown) and preselected is None,
+    }
 
 
 def find(
@@ -271,7 +369,9 @@ def find(
     for query in plan_queries(game_title, developer):
         found = search(query)
         if found:
-            ranked = rank(cast(Sequence[Mapping[str, object]], found), game_title, version)
+            ranked = rank(
+                cast(Sequence[Mapping[str, object]], found), game_title, version
+            )
             # All results scored too low: try the next query.
             if ranked["results"]:
                 ranked["query"] = query

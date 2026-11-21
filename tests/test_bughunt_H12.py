@@ -49,7 +49,9 @@ def test_thread_moved_to_another_uid_stays_a_separate_game(new_game_first, sync)
     games = [moved, original] if new_game_first else [original, moved]
 
     result = apply_library_backup(
-        _backup(games), {"sections": [SECTION_METADATA, SECTION_EXECUTABLE_PATHS]}, sync=sync
+        _backup(games),
+        {"sections": [SECTION_METADATA, SECTION_EXECUTABLE_PATHS]},
+        sync=sync,
     )
 
     assert result["created"] == 1

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M13: a helper spawned before the old one's reader ran `_on_exit` must get every job again."""
+
 import json
 from pathlib import Path
 
@@ -56,7 +57,9 @@ def _adds(proc: _FakeProc) -> list[object]:
     return [line["id"] for line in proc.stdin.lines if line.get("cmd") == "add"]
 
 
-def test_replacement_helper_gets_jobs_the_dead_helper_held(sup: TorrentSupervisor, tmp_path: Path):
+def test_replacement_helper_gets_jobs_the_dead_helper_held(
+    sup: TorrentSupervisor, tmp_path: Path
+):
     job = _active_job(sup, tmp_path)
     assert sup._spawn()  # pyright: ignore[reportPrivateUsage]
     old = sup._proc  # pyright: ignore[reportPrivateUsage]
@@ -76,7 +79,9 @@ def test_replacement_helper_gets_jobs_the_dead_helper_held(sup: TorrentSuperviso
     assert job.added
 
 
-def test_events_from_a_replaced_helper_are_ignored(sup: TorrentSupervisor, tmp_path: Path):
+def test_events_from_a_replaced_helper_are_ignored(
+    sup: TorrentSupervisor, tmp_path: Path
+):
     job = _active_job(sup, tmp_path)
     assert sup._spawn()  # pyright: ignore[reportPrivateUsage]
     old = sup._proc  # pyright: ignore[reportPrivateUsage]
@@ -89,7 +94,12 @@ def test_events_from_a_replaced_helper_are_ignored(sup: TorrentSupervisor, tmp_p
     # A late `ready` and `status` from the dead helper change nothing.
     sup._on_event({"event": "ready"}, old)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
     sup._on_event(  # pyright: ignore[reportPrivateUsage]
-        {"event": "status", "torrents": [{"id": job.id, "state": "downloading", "size": 100, "downloaded": 50}]},
+        {
+            "event": "status",
+            "torrents": [
+                {"id": job.id, "state": "downloading", "size": 100, "downloaded": 50}
+            ],
+        },
         old,  # pyright: ignore[reportArgumentType]
     )
     assert not sup._ready  # pyright: ignore[reportPrivateUsage]

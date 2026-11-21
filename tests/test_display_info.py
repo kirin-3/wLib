@@ -7,7 +7,15 @@ def test_unknown_screen_size_gives_no_size_flags():
     display_info.set_screen_size(None, None)
     assert display_info.screen_size() is None
     argv = gamescope_argv(
-        {"window_mode": "fullscreen", "output_resolution": "", "game_resolution": "", "scaler": "", "filter": "", "fps_limit": "", "args": []},
+        {
+            "window_mode": "fullscreen",
+            "output_resolution": "",
+            "game_resolution": "",
+            "scaler": "",
+            "filter": "",
+            "fps_limit": "",
+            "args": [],
+        },
         display_info.screen_size(),
     )
     assert argv == ["gamescope", "-f"]
@@ -18,10 +26,29 @@ def test_known_screen_size_is_used_when_both_auto():
     try:
         assert display_info.screen_size() == (3840, 2160)
         argv = gamescope_argv(
-            {"window_mode": "fullscreen", "output_resolution": "", "game_resolution": "", "scaler": "", "filter": "", "fps_limit": "", "args": []},
+            {
+                "window_mode": "fullscreen",
+                "output_resolution": "",
+                "game_resolution": "",
+                "scaler": "",
+                "filter": "",
+                "fps_limit": "",
+                "args": [],
+            },
             display_info.screen_size(),
         )
-        assert argv == ["gamescope", "-f", "-W", "3840", "-H", "2160", "-w", "3840", "-h", "2160"]
+        assert argv == [
+            "gamescope",
+            "-f",
+            "-W",
+            "3840",
+            "-H",
+            "2160",
+            "-w",
+            "3840",
+            "-h",
+            "2160",
+        ]
     finally:
         display_info.set_screen_size(None, None)
 

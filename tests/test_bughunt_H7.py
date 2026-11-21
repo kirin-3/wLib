@@ -72,7 +72,9 @@ def test_move_refuses_folder_with_other_game_data(lib, tmp_path, field):
     _ = update_game(b_id, {field: str(inside)})
     dest = tmp_path / "Dest"
     dest.mkdir()
-    entry = gf.plan_move([a_id], str(dest), {a_id: str(a_root)}, _hooks(), ctx, with_sizes=False)[0]
+    entry = gf.plan_move(
+        [a_id], str(dest), {a_id: str(a_root)}, _hooks(), ctx, with_sizes=False
+    )[0]
     assert entry["removable"] is False
     assert gf.entry_problem(entry) == "The folder contains another library game."
 
@@ -88,7 +90,9 @@ def test_other_game_data_outside_folder_allows_removal(lib, tmp_path):
     ctx, a_id, b_id, a_root, _inside = _setup(lib, tmp_path)
     outside = tmp_path / "Saves" / "B"
     outside.mkdir(parents=True)
-    _ = update_game(b_id, {"save_path_override": str(outside), "custom_prefix": str(outside)})
+    _ = update_game(
+        b_id, {"save_path_override": str(outside), "custom_prefix": str(outside)}
+    )
     entry = gf.plan_uninstall([a_id], {a_id: str(a_root)}, _hooks(), ctx)[0]
     assert entry["removable"] is True, entry["reason"]
 
@@ -101,8 +105,12 @@ def test_own_save_override_does_not_block(lib, tmp_path):
     assert entry["removable"] is True, entry["reason"]
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Windows trims trailing spaces in filenames")
-def test_uninstall_protects_executable_reached_through_link_with_trailing_space(lib, tmp_path):
+@pytest.mark.skipif(
+    os.name == "nt", reason="Windows trims trailing spaces in filenames"
+)
+def test_uninstall_protects_executable_reached_through_link_with_trailing_space(
+    lib, tmp_path
+):
     ctx, a_id, b_id, a_root, inside = _setup(lib, tmp_path)
     exe = inside / "GameB.exe"
     exe.write_bytes(b"MZ")

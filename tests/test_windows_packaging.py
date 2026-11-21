@@ -33,7 +33,7 @@ def test_pyinstaller_spec_contains_required_windows_payload():
 
     for required_text in (
         'name="wLib"',
-        'console=False',
+        "console=False",
         '"ui/dist"',
         '"extension"',
         'collect_data_files("certifi")',
@@ -47,30 +47,30 @@ def test_pyinstaller_spec_contains_required_windows_payload():
 
 def test_msi_metadata_is_per_user_x64_and_data_safe():
     wxs = (WINDOWS_PACKAGING / "wLib.wxs").read_text(encoding="utf-8")
-    build_script = (
-        REPOSITORY_ROOT / "scripts" / "build-windows.ps1"
-    ).read_text(encoding="utf-8")
+    build_script = (REPOSITORY_ROOT / "scripts" / "build-windows.ps1").read_text(
+        encoding="utf-8"
+    )
 
     assert 'Scope="perUser"' in wxs
     assert 'Id="PerUserProgramFilesFolder"' in wxs
     assert 'UpgradeCode="ECB1D2B7-1B92-470A-BF78-6E18825C99B8"' in wxs
-    assert 'INSTALLDESKTOPSHORTCUT = 1' in wxs
+    assert "INSTALLDESKTOPSHORTCUT = 1" in wxs
     assert 'Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1"' in wxs
     assert '<Property Id="INSTALLDESKTOPSHORTCUT" Secure="yes" />' in wxs
     assert 'Value="LaunchWLib"' in wxs
     assert "LOCALAPPDATA\\wLib" not in wxs
     assert "-ext WixToolset.UI.wixext" in build_script
-    assert '-arch x64' in build_script
-    assert 'windows-x64-portable.zip' in build_script
-    assert 'windows-x64.msi' in build_script
-    assert 'SHA256SUMS.txt' in build_script
+    assert "-arch x64" in build_script
+    assert "windows-x64-portable.zip" in build_script
+    assert "windows-x64.msi" in build_script
+    assert "SHA256SUMS.txt" in build_script
     assert "Compress-ArchiveWithRetry" in build_script
 
 
 def test_windows_build_rejects_four_part_msi_versions():
-    build_script = (
-        REPOSITORY_ROOT / "scripts" / "build-windows.ps1"
-    ).read_text(encoding="utf-8")
+    build_script = (REPOSITORY_ROOT / "scripts" / "build-windows.ps1").read_text(
+        encoding="utf-8"
+    )
 
     assert "Version must contain exactly three numeric parts" in build_script
     assert "(?:\\.[0-9]+)?$" not in build_script
@@ -125,9 +125,7 @@ def test_smoke_mode_without_data_override_uses_a_temporary_directory(tmp_path):
 
     output = process.stdout + process.stderr
     payloads = [
-        json.loads(line)
-        for line in output.splitlines()
-        if line.strip().startswith("{")
+        json.loads(line) for line in output.splitlines() if line.strip().startswith("{")
     ]
     assert payloads
     payload = payloads[-1]

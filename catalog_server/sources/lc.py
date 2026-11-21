@@ -64,7 +64,9 @@ def _int(value: object) -> int | None:
 def _strings(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
-    return [item for item in cast(list[object], value) if isinstance(item, str) and item]
+    return [
+        item for item in cast(list[object], value) if isinstance(item, str) and item
+    ]
 
 
 def _payload(response: Response) -> Mapping[str, object]:
@@ -147,7 +149,8 @@ def parse_page(
                 "platforms": _strings(entry.get("platforms")),
                 "cover_url": cover or None,
                 "screens": [
-                    url for url in _strings(entry.get("images"))
+                    url
+                    for url in _strings(entry.get("images"))
                     if url != cover and url.startswith("https://")
                 ],
                 "views": _int(entry.get("view_count")),
@@ -162,9 +165,12 @@ def parse_page(
         log.info(
             "lc: skipped %d items outside the game forums: %s",
             sum(skipped.values()),
-            ", ".join(f"node {node}: {count}" for node, count in sorted(
-                skipped.items(), key=lambda pair: str(pair[0])
-            )),
+            ", ".join(
+                f"node {node}: {count}"
+                for node, count in sorted(
+                    skipped.items(), key=lambda pair: str(pair[0])
+                )
+            ),
         )
     return rows, names, len(cast(list[object], items)), pages, has_more
 

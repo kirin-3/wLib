@@ -57,12 +57,8 @@ def test_client_masked_frame_64bit_length():
 
 
 def test_continuation_reassembly():
-    first = extension_ws.encode_client_frame(
-        extension_ws.OP_TEXT, b"hel", fin=False
-    )
-    second = extension_ws.encode_client_frame(
-        extension_ws.OP_CONT, b"lo", fin=True
-    )
+    first = extension_ws.encode_client_frame(extension_ws.OP_TEXT, b"hel", fin=False)
+    second = extension_ws.encode_client_frame(extension_ws.OP_CONT, b"lo", fin=True)
     stream = io.BytesIO(first + second)
     kind, payload = extension_ws.recv_message(stream)
     assert kind == "text"
@@ -112,12 +108,8 @@ def test_oversize_frame_rejected():
 
 def test_oversize_reassembled_message_rejected():
     chunk = b"z" * (5 * 1024 * 1024)
-    first = extension_ws.encode_client_frame(
-        extension_ws.OP_TEXT, chunk, fin=False
-    )
-    second = extension_ws.encode_client_frame(
-        extension_ws.OP_CONT, chunk, fin=True
-    )
+    first = extension_ws.encode_client_frame(extension_ws.OP_TEXT, chunk, fin=False)
+    second = extension_ws.encode_client_frame(extension_ws.OP_CONT, chunk, fin=True)
     with pytest.raises(extension_ws.MessageTooLarge):
         extension_ws.recv_message(io.BytesIO(first + second))
 
@@ -143,9 +135,7 @@ def test_bridge_success():
     sent: list[str] = []
     conn = _fake_conn(sent)
     bridge._register_connection(conn)
-    bridge._handle_message(
-        conn, {"type": "hello", "protocol": 1, "can_fetch": True}
-    )
+    bridge._handle_message(conn, {"type": "hello", "protocol": 1, "can_fetch": True})
     assert bridge.is_available()
 
     result_holder: dict[str, object] = {}
@@ -189,9 +179,7 @@ def test_bridge_timeout():
     sent: list[str] = []
     conn = _fake_conn(sent)
     bridge._register_connection(conn)
-    bridge._handle_message(
-        conn, {"type": "hello", "protocol": 1, "can_fetch": True}
-    )
+    bridge._handle_message(conn, {"type": "hello", "protocol": 1, "can_fetch": True})
     with pytest.raises(BridgeFailed):
         bridge.fetch("https://f95zone.to/threads/1/", timeout=0.05)
 
@@ -200,9 +188,7 @@ def test_bridge_error_result():
     sent: list[str] = []
     conn = _fake_conn(sent)
     bridge._register_connection(conn)
-    bridge._handle_message(
-        conn, {"type": "hello", "protocol": 1, "can_fetch": True}
-    )
+    bridge._handle_message(conn, {"type": "hello", "protocol": 1, "can_fetch": True})
 
     def _fetch():
         with pytest.raises(BridgeFailed):
@@ -216,7 +202,12 @@ def test_bridge_error_result():
     request = json.loads(sent[0])
     bridge._handle_message(
         conn,
-        {"type": "fetch_result", "id": request["id"], "ok": False, "error": "too_large"},
+        {
+            "type": "fetch_result",
+            "id": request["id"],
+            "ok": False,
+            "error": "too_large",
+        },
     )
     thread.join(timeout=5)
     assert not thread.is_alive()
@@ -226,9 +217,7 @@ def test_bridge_disconnect_fails_pending_at_once():
     sent: list[str] = []
     conn = _fake_conn(sent)
     bridge._register_connection(conn)
-    bridge._handle_message(
-        conn, {"type": "hello", "protocol": 1, "can_fetch": True}
-    )
+    bridge._handle_message(conn, {"type": "hello", "protocol": 1, "can_fetch": True})
     errors: list[str] = []
 
     def _fetch():
@@ -277,9 +266,7 @@ def test_bridge_can_fetch_false_ignored():
     sent: list[str] = []
     conn = _fake_conn(sent)
     bridge._register_connection(conn)
-    bridge._handle_message(
-        conn, {"type": "hello", "protocol": 1, "can_fetch": False}
-    )
+    bridge._handle_message(conn, {"type": "hello", "protocol": 1, "can_fetch": False})
     assert bridge.is_available() is False
     with pytest.raises(BridgeUnavailable):
         bridge.fetch("https://f95zone.to/threads/1/", timeout=0.05)
@@ -358,15 +345,29 @@ def test_resolve_requires_capable_extension_and_preserves_fragment():
     bridge._handle_message(conn, {"type": "hello", "protocol": 1, "can_fetch": True})
     with pytest.raises(BridgeUnavailable):
         bridge.resolve("https://f95zone.to/dl/1/?fake", "mega")
-    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True})
+    bridge._handle_message(
+        conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True}
+    )
     results = []
-    thread = threading.Thread(target=lambda: results.append(bridge.resolve("https://f95zone.to/dl/1/?fake", "mega", timeout=1)))
+    thread = threading.Thread(
+        target=lambda: results.append(
+            bridge.resolve("https://f95zone.to/dl/1/?fake", "mega", timeout=1)
+        )
+    )
     thread.start()
     deadline = time.monotonic() + 1
     while not sent and time.monotonic() < deadline:
         time.sleep(0.005)
     request = json.loads(sent[0])
-    bridge._handle_message(conn, {"type": "resolve_result", "id": request["id"], "ok": True, "url": "https://mega.nz/file/a#key"})
+    bridge._handle_message(
+        conn,
+        {
+            "type": "resolve_result",
+            "id": request["id"],
+            "ok": True,
+            "url": "https://mega.nz/file/a#key",
+        },
+    )
     thread.join(1)
     assert results[0]["url"].endswith("#key")
 
@@ -375,13 +376,17 @@ def test_resolve_disconnect_wakes_waiter():
     sent = []
     conn = _fake_conn(sent)
     bridge._register_connection(conn)
-    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True})
+    bridge._handle_message(
+        conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True}
+    )
     errors = []
+
     def run():
         try:
             bridge.resolve("https://f95zone.to/dl/1/?fake", "mega")
         except BridgeFailed as exc:
             errors.append(str(exc))
+
     thread = threading.Thread(target=run)
     thread.start()
     deadline = time.monotonic() + 1
@@ -396,11 +401,22 @@ def test_resolves_serialize_and_needs_user_extends_deadline():
     sent = []
     conn = _fake_conn(sent)
     bridge._register_connection(conn)
-    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True})
+    bridge._handle_message(
+        conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True}
+    )
     results = []
     stages = []
+
     def run():
-        results.append(bridge.resolve("https://f95zone.to/dl/1/?fake", "mega", timeout=0.1, on_progress=stages.append))
+        results.append(
+            bridge.resolve(
+                "https://f95zone.to/dl/1/?fake",
+                "mega",
+                timeout=0.1,
+                on_progress=stages.append,
+            )
+        )
+
     first = threading.Thread(target=run)
     second = threading.Thread(target=run)
     first.start()
@@ -409,15 +425,21 @@ def test_resolves_serialize_and_needs_user_extends_deadline():
         time.sleep(0.005)
     second.start()
     request = json.loads(sent[0])
-    bridge._handle_message(conn, {"type": "resolve_progress", "id": request["id"], "stage": "needs_user"})
+    bridge._handle_message(
+        conn, {"type": "resolve_progress", "id": request["id"], "stage": "needs_user"}
+    )
     time.sleep(0.15)
     assert len(sent) == 1 and stages == ["needs_user"]
-    bridge._handle_message(conn, {"type": "resolve_result", "id": request["id"], "ok": True})
+    bridge._handle_message(
+        conn, {"type": "resolve_result", "id": request["id"], "ok": True}
+    )
     deadline = time.monotonic() + 1
     while len(sent) < 2 and time.monotonic() < deadline:
         time.sleep(0.005)
     request = json.loads(sent[1])
-    bridge._handle_message(conn, {"type": "resolve_result", "id": request["id"], "ok": True})
+    bridge._handle_message(
+        conn, {"type": "resolve_result", "id": request["id"], "ok": True}
+    )
     first.join(1)
     second.join(1)
     assert len(results) == 2
@@ -427,33 +449,42 @@ def test_resolve_cancel_sends_cancellation():
     sent = []
     conn = _fake_conn(sent)
     bridge._register_connection(conn)
-    bridge._handle_message(conn, {'type':'hello','protocol':2,'can_fetch':True,'can_resolve':True})
+    bridge._handle_message(
+        conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True}
+    )
     cancelled = threading.Event()
     errors = []
+
     def run():
         try:
-            bridge.resolve('https://f95zone.to/dl/1/?u=fake', 'mega', cancel=cancelled)
+            bridge.resolve("https://f95zone.to/dl/1/?u=fake", "mega", cancel=cancelled)
         except BridgeFailed as exc:
             errors.append(str(exc))
+
     thread = threading.Thread(target=run)
     thread.start()
     deadline = time.monotonic() + 1
     while not sent and time.monotonic() < deadline:
-        time.sleep(.005)
+        time.sleep(0.005)
     cancelled.set()
     thread.join(1)
-    assert errors == ['cancelled']
-    assert json.loads(sent[-1]) == {'type':'resolve_cancel','id':json.loads(sent[0])['id']}
+    assert errors == ["cancelled"]
+    assert json.loads(sent[-1]) == {
+        "type": "resolve_cancel",
+        "id": json.loads(sent[0])["id"],
+    }
 
 
 def test_resolve_timeout_asks_extension_to_close_its_window():
     sent = []
     conn = _fake_conn(sent)
     bridge._register_connection(conn)
-    bridge._handle_message(conn, {'type':'hello','protocol':2,'can_fetch':True,'can_resolve':True})
-    with pytest.raises(BridgeFailed, match='in time'):
-        bridge.resolve('https://f95zone.to/dl/1/?u=fake', 'mega', timeout=0.05)
-    assert json.loads(sent[-1])['type'] == 'resolve_cancel'
+    bridge._handle_message(
+        conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True}
+    )
+    with pytest.raises(BridgeFailed, match="in time"):
+        bridge.resolve("https://f95zone.to/dl/1/?u=fake", "mega", timeout=0.05)
+    assert json.loads(sent[-1])["type"] == "resolve_cancel"
 
 
 def test_fetch_on_connection_closed_before_register_fails_fast(monkeypatch):
@@ -504,9 +535,15 @@ def test_lc_bridge_capability_is_independent_and_paced(monkeypatch):
         def send(raw):
             message = json.loads(raw)
             requests.append((now, conn, message.get("site", "f95")))
-            bridge._handle_message(conn, {
-                "type": "fetch_result", "id": message["id"], "ok": True, "body": "ok",
-            })
+            bridge._handle_message(
+                conn,
+                {
+                    "type": "fetch_result",
+                    "id": message["id"],
+                    "ok": True,
+                    "body": "ok",
+                },
+            )
 
         conn = BridgeConnection(send)
         bridge._register_connection(conn)
@@ -541,9 +578,18 @@ def test_lc_resolve_requires_its_capability_and_shares_lc_pacing(monkeypatch):
     def send(message):
         request = json.loads(message)
         if request["type"] == "fetch":
-            response = {"type": "fetch_result", "ok": True, "status": 200, "body": "<html>"}
+            response = {
+                "type": "fetch_result",
+                "ok": True,
+                "status": 200,
+                "body": "<html>",
+            }
         else:
-            response = {"type": "resolve_result", "ok": True, "url": "https://mega.nz/file/abc#key"}
+            response = {
+                "type": "resolve_result",
+                "ok": True,
+                "url": "https://mega.nz/file/abc#key",
+            }
         assert bridge._lc_request_lock.locked()
         starts.append((request["type"], now[0]))
         bridge._handle_message(conn, {**response, "id": request["id"]})
@@ -553,7 +599,10 @@ def test_lc_resolve_requires_its_capability_and_shares_lc_pacing(monkeypatch):
 
     conn = BridgeConnection(send)
     bridge._register_connection(conn)
-    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch_lc": True, "can_resolve": True})
+    bridge._handle_message(
+        conn,
+        {"type": "hello", "protocol": 2, "can_fetch_lc": True, "can_resolve": True},
+    )
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
     monkeypatch.setattr(time, "sleep", sleep)
     url = "https://lewdcorner.com/masked/out?t=fake"
@@ -563,7 +612,9 @@ def test_lc_resolve_requires_its_capability_and_shares_lc_pacing(monkeypatch):
     assert bridge.fetch("https://lewdcorner.com/threads/1/", site="lc").status == 200
     bridge._handle_message(conn, {"type": "status", "can_resolve_lc": True})
     assert bridge.status_snapshot()["can_resolve_lc"]
-    assert bridge.resolve(url, "mega", site="lc")["url"] == "https://mega.nz/file/abc#key"
+    assert (
+        bridge.resolve(url, "mega", site="lc")["url"] == "https://mega.nz/file/abc#key"
+    )
     assert starts == [("fetch", 10.0), ("resolve", 12.0)]
     assert not bridge._lc_request_lock.locked()
     bridge._handle_message(conn, {"type": "status", "can_resolve_lc": False})
@@ -587,7 +638,9 @@ def _image_connection(answer=None, **hello):
         for chunk in answer(message):
             if isinstance(chunk.get("data"), bytes):
                 chunk = {**chunk, "data": base64.b64encode(chunk["data"]).decode()}
-            bridge._handle_message(conn, {"type": "fetch_image_chunk", "id": message["id"], **chunk})
+            bridge._handle_message(
+                conn, {"type": "fetch_image_chunk", "id": message["id"], **chunk}
+            )
 
     conn = BridgeConnection(send)
     bridge._register_connection(conn)
@@ -596,8 +649,16 @@ def _image_connection(answer=None, **hello):
 
 
 def _ok(data=b"img", **extra):
-    return {"index": 0, "ok": True, "status": 200, "content_type": "image/webp",
-            "final_url": LC_IMAGE, "data": data, "last": True, **extra}
+    return {
+        "index": 0,
+        "ok": True,
+        "status": 200,
+        "content_type": "image/webp",
+        "final_url": LC_IMAGE,
+        "data": data,
+        "last": True,
+        **extra,
+    }
 
 
 def test_lc_image_fetch_needs_its_flag():
@@ -607,10 +668,20 @@ def test_lc_image_fetch_needs_its_flag():
         bridge.fetch_image(LC_IMAGE, background=False)
     assert older_sent == []
     assert bridge.status_snapshot()["can_fetch_lc_images"] is False
-    _newer, newer_sent = _image_connection(lambda _m: [_ok()], can_fetch_lc=True, can_fetch_lc_images=True)
+    _newer, newer_sent = _image_connection(
+        lambda _m: [_ok()], can_fetch_lc=True, can_fetch_lc_images=True
+    )
     answer = bridge.fetch_image(LC_IMAGE, background=False)
-    assert (answer.status, answer.content_type, answer.body) == (200, "image/webp", b"img")
-    assert newer_sent[0] == {"type": "fetch_image", "id": newer_sent[0]["id"], "url": LC_IMAGE}
+    assert (answer.status, answer.content_type, answer.body) == (
+        200,
+        "image/webp",
+        b"img",
+    )
+    assert newer_sent[0] == {
+        "type": "fetch_image",
+        "id": newer_sent[0]["id"],
+        "url": LC_IMAGE,
+    }
     assert older_sent == []
     assert bridge.status_snapshot()["can_fetch_lc_images"] is True
 
@@ -629,31 +700,49 @@ def test_lc_image_listener_runs_when_the_flag_turns_true():
 
 def test_lc_image_chunks_are_joined_and_checked(monkeypatch):
     parts = [b"a" * 10, b"b" * 10, b"c" * 3]
-    _image_connection(lambda _m: [
-        _ok(parts[0], last=False),
-        {"index": 1, "data": parts[1], "last": False},
-        {"index": 2, "data": parts[2], "last": True},
-    ], can_fetch_lc_images=True)
+    _image_connection(
+        lambda _m: [
+            _ok(parts[0], last=False),
+            {"index": 1, "data": parts[1], "last": False},
+            {"index": 2, "data": parts[2], "last": True},
+        ],
+        can_fetch_lc_images=True,
+    )
     assert bridge.fetch_image(LC_IMAGE, background=False).body == b"".join(parts)
 
     bridge.reset_for_tests()
-    _image_connection(lambda _m: [_ok(last=False), {"index": 2, "data": b"x", "last": True}], can_fetch_lc_images=True)
+    _image_connection(
+        lambda _m: [_ok(last=False), {"index": 2, "data": b"x", "last": True}],
+        can_fetch_lc_images=True,
+    )
     with pytest.raises(BridgeFailed, match="chunk missing"):
         bridge.fetch_image(LC_IMAGE, background=False)
 
     bridge.reset_for_tests()
     monkeypatch.setattr(bridge, "MAX_IMAGE_BYTES", 15)
-    _image_connection(lambda _m: [_ok(b"a" * 10, last=False), {"index": 1, "data": b"b" * 10, "last": True}], can_fetch_lc_images=True)
+    _image_connection(
+        lambda _m: [
+            _ok(b"a" * 10, last=False),
+            {"index": 1, "data": b"b" * 10, "last": True},
+        ],
+        can_fetch_lc_images=True,
+    )
     with pytest.raises(BridgeFailed, match="too_large"):
         bridge.fetch_image(LC_IMAGE, background=False)
 
     bridge.reset_for_tests()
-    _image_connection(lambda _m: [{"index": 0, "ok": False, "error": "refused", "last": True}], can_fetch_lc_images=True)
+    _image_connection(
+        lambda _m: [{"index": 0, "ok": False, "error": "refused", "last": True}],
+        can_fetch_lc_images=True,
+    )
     with pytest.raises(BridgeFailed, match="refused"):
         bridge.fetch_image(LC_IMAGE, background=False)
 
     bridge.reset_for_tests()
-    _image_connection(lambda _m: [_ok(b"", status=500, content_type="text/html")], can_fetch_lc_images=True)
+    _image_connection(
+        lambda _m: [_ok(b"", status=500, content_type="text/html")],
+        can_fetch_lc_images=True,
+    )
     answer = bridge.fetch_image(LC_IMAGE, background=False)
     assert (answer.status, answer.content_type, answer.body) == (500, "text/html", b"")
 
@@ -668,9 +757,15 @@ def test_background_lc_images_keep_their_gap_and_hourly_limit(monkeypatch):
     now = [1000.0]
     sends = []
     monkeypatch.setattr(bridge.time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(bridge.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
-    bridge._lc_request_lock.timed_wait = lambda _cond, seconds: now.__setitem__(0, now[0] + seconds)
-    _image_connection(lambda _m: sends.append(now[0]) or [_ok()], can_fetch_lc_images=True)
+    monkeypatch.setattr(
+        bridge.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
+    )
+    bridge._lc_request_lock.timed_wait = lambda _cond, seconds: now.__setitem__(
+        0, now[0] + seconds
+    )
+    _image_connection(
+        lambda _m: sends.append(now[0]) or [_ok()], can_fetch_lc_images=True
+    )
     for _ in range(3):
         _ = bridge.fetch_image(LC_IMAGE, background=True)
     assert sends == [1000.0, 1005.0, 1010.0]
@@ -692,20 +787,34 @@ def test_foreground_lc_requests_go_before_waiting_background_images(monkeypatch)
     monkeypatch.setattr(bridge, "LC_BACKGROUND_GAP_SECONDS", 0)
     monkeypatch.setattr(bridge, "LC_GAP_SECONDS", 0)
     order = []
-    _image_connection(lambda message: order.append(message["url"]) or [_ok()], can_fetch_lc_images=True)
+    _image_connection(
+        lambda message: order.append(message["url"]) or [_ok()],
+        can_fetch_lc_images=True,
+    )
     gate = bridge._lc_request_lock
     gate.acquire_foreground()  # another LC request in flight
-    background = threading.Thread(target=lambda: bridge.fetch_image("https://lewdcorner.com/attachments/bg.1/", background=True))
+    background = threading.Thread(
+        target=lambda: bridge.fetch_image(
+            "https://lewdcorner.com/attachments/bg.1/", background=True
+        )
+    )
     background.start()
     time.sleep(0.05)
-    foreground = threading.Thread(target=lambda: bridge.fetch_image("https://lewdcorner.com/attachments/fg.2/", background=False))
+    foreground = threading.Thread(
+        target=lambda: bridge.fetch_image(
+            "https://lewdcorner.com/attachments/fg.2/", background=False
+        )
+    )
     foreground.start()
     while gate._waiting_foreground == 0:
         time.sleep(0.01)
     gate.release()
     foreground.join(5)
     background.join(5)
-    assert order == ["https://lewdcorner.com/attachments/fg.2/", "https://lewdcorner.com/attachments/bg.1/"]
+    assert order == [
+        "https://lewdcorner.com/attachments/fg.2/",
+        "https://lewdcorner.com/attachments/bg.1/",
+    ]
     assert not gate.locked()
 
 
@@ -751,7 +860,8 @@ def test_no_extension_reason_for_list_fetch():
     conn = _fake_conn([])
     bridge._register_connection(conn)
     bridge._handle_message(
-        conn, {"type": "hello", "protocol": 2, "can_fetch": False, "can_fetch_lists": True}
+        conn,
+        {"type": "hello", "protocol": 2, "can_fetch": False, "can_fetch_lists": True},
     )
     assert bridge.list_fetch_unavailable_reason() == "no_extension"
 
@@ -763,12 +873,14 @@ def test_newest_list_capable_connection_wins():
     capable = _fake_conn(capable_sent)
     bridge._register_connection(capable)
     bridge._handle_message(
-        capable, {"type": "hello", "protocol": 2, "can_fetch": True, "can_fetch_lists": True}
+        capable,
+        {"type": "hello", "protocol": 2, "can_fetch": True, "can_fetch_lists": True},
     )
     newer_capable = _fake_conn(newer_capable_sent)
     bridge._register_connection(newer_capable)
     bridge._handle_message(
-        newer_capable, {"type": "hello", "protocol": 2, "can_fetch": True, "can_fetch_lists": True}
+        newer_capable,
+        {"type": "hello", "protocol": 2, "can_fetch": True, "can_fetch_lists": True},
     )
     old = _fake_conn(old_sent)
     bridge._register_connection(old)
@@ -791,14 +903,23 @@ def _lc_page_connection(order):
     def send(raw):
         message = json.loads(raw)
         order.append(message["url"])
-        bridge._handle_message(conn, {
-            "type": "fetch_result", "id": message["id"], "ok": True, "status": 200,
-            "final_url": message["url"], "body": "<html></html>",
-        })
+        bridge._handle_message(
+            conn,
+            {
+                "type": "fetch_result",
+                "id": message["id"],
+                "ok": True,
+                "status": 200,
+                "final_url": message["url"],
+                "body": "<html></html>",
+            },
+        )
 
     conn = BridgeConnection(send)
     bridge._register_connection(conn)
-    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_fetch_lc": True})
+    bridge._handle_message(
+        conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_fetch_lc": True}
+    )
     return conn
 
 
@@ -809,11 +930,19 @@ def test_lc_fetch_listener_runs_once_per_turn_on():
     bridge._register_connection(conn)
     bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True})
     assert calls == []
-    bridge._handle_message(conn, {"type": "status", "can_fetch": True, "can_fetch_lc": True})
-    bridge._handle_message(conn, {"type": "status", "can_fetch": True, "can_fetch_lc": True})
+    bridge._handle_message(
+        conn, {"type": "status", "can_fetch": True, "can_fetch_lc": True}
+    )
+    bridge._handle_message(
+        conn, {"type": "status", "can_fetch": True, "can_fetch_lc": True}
+    )
     assert calls == [1]
-    bridge._handle_message(conn, {"type": "status", "can_fetch": True, "can_fetch_lc": False})
-    bridge._handle_message(conn, {"type": "status", "can_fetch": True, "can_fetch_lc": True})
+    bridge._handle_message(
+        conn, {"type": "status", "can_fetch": True, "can_fetch_lc": False}
+    )
+    bridge._handle_message(
+        conn, {"type": "status", "can_fetch": True, "can_fetch_lc": True}
+    )
     assert calls == [1, 1]
     _lc_page_connection([])
     assert calls == [1, 1, 1]
@@ -826,17 +955,25 @@ def test_background_lc_page_fetch_waits_behind_foreground(monkeypatch):
     gate = bridge._lc_request_lock
     gate.acquire_foreground()  # another LC request in flight
     background = threading.Thread(
-        target=lambda: bridge.fetch("https://lewdcorner.com/threads/1/", site="lc", background=True))
+        target=lambda: bridge.fetch(
+            "https://lewdcorner.com/threads/1/", site="lc", background=True
+        )
+    )
     background.start()
     time.sleep(0.05)
-    foreground = threading.Thread(target=lambda: bridge.fetch("https://lewdcorner.com/threads/2/", site="lc"))
+    foreground = threading.Thread(
+        target=lambda: bridge.fetch("https://lewdcorner.com/threads/2/", site="lc")
+    )
     foreground.start()
     while gate._waiting_foreground == 0:
         time.sleep(0.01)
     gate.release()
     foreground.join(5)
     background.join(5)
-    assert order == ["https://lewdcorner.com/threads/2/", "https://lewdcorner.com/threads/1/"]
+    assert order == [
+        "https://lewdcorner.com/threads/2/",
+        "https://lewdcorner.com/threads/1/",
+    ]
     assert not gate.locked()
 
 
@@ -844,8 +981,12 @@ def test_background_lc_page_fetch_keeps_the_lc_gap(monkeypatch):
     now = [1000.0]
     sends = []
     monkeypatch.setattr(bridge.time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(bridge.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
-    bridge._lc_request_lock.timed_wait = lambda _cond, seconds: now.__setitem__(0, now[0] + seconds)
+    monkeypatch.setattr(
+        bridge.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
+    )
+    bridge._lc_request_lock.timed_wait = lambda _cond, seconds: now.__setitem__(
+        0, now[0] + seconds
+    )
     _lc_page_connection(sends)
     _ = bridge.fetch("https://lewdcorner.com/threads/1/", site="lc")
     start = now[0]

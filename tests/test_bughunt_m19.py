@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A token renewal that finishes after a sign-out or account switch must not save its token."""
+
 import io
 import json
 from email.message import Message
@@ -10,7 +11,9 @@ import pytest
 from core.downloads import accounts, credentials
 from core.downloads.hosts import rpdl
 
-TORRENT = b"d4:infod6:lengthi5e4:name1:a12:piece lengthi16384e6:pieces20:" + b"x" * 20 + b"ee"
+TORRENT = (
+    b"d4:infod6:lengthi5e4:name1:a12:piece lengthi16384e6:pieces20:" + b"x" * 20 + b"ee"
+)
 
 
 class Response(io.BytesIO):
@@ -62,16 +65,20 @@ def _serve(monkeypatch, items: list[object], during_login=None) -> list[str]:
 
 
 def _old_account(store: dict[str, str]) -> None:
-    store.update({
-        credentials.RPDL_TOKEN: "old",
-        credentials.RPDL_USERNAME: "kim",
-        credentials.RPDL_PASSWORD: "pw",
-    })
+    store.update(
+        {
+            credentials.RPDL_TOKEN: "old",
+            credentials.RPDL_USERNAME: "kim",
+            credentials.RPDL_PASSWORD: "pw",
+        }
+    )
 
 
 def test_sign_out_during_renewal_keeps_the_account_signed_out(monkeypatch, store):
     _old_account(store)
-    auth = _serve(monkeypatch, [_http(401), _login("renewed")], accounts.disconnect_rpdl)
+    auth = _serve(
+        monkeypatch, [_http(401), _login("renewed")], accounts.disconnect_rpdl
+    )
     with pytest.raises(rpdl.RpdlError) as info:
         rpdl.fetch_torrent(3)
     assert info.value.kind == rpdl.KIND_SIGN_IN
@@ -85,11 +92,13 @@ def test_account_switch_during_renewal_keeps_the_new_token(monkeypatch, store):
     _old_account(store)
 
     def switch() -> None:
-        store.update({
-            credentials.RPDL_TOKEN: "other-token",
-            credentials.RPDL_USERNAME: "other",
-            credentials.RPDL_PASSWORD: "pw2",
-        })
+        store.update(
+            {
+                credentials.RPDL_TOKEN: "other-token",
+                credentials.RPDL_USERNAME: "other",
+                credentials.RPDL_PASSWORD: "pw2",
+            }
+        )
 
     _serve(monkeypatch, [_http(401), _login("renewed")], switch)
     with pytest.raises(rpdl.RpdlError) as info:
@@ -103,11 +112,13 @@ def test_rejected_renewal_does_not_clear_a_new_account_token(monkeypatch, store)
     _old_account(store)
 
     def switch() -> None:
-        store.update({
-            credentials.RPDL_TOKEN: "other-token",
-            credentials.RPDL_USERNAME: "other",
-            credentials.RPDL_PASSWORD: "pw2",
-        })
+        store.update(
+            {
+                credentials.RPDL_TOKEN: "other-token",
+                credentials.RPDL_USERNAME: "other",
+                credentials.RPDL_PASSWORD: "pw2",
+            }
+        )
 
     _serve(monkeypatch, [_http(401), _http(403)], switch)
     with pytest.raises(rpdl.RpdlError) as info:

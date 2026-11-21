@@ -5,6 +5,7 @@
 The network paths must produce exactly the tree the local path produces;
 they only change how many round trips it takes to get there.
 """
+
 import os
 import shutil
 import stat
@@ -65,7 +66,11 @@ def _snapshot(root):
                     data = f.read()
             elif stat.S_ISLNK(st.st_mode):
                 data = os.readlink(path).encode()
-            out[os.path.relpath(path, root)] = (stat.S_IFMT(st.st_mode), stat.S_IMODE(st.st_mode), data)
+            out[os.path.relpath(path, root)] = (
+                stat.S_IFMT(st.st_mode),
+                stat.S_IMODE(st.st_mode),
+                data,
+            )
     return out
 
 
@@ -151,7 +156,9 @@ def test_copy_tree_parallel_reports_bytes_and_keeps_tree(tmp_path):
 
     # Without the callback (the archive install call) the copy is unchanged.
     assert copy_tree_parallel(str(src), str(plain), workers=4) == 12
-    assert copy_tree_parallel(str(src), str(counted), workers=4, on_bytes=on_bytes) == 12
+    assert (
+        copy_tree_parallel(str(src), str(counted), workers=4, on_bytes=on_bytes) == 12
+    )
     assert _snapshot(plain) == _snapshot(src) == _snapshot(counted)
     assert sum(seen) == ai.tree_bytes(str(src))
 
@@ -167,8 +174,14 @@ def test_filesystem_type_picks_deepest_mount(tmp_path):
         f"40 22 0:50 / {escaped} rw - tmpfs tmpfs rw\n"
         f"41 40 0:51 / {escaped_games} rw - nfs4 nas:/tank/games rw,vers=4.2\n"
     )
-    assert filesystem_type(str(games / "lib" / "not-yet"), mountinfo=str(mountinfo)) == "nfs4"
-    assert filesystem_type(str(tmp_path / "mnt" / "x"), mountinfo=str(mountinfo)) == "tmpfs"
+    assert (
+        filesystem_type(str(games / "lib" / "not-yet"), mountinfo=str(mountinfo))
+        == "nfs4"
+    )
+    assert (
+        filesystem_type(str(tmp_path / "mnt" / "x"), mountinfo=str(mountinfo))
+        == "tmpfs"
+    )
     assert filesystem_type(str(tmp_path), mountinfo=str(mountinfo)) == "ext4"
 
 
@@ -270,8 +283,11 @@ def test_network_install_and_update_defers_old_folder(tmp_path, monkeypatch):
     first = tmp_path / "Game-1.0.zip"
     _mixed_zip(first)
     r1 = ai.install_archive(
-        str(first), library_folder=str(lib), pattern="{title}/{version}",
-        title="Game", version="1.0",
+        str(first),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="1.0",
     )
     assert r1["exe_path"] == str(lib / "Game" / "1.0" / "game.sh")
     assert os.access(str(r1["exe_path"]), os.X_OK)
@@ -283,8 +299,13 @@ def test_network_install_and_update_defers_old_folder(tmp_path, monkeypatch):
     second = tmp_path / "Game-2.0.zip"
     _mixed_zip(second)
     r2 = ai.install_archive(
-        str(second), library_folder=str(lib), pattern="{title}/{version}",
-        title="Game", version="2.0", game_id=int(str(r1["game_id"])), remove_old=True,
+        str(second),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="2.0",
+        game_id=int(str(r1["game_id"])),
+        remove_old=True,
     )
     assert r2["removed_old"] is True
     assert not (lib / "Game" / "1.0").exists()
@@ -295,7 +316,9 @@ def test_network_install_and_update_defers_old_folder(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("in_use", [False, True])
-def test_windows_update_keeps_an_old_folder_it_cannot_move(tmp_path, monkeypatch, in_use):
+def test_windows_update_keeps_an_old_folder_it_cannot_move(
+    tmp_path, monkeypatch, in_use
+):
     # Windows refuses the rename while a game runs from the old folder; the
     # update keeps it instead of deleting the files the game is not using.
     db = _isolated_db(tmp_path, monkeypatch)
@@ -303,20 +326,29 @@ def test_windows_update_keeps_an_old_folder_it_cannot_move(tmp_path, monkeypatch
     first = tmp_path / "Game-1.0.zip"
     _mixed_zip(first)
     r1 = ai.install_archive(
-        str(first), library_folder=str(lib), pattern="{title}/{version}",
-        title="Game", version="1.0",
+        str(first),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="1.0",
     )
     real_defer = ai.defer_remove_tree
     monkeypatch.setattr(ai, "_is_windows", lambda platform=None: True)
     monkeypatch.setattr(
-        ai, "defer_remove_tree",
+        ai,
+        "defer_remove_tree",
         (lambda _path, _trash: False) if in_use else real_defer,
     )
     second = tmp_path / "Game-2.0.zip"
     _mixed_zip(second)
     r2 = ai.install_archive(
-        str(second), library_folder=str(lib), pattern="{title}/{version}",
-        title="Game", version="2.0", game_id=int(str(r1["game_id"])), remove_old=True,
+        str(second),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="2.0",
+        game_id=int(str(r1["game_id"])),
+        remove_old=True,
     )
     old = lib / "Game" / "1.0"
     if in_use:
@@ -333,7 +365,9 @@ def test_windows_update_keeps_an_old_folder_it_cannot_move(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("listed_size", [10, None])
-def test_network_tool_archive_skips_scratch_without_local_space(tmp_path, monkeypatch, listed_size):
+def test_network_tool_archive_skips_scratch_without_local_space(
+    tmp_path, monkeypatch, listed_size
+):
     _isolated_db(tmp_path, monkeypatch)
     monkeypatch.setattr(ai, "is_network_filesystem", lambda _p: True)
     scratch_parent = tmp_path / "scratch"
@@ -358,13 +392,18 @@ def test_network_tool_archive_skips_scratch_without_local_space(tmp_path, monkey
             return usage._replace(free=ai.SCRATCH_RESERVE_BYTES)
         return usage
 
-    monkeypatch.setattr(ai, "detect_archive_tool", lambda *_a, **_k: ("/usr/bin/7z", ""))
+    monkeypatch.setattr(
+        ai, "detect_archive_tool", lambda *_a, **_k: ("/usr/bin/7z", "")
+    )
     monkeypatch.setattr(ai, "uncompressed_size", lambda *_a, **_k: listed_size)
     monkeypatch.setattr(ai.shutil, "disk_usage", disk_usage)
     monkeypatch.setattr(ai, "extract_with_tool", fake_extract)
     lib = tmp_path / "lib"
     result = ai.install_archive(
-        str(archive), library_folder=str(lib), pattern="{title}", title="Game",
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Game",
     )
     assert not seen["dest"].startswith(str(scratch_parent))
     assert result["exe_path"] == str(lib / "Game" / "Game.sh")
@@ -389,12 +428,17 @@ def test_network_tool_archive_goes_through_local_scratch(tmp_path, monkeypatch):
             f.write(b"#!/bin/sh\n")
         return 2
 
-    monkeypatch.setattr(ai, "detect_archive_tool", lambda *_a, **_k: ("/usr/bin/7z", ""))
+    monkeypatch.setattr(
+        ai, "detect_archive_tool", lambda *_a, **_k: ("/usr/bin/7z", "")
+    )
     monkeypatch.setattr(ai, "uncompressed_size", lambda *_a, **_k: None)
     monkeypatch.setattr(ai, "extract_with_tool", fake_extract)
     lib = tmp_path / "lib"
     result = ai.install_archive(
-        str(archive), library_folder=str(lib), pattern="{title}", title="Game",
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Game",
     )
     assert seen["dest"].startswith(str(scratch_parent))
     assert not os.path.exists(seen["dest"])  # scratch cleaned up
@@ -405,7 +449,13 @@ def test_network_tool_archive_goes_through_local_scratch(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     ("cores", "network", "expected"),
-    [(1, False, 1), (8, False, 8), (64, False, ai.ZIP_MAX_WORKERS), (4, True, 16), (24, True, 24)],
+    [
+        (1, False, 1),
+        (8, False, 8),
+        (64, False, ai.ZIP_MAX_WORKERS),
+        (4, True, 16),
+        (24, True, 24),
+    ],
 )
 def test_zip_extract_workers_follow_cores(monkeypatch, cores, network, expected):
     monkeypatch.setattr(ai, "usable_cpu_count", lambda: cores)
@@ -432,7 +482,10 @@ def test_local_zip_install_uses_one_worker_per_core(tmp_path, monkeypatch):
     _mixed_zip(archive)
     lib = tmp_path / "lib"
     result = ai.install_archive(
-        str(archive), library_folder=str(lib), pattern="{title}", title="Game",
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Game",
     )
     assert seen == {"workers": 6, "exec_bits": True, "cancel": None}
     reference = tmp_path / "ref"
@@ -471,7 +524,10 @@ def test_network_tar_goes_through_local_scratch(tmp_path, monkeypatch):
     monkeypatch.setattr(ai, "extract_tar", spy)
     lib = tmp_path / "lib"
     result = ai.install_archive(
-        str(archive), library_folder=str(lib), pattern="{title}", title="Game",
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Game",
     )
     assert seen["dest"].startswith(str(scratch_parent))
     assert not os.path.exists(seen["dest"])  # scratch cleaned up

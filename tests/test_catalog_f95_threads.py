@@ -39,7 +39,9 @@ def test_overview_language_and_developer_ids():
     assert details["aliases"] == []
     # GOG, X and Bluesky links are not among the kept IDs; each ID keeps its link.
     assert details["external_ids"] == {
-        "patreon": [{"id": "drpinkcake", "url": "https://www.patreon.com/DrPinkCake/overview"}],
+        "patreon": [
+            {"id": "drpinkcake", "url": "https://www.patreon.com/DrPinkCake/overview"}
+        ],
         "steam": [
             {
                 "id": "1126320",
@@ -72,7 +74,7 @@ def test_overview_keeps_colons_and_hidden_spoiler_text():
 def test_translator_links_are_not_developer_ids():
     post = (
         '<div class="bbWrapper"><b>Overview</b>:<br>Text.<br>'
-        + '<b>Original Title</b>: 原題<br>'
+        + "<b>Original Title</b>: 原題<br>"
         + '<b>Developer</b>: Circle <a href="https://www.dlsite.com/maniax/circle/x">DLsite</a> - '
         + '<a href="https://ci-en.dlsite.com/creator/1">Ci-en</a><br>'
         + '<b>Translator</b>: Someone - <a href="https://ko-fi.com/translator">Ko-fi</a><br>'
@@ -107,7 +109,12 @@ def test_external_id_forms(url, kind, value):
 
 
 @pytest.mark.parametrize(
-    "url", ["https://www.patreon.com/posts/123", "https://ko-fi.com/s/abc", "https://x.com/dev"]
+    "url",
+    [
+        "https://www.patreon.com/posts/123",
+        "https://ko-fi.com/s/abc",
+        "https://x.com/dev",
+    ],
 )
 def test_links_that_are_not_ids_are_skipped(url):
     post = f'<div class="bbWrapper"><b>Developer</b>: Dev <a href="{url}">link</a><br>'
@@ -185,14 +192,22 @@ def test_changed_threads_first_then_most_viewed_old_ones(tmp_path):
     transport = FakeTransport()
     transport.route("/threads/", _page())
     ctx, _ = make_context(tmp_path, transport)
-    ctx.upsert("f95_threads", "thread_id", [_thread(1, 100, views=5), _thread(2, 200, views=50)])
+    ctx.upsert(
+        "f95_threads",
+        "thread_id",
+        [_thread(1, 100, views=5), _thread(2, 200, views=50)],
+    )
     source = F95ThreadsSource()
     # The first run takes the newest feed `ts` as "now": nothing has changed yet.
     source.incremental(ctx)
     assert [_thread_id(r.url) for r in transport.requests] == [2, 1]
     assert ctx.state.get("f95_threads", "since_ts") == 200
     status, original, aliases = _details(ctx)[1][1:4]
-    assert (status, original, json.loads(str(aliases))) == ("ok", "欲望牢獄ギャルギャルシティ", ["Gyaru Gyaru City"])
+    assert (status, original, json.loads(str(aliases))) == (
+        "ok",
+        "欲望牢獄ギャルギャルシティ",
+        ["Gyaru Gyaru City"],
+    )
 
     # Thread 1 changes, 3 is new, 4 is old and never read: changed ones first.
     transport.requests.clear()
@@ -213,11 +228,18 @@ def test_changed_threads_first_then_most_viewed_old_ones(tmp_path):
 def test_missing_and_unreadable_threads_are_kept_so_the_queue_moves(tmp_path):
     transport = FakeTransport()
     # F95's own "not found" page, logged in.
-    transport.route("/threads/1/", Response(404, b'<html data-logged-in="true">Not found</html>'))
-    transport.route("/threads/2/", Response(200, b'<html data-logged-in="true"><body></body></html>'))
+    transport.route(
+        "/threads/1/", Response(404, b'<html data-logged-in="true">Not found</html>')
+    )
+    transport.route(
+        "/threads/2/",
+        Response(200, b'<html data-logged-in="true"><body></body></html>'),
+    )
     transport.route("/threads/3/", _page())
     ctx, _ = make_context(tmp_path, transport)
-    ctx.upsert("f95_threads", "thread_id", [_thread(1, 30), _thread(2, 20), _thread(3, 10)])
+    ctx.upsert(
+        "f95_threads", "thread_id", [_thread(1, 30), _thread(2, 20), _thread(3, 10)]
+    )
     F95ThreadsSource().incremental(ctx)
     statuses = {thread_id: values[1] for thread_id, values in _details(ctx).items()}
     assert statuses == {1: "missing", 2: "unreadable", 3: "ok"}
@@ -253,7 +275,14 @@ def test_cli_skips_thread_pages_without_the_login(tmp_path, monkeypatch, caplog)
     transport = FakeTransport()
     caplog.set_level("INFO")
     code = main(
-        ["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "f95_threads"],
+        [
+            "--data-dir",
+            str(tmp_path),
+            "run",
+            "--no-publish",
+            "--sources",
+            "f95_threads",
+        ],
         transport=transport,
     )
     assert code == 0
@@ -272,12 +301,23 @@ def test_cli_reads_thread_pages_through_the_logged_in_browser(tmp_path, monkeypa
     catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
     catalog.upsert("f95_threads", "thread_id", [_thread(7, 10)], "2026-11-17T00:00:00Z")
     catalog.close()
-    browser = FakeBrowser(lambda url: FakePage(200, fixture_bytes("f95_thread_323533.html")))
+    browser = FakeBrowser(
+        lambda url: FakePage(200, fixture_bytes("f95_thread_323533.html"))
+    )
     plain = FakeTransport()
     code = main(
-        ["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "f95_threads"],
+        [
+            "--data-dir",
+            str(tmp_path),
+            "run",
+            "--no-publish",
+            "--sources",
+            "f95_threads",
+        ],
         transport=plain,
-        browser=BrowserTransport(cookies=f95_login_cookies(COOKIE), session_factory=browser),
+        browser=BrowserTransport(
+            cookies=f95_login_cookies(COOKIE), session_factory=browser
+        ),
         sleep=lambda seconds: None,
     )
     assert code == 0
@@ -285,7 +325,9 @@ def test_cli_reads_thread_pages_through_the_logged_in_browser(tmp_path, monkeypa
     assert browser.fetched == [(None, "https://f95zone.to/threads/7/")]
     catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
     try:
-        assert rows(catalog, "SELECT thread_id, status FROM f95_thread_details") == [(7, "ok")]
+        assert rows(catalog, "SELECT thread_id, status FROM f95_thread_details") == [
+            (7, "ok")
+        ]
     finally:
         catalog.close()
 
@@ -312,8 +354,12 @@ def test_details_from_before_the_languages_column_are_read_again(tmp_path):
     catalog = CatalogStore(str(path))
     try:
         assert rows(catalog, "SELECT COUNT(*) FROM f95_thread_details") == [(0,)]
-        catalog.upsert_f95_details(1, 10, "now", {"status": "ok", "languages": ["English"]})
-        assert rows(catalog, "SELECT languages FROM f95_thread_details") == [('["English"]',)]
+        catalog.upsert_f95_details(
+            1, 10, "now", {"status": "ok", "languages": ["English"]}
+        )
+        assert rows(catalog, "SELECT languages FROM f95_thread_details") == [
+            ('["English"]',)
+        ]
     finally:
         catalog.close()
 
@@ -328,7 +374,9 @@ def test_a_page_that_is_not_f95s_stops_the_step_without_storing(tmp_path, status
     result = run_source(F95ThreadsSource(), ctx)
     assert result.status == "error"
     # A 503 already fails in the Pacer after its retries.
-    assert ("without its own page" if status != 503 else "HTTP 503") in str(result.detail)
+    assert ("without its own page" if status != 503 else "HTTP 503") in str(
+        result.detail
+    )
     assert _details(ctx) == {}
 
 

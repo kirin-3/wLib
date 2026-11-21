@@ -20,7 +20,16 @@ THREAD_DETAIL_FIELDS: tuple[str, ...] = (
     "language",
     "external_links",
 )
-LC_FILL_FIELDS = ("title", "developer", "version", "cover_image_path", "tags", "rating", "engine", "thread_completed")
+LC_FILL_FIELDS = (
+    "title",
+    "developer",
+    "version",
+    "cover_image_path",
+    "tags",
+    "rating",
+    "engine",
+    "thread_completed",
+)
 LIST_FIELDS: frozenset[str] = frozenset({"aliases", "external_links"})
 # The installed version: the catalog may fill it while it is empty, but never
 # replaces it, because a newer thread version does not mean newer game files.
@@ -42,8 +51,10 @@ def _decoded(value: object) -> object:
 def normalize_detail(field: str, value: object) -> str | list[str]:
     """The clean value of one field; lists come as Python lists or JSON text."""
     if field not in LIST_FIELDS:
-        text = str(value) if field in LC_FILL_FIELDS and value is not None else (
-            value if isinstance(value, str) else ""
+        text = (
+            str(value)
+            if field in LC_FILL_FIELDS and value is not None
+            else (value if isinstance(value, str) else "")
         )
         return text.strip()[:_MAX_TEXT_CHARS]
     items = _decoded(value)
@@ -81,7 +92,13 @@ def normalize_baseline(value: object) -> str | None:
         return None
     source = cast(dict[str, object], decoded)
     return json.dumps(
-        {field: normalize_detail(field, source.get(field)) for field in (*THREAD_DETAIL_FIELDS, *(field for field in LC_FILL_FIELDS if field in source))},
+        {
+            field: normalize_detail(field, source.get(field))
+            for field in (
+                *THREAD_DETAIL_FIELDS,
+                *(field for field in LC_FILL_FIELDS if field in source),
+            )
+        },
         ensure_ascii=False,
     )
 
@@ -92,13 +109,20 @@ def merge_thread_details(
     """Column updates that apply `catalog` to a game row; {} when nothing changes."""
     raw_baseline = _decoded(current.get(BASELINE_COLUMN))
     baseline = (
-        cast(dict[str, object], raw_baseline) if isinstance(raw_baseline, dict) else None
+        cast(dict[str, object], raw_baseline)
+        if isinstance(raw_baseline, dict)
+        else None
     )
     updates: dict[str, object] = {}
     new_baseline: dict[str, object] = {
-        field: baseline[field] for field in LC_FILL_FIELDS if baseline is not None and field in baseline
+        field: baseline[field]
+        for field in LC_FILL_FIELDS
+        if baseline is not None and field in baseline
     }
-    for field in (*THREAD_DETAIL_FIELDS, *(field for field in LC_FILL_FIELDS if field in catalog)):
+    for field in (
+        *THREAD_DETAIL_FIELDS,
+        *(field for field in LC_FILL_FIELDS if field in catalog),
+    ):
         if field == "tags" and current.get("tags_user_edited"):
             continue
         new = normalize_detail(field, catalog.get(field))
@@ -109,7 +133,11 @@ def merge_thread_details(
             and field not in FILL_EMPTY_ONLY_FIELDS
             and stored == normalize_detail(field, baseline.get(field))
         )
-        empty = not stored or (field == "thread_completed" and stored == "0" and not (baseline and field in baseline))
+        empty = not stored or (
+            field == "thread_completed"
+            and stored == "0"
+            and not (baseline and field in baseline)
+        )
         if (empty or untouched) and stored != new:
             updates[field] = column_value(field, new)
     encoded = json.dumps(new_baseline, ensure_ascii=False)

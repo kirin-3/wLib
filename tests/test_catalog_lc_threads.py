@@ -8,11 +8,17 @@ import pytest
 from catalog_fakes import FakeTransport, fixture_bytes, make_context, rows
 from catalog_server.net import RateLimited, Response
 from catalog_server.runner import run_source
-from catalog_server.sources.lc_threads import LcThreadsSource, first_post_html, parse_first_post
+from catalog_server.sources.lc_threads import (
+    LcThreadsSource,
+    first_post_html,
+    parse_first_post,
+)
 
 NOW = "2026-01-01T00:00:00Z"
 CHALLENGE = b"<html><head><title>Just a moment...</title></head><body>cf</body></html>"
-NGINX_404 = b"<html>\r\n<head><title>404 Not Found</title></head>\r\n<body></body></html>"
+NGINX_404 = (
+    b"<html>\r\n<head><title>404 Not Found</title></head>\r\n<body></body></html>"
+)
 
 
 def _thread(thread_id, ts, views=0):
@@ -28,8 +34,10 @@ def _thread(thread_id, ts, views=0):
 def _details(catalog):
     return {
         row[0]: row[1:]
-        for row in rows(catalog, "SELECT thread_id, status, developer, external_ids "
-                        "FROM lc_thread_details")
+        for row in rows(
+            catalog,
+            "SELECT thread_id, status, developer, external_ids FROM lc_thread_details",
+        )
     }
 
 
@@ -62,16 +70,21 @@ def test_threads_are_read_and_stored(tmp_path):
     status, developer, ids = _details(ctx.catalog)[6]
     assert (status, developer) == ("ok", "Nun Ya and Fallen Angel Productions")
     assert json.loads(ids)["patreon"][0]["id"] == "u:5648613"
-    assert [request.url for request in transport.requests] == ["https://lewdcorner.com/threads/6/"]
+    assert [request.url for request in transport.requests] == [
+        "https://lewdcorner.com/threads/6/"
+    ]
 
 
 @pytest.mark.parametrize(
     ("status", "body"),
     # LC's "no permission" page as a guest sees it.
     [
-        (403, fixture_bytes("lc_no_permission.html").replace(
-            b'data-logged-in="true"', b'data-logged-in="false"'
-        )),
+        (
+            403,
+            fixture_bytes("lc_no_permission.html").replace(
+                b'data-logged-in="true"', b'data-logged-in="false"'
+            ),
+        ),
         (404, NGINX_404),
     ],
 )
@@ -83,7 +96,9 @@ def test_no_permission_and_not_found_are_missing(tmp_path, status, body):
     LcThreadsSource().incremental(ctx)
     assert _details(ctx.catalog)[7][0] == "missing"
     # The feed row stays as it was.
-    assert rows(ctx.catalog, "SELECT title FROM lc_threads WHERE thread_id = 7") == [("T7",)]
+    assert rows(ctx.catalog, "SELECT title FROM lc_threads WHERE thread_id = 7") == [
+        ("T7",)
+    ]
 
 
 @pytest.mark.parametrize("status", [200, 403])
@@ -102,8 +117,10 @@ def test_queue_reads_changed_threads_first(tmp_path):
     transport.route("/threads/", Response(200, fixture_bytes("lc_thread_6.html")))
     ctx, _ = make_context(tmp_path, transport)
     ctx.catalog.upsert(
-        "lc_threads", "thread_id",
-        [_thread(1, 100, views=1), _thread(2, 200, views=500), _thread(3, 300)], NOW,
+        "lc_threads",
+        "thread_id",
+        [_thread(1, 100, views=1), _thread(2, 200, views=500), _thread(3, 300)],
+        NOW,
     )
     ctx.catalog.upsert_lc_details(3, 250, NOW, {"status": "ok"})
     ctx.state.put("lc_threads", "since_ts", 300)
@@ -124,12 +141,20 @@ def test_skipped_while_the_lc_feed_is_paused(tmp_path):
 
 
 def _premium(thread_id, ts, **extra):
-    return {**_thread(thread_id, ts), "tier": "Premium", "version": None, "tags": [], **extra}
+    return {
+        **_thread(thread_id, ts),
+        "tier": "Premium",
+        "version": None,
+        "tags": [],
+        **extra,
+    }
 
 
 def test_a_plus_page_read_as_a_guest_stores_its_version_and_tags(tmp_path):
     transport = FakeTransport()
-    transport.route("/threads/24724/", Response(200, fixture_bytes("lc_thread_24724.html")))
+    transport.route(
+        "/threads/24724/", Response(200, fixture_bytes("lc_thread_24724.html"))
+    )
     ctx, _ = make_context(tmp_path, transport)
     ctx.catalog.upsert("lc_threads", "thread_id", [_premium(24724, 100)], NOW)
     LcThreadsSource().incremental(ctx)
@@ -146,11 +171,15 @@ def test_a_free_page_keeps_the_feed_version_and_tags(tmp_path):
     transport.route("/threads/6/", Response(200, fixture_bytes("lc_thread_6.html")))
     ctx, _ = make_context(tmp_path, transport)
     ctx.catalog.upsert(
-        "lc_threads", "thread_id",
-        [{**_thread(6, 100), "tier": "Free", "version": "v1.0", "tags": ["3dcg"]}], NOW,
+        "lc_threads",
+        "thread_id",
+        [{**_thread(6, 100), "tier": "Free", "version": "v1.0", "tags": ["3dcg"]}],
+        NOW,
     )
     LcThreadsSource().incremental(ctx)
-    assert rows(ctx.catalog, "SELECT version, tags FROM lc_threads") == [("v1.0", '["3dcg"]')]
+    assert rows(ctx.catalog, "SELECT version, tags FROM lc_threads") == [
+        ("v1.0", '["3dcg"]')
+    ]
 
 
 def test_a_logged_in_page_stops_lc_and_stores_nothing(tmp_path):
@@ -160,12 +189,16 @@ def test_a_logged_in_page_stops_lc_and_stores_nothing(tmp_path):
     transport = FakeTransport()
     transport.route("/threads/", Response(200, page))
     ctx, _ = make_context(tmp_path, transport)
-    ctx.catalog.upsert("lc_threads", "thread_id", [_premium(24724, 100), _premium(2, 50)], NOW)
+    ctx.catalog.upsert(
+        "lc_threads", "thread_id", [_premium(24724, 100), _premium(2, 50)], NOW
+    )
     result = run_source(LcThreadsSource(), ctx)
     assert result.status == "error" and "logged-in" in (result.detail or "")
     assert len(transport.requests) == 1
     assert _details(ctx.catalog) == {}
-    assert rows(ctx.catalog, "SELECT version FROM lc_threads WHERE thread_id = 24724") == [(None,)]
+    assert rows(
+        ctx.catalog, "SELECT version FROM lc_threads WHERE thread_id = 24724"
+    ) == [(None,)]
     assert "lc_threads" in ctx.pacer.paused
 
 
@@ -173,7 +206,9 @@ def test_a_lost_feed_login_does_not_stop_the_thread_pages(tmp_path):
     from catalog_server.sources.lc import LcSource
 
     transport = FakeTransport()
-    transport.route("/latest-updates/api", Response(200, fixture_bytes("lc_feed_logged_out.json")))
+    transport.route(
+        "/latest-updates/api", Response(200, fixture_bytes("lc_feed_logged_out.json"))
+    )
     transport.route("/threads/6/", Response(200, fixture_bytes("lc_thread_6.html")))
     ctx, _ = make_context(tmp_path, transport)
     ctx.catalog.upsert("lc_threads", "thread_id", [_thread(6, 100)], NOW)

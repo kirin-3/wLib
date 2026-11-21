@@ -19,7 +19,8 @@ class GameGuess(TypedDict):
 
 
 _PLATFORM_SUFFIX_RE = re.compile(
-    r"[-_ .]+(pc|win(dows)?(64|32)?|linux|mac|market|android|x64|x86|64bit|32bit)$", re.I
+    r"[-_ .]+(pc|win(dows)?(64|32)?|linux|mac|market|android|x64|x86|64bit|32bit)$",
+    re.I,
 )
 _VERSION_SUFFIX_RE = re.compile(
     # A bare number needs a dot ("Game 2" is a sequel, "Game-0.2" a version).
@@ -58,10 +59,24 @@ _GENERIC_LAUNCHER_STEMS = ("game", "start", "launcher", "main", "run")
 MOVE_PREFIX = ".wlib-move-"
 # A folder that an uninstall set aside until the library change is saved.
 UNINSTALL_PREFIX = ".wlib-uninstall-"
-_INTERNAL_DIR_PREFIXES = (".wlib-staging-", ".wlib-trash-", MOVE_PREFIX, UNINSTALL_PREFIX)
+_INTERNAL_DIR_PREFIXES = (
+    ".wlib-staging-",
+    ".wlib-trash-",
+    MOVE_PREFIX,
+    UNINSTALL_PREFIX,
+)
 _INTERNAL_DIR_MARKERS = (".wlib-old-", ".wlib-new-")
 _LAUNCHER_EXTENSIONS = (
-    ".exe", ".bat", ".cmd", ".sh", ".x86", ".x86_64", ".html", ".htm", ".jar", ".swf"
+    ".exe",
+    ".bat",
+    ".cmd",
+    ".sh",
+    ".x86",
+    ".x86_64",
+    ".html",
+    ".htm",
+    ".jar",
+    ".swf",
 )
 
 
@@ -112,9 +127,13 @@ def detect_engine(game_dir: str, exe_path: str = "") -> str:
         return "RPGM"
     if "unityplayer.dll" in names or "unityplayer.so" in names:
         return "Unity"
-    if "data.wolf" in names or os.path.isfile(os.path.join(game_dir, "Data", "Data.wolf")):
+    if "data.wolf" in names or os.path.isfile(
+        os.path.join(game_dir, "Data", "Data.wolf")
+    ):
         return "Wolf RPG"
-    if "engine" in names and os.path.isdir(os.path.join(game_dir, "Engine", "Binaries")):
+    if "engine" in names and os.path.isdir(
+        os.path.join(game_dir, "Engine", "Binaries")
+    ):
         return "Unreal Engine"
     # Godot exports ship their data as a .pck beside the executable.
     if any(name.endswith(".pck") for name in names):
@@ -140,15 +159,14 @@ def inspect_game_path(exe_path: str) -> GameGuess:
     }
 
 
-def _best_launcher(
-    game_dir: str, names: list[str], preferred_title: str = ""
-) -> str:
+def _best_launcher(game_dir: str, names: list[str], preferred_title: str = "") -> str:
     """Prefer a name matching the game title, then a generic game launcher.
 
     `preferred_title` wins over the folder name: archive installs rename the
     extracted tree to the version (`.../0.8`), so the folder name no longer
     carries the title there.
     """
+
     def squash(text: str) -> str:
         # Keep letters and digits from every script, so a non-Latin title
         # still matches its launcher instead of squashing to "".
@@ -164,7 +182,9 @@ def _best_launcher(
             return sorted(exact, key=str.lower)[0]
         containing = [n for n in names if title in squash(stems[n])]
         if containing:
-            return sorted(containing, key=lambda n: (len(squash(stems[n])), n.lower()))[0]
+            return sorted(containing, key=lambda n: (len(squash(stems[n])), n.lower()))[
+                0
+            ]
     return (
         next((n for n in names if stems[n] in _GENERIC_LAUNCHER_STEMS), None)
         or names[0]
@@ -173,7 +193,17 @@ def _best_launcher(
 
 # Known folders that hold extra content, not the game itself.
 _EXTRA_FOLDER_NAMES = frozenset(
-    {"walkthrough", "extras", "extra", "bonus", "patch", "patches", "mods", "mod", "tools"}
+    {
+        "walkthrough",
+        "extras",
+        "extra",
+        "bonus",
+        "patch",
+        "patches",
+        "mods",
+        "mod",
+        "tools",
+    }
 )
 # Upper bound on directories read by one top-level `find_launcher` call.
 _MAX_SCANNED_DIRS = 200
@@ -211,17 +241,14 @@ def list_launcher_files(folder: str) -> list[str]:
     return _launcher_names(entries)
 
 
-def _pick_subfolder_launcher(
-    found: list[tuple[str, str]], title: str
-) -> str | None:
+def _pick_subfolder_launcher(found: list[tuple[str, str]], title: str) -> str | None:
     """Choose one launcher from (folder name, launcher) pairs, or None if unclear."""
     if len(found) == 1:
         return found[0][1]
     squashed_title = _squash(title)
     if squashed_title:
         matches = [
-            pair for pair in found
-            if _squash(pair[0]).startswith(squashed_title)
+            pair for pair in found if _squash(pair[0]).startswith(squashed_title)
         ]
         if len(matches) == 1:
             return matches[0][1]
@@ -231,17 +258,14 @@ def _pick_subfolder_launcher(
             return kept[0][1]
         if squashed_title:
             matches = [
-                pair for pair in kept
-                if _squash(pair[0]).startswith(squashed_title)
+                pair for pair in kept if _squash(pair[0]).startswith(squashed_title)
             ]
             if len(matches) == 1:
                 return matches[0][1]
     return None
 
 
-def find_launcher(
-    game_dir: str, depth: int = 2, preferred_title: str = ""
-) -> str:
+def find_launcher(game_dir: str, depth: int = 2, preferred_title: str = "") -> str:
     """Best launch file in game_dir, looking in its subfolders when it holds none.
 
     `preferred_title` is passed to the name heuristic; callers that rename the
@@ -281,7 +305,8 @@ def _find_launcher(
     files = [name for name in candidates if not has_64bit_twin(name)]
     # Native Ren'Py/NW.js scripts run without Wine on Linux; elsewhere prefer the .exe.
     native = [
-        name for name in files
+        name
+        for name in files
         if name.lower().endswith((".sh", ".x86", ".x86_64"))
         or is_elf(os.path.join(game_dir, name))
     ]
@@ -324,9 +349,10 @@ def _find_launcher(
         if budget.skipped and len(subdirs) > 1:
             return ""
         if found:
-            title = preferred_title or guess_title_and_version(
-                os.path.basename(game_dir)
-            )[0]
+            title = (
+                preferred_title
+                or guess_title_and_version(os.path.basename(game_dir))[0]
+            )
             return _pick_subfolder_launcher(found, title) or ""
     return ""
 

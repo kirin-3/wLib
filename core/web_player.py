@@ -5,6 +5,7 @@ The player takes everything from argv (the sandbox hides the database) and
 imports nothing from `core.api`. Qt is imported only inside `run()`, so the
 pure helpers stay importable and testable without a display.
 """
+
 from __future__ import annotations
 
 import html
@@ -127,7 +128,9 @@ def safe_export_name(suggested: str) -> str:
         name = "".join(char for char in name if char not in '<>:"|?*').rstrip(". ")
         device = name.split(".", 1)[0].rstrip().upper()
         if device in {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} or (
-            device[:3] in ("COM", "LPT") and len(device) == 4 and device[-1] in "123456789¹²³"
+            device[:3] in ("COM", "LPT")
+            and len(device) == 4
+            and device[-1] in "123456789¹²³"
         ):
             name = "_" + name
     return name if name not in ("", ".", "..") else "download"
@@ -138,7 +141,9 @@ def unique_export_path(folder: str, name: str, taken: Set[str]) -> str:
     stem, ext = os.path.splitext(name)
     pending = {os.path.normcase(filename) for filename in taken}
     index = 0
-    while os.path.normcase(name) in pending or os.path.lexists(os.path.join(folder, name)):
+    while os.path.normcase(name) in pending or os.path.lexists(
+        os.path.join(folder, name)
+    ):
         index += 1
         name = f"{stem} ({index}){ext}"
     return os.path.join(folder, name)
@@ -146,12 +151,17 @@ def unique_export_path(folder: str, name: str, taken: Set[str]) -> str:
 
 def file_picker_filter(accepted: Iterable[str | None]) -> str:
     patterns = [
-        f"*{entry}" for entry in accepted
-        if entry and entry.startswith(".") and len(entry) > 1
+        f"*{entry}"
+        for entry in accepted
+        if entry
+        and entry.startswith(".")
+        and len(entry) > 1
         and all(char.isalnum() or char in ".-_" for char in entry)
     ]
     all_files = "All files (*)"
-    return f"Accepted files ({' '.join(patterns)});;{all_files}" if patterns else all_files
+    return (
+        f"Accepted files ({' '.join(patterns)});;{all_files}" if patterns else all_files
+    )
 
 
 def content_type(path: str) -> str:
@@ -221,10 +231,16 @@ def _match_case(real_root: str, parts: list[str]) -> str | None:
             continue
         part = parts[depth]
         variants = _case_variants(current, part)
-        names = [part] if part in variants or os.path.lexists(os.path.join(current, part)) else []
+        names = (
+            [part]
+            if part in variants or os.path.lexists(os.path.join(current, part))
+            else []
+        )
         names += [name for name in variants if name != part]
         # Reversed, so the stack pops the exact name first.
-        stack.extend((os.path.join(current, name), depth + 1) for name in reversed(names))
+        stack.extend(
+            (os.path.join(current, name), depth + 1) for name in reversed(names)
+        )
     return None
 
 
@@ -308,7 +324,9 @@ def ruffle_bootstrap_source() -> str:
 """
 
 
-def classify_navigation(url: str, links: LinkMode, offline: bool = False) -> NavigationAction:
+def classify_navigation(
+    url: str, links: LinkMode, offline: bool = False
+) -> NavigationAction:
     """Decide what the player does with a navigation or new-window request."""
     parts = urlsplit(url)
     scheme = parts.scheme.lower()
@@ -328,7 +346,14 @@ def is_network_request(url: str) -> bool:
 def host_open_env(env: dict[str, str]) -> dict[str, str]:
     """Environment for the system opener, without the AppImage's libraries."""
     clean = dict(env)
-    for var in ("APPIMAGE", "APPDIR", "ARGV0", "APPIMAGE_SILENT_INSTALL", "OWD", "APPIMAGE_EXTRACT_AND_RUN"):
+    for var in (
+        "APPIMAGE",
+        "APPDIR",
+        "ARGV0",
+        "APPIMAGE_SILENT_INSTALL",
+        "OWD",
+        "APPIMAGE_EXTRACT_AND_RUN",
+    ):
         _ = clean.pop(var, None)
     original = str(clean.pop("LD_LIBRARY_PATH_ORIG", "") or "").strip()
     if original:
@@ -336,7 +361,12 @@ def host_open_env(env: dict[str, str]) -> dict[str, str]:
     else:
         _ = clean.pop("LD_LIBRARY_PATH", None)
     # The player's own Qt platform and Chromium flags do not belong to a browser.
-    for var in ("QT_QPA_PLATFORM", "QTWEBENGINE_CHROMIUM_FLAGS", "QTWEBENGINE_DISABLE_SANDBOX", "QT_PLUGIN_PATH"):
+    for var in (
+        "QT_QPA_PLATFORM",
+        "QTWEBENGINE_CHROMIUM_FLAGS",
+        "QTWEBENGINE_DISABLE_SANDBOX",
+        "QT_PLUGIN_PATH",
+    ):
         _ = clean.pop(var, None)
     return clean
 
@@ -363,12 +393,19 @@ def _open_system_target(target: str) -> bool:
         opened, _error = open_windows_system_target(target)
         return bool(opened)
     env = host_open_env(dict(os.environ))
-    for command in (["xdg-open", target], ["gio", "open", target], ["kde-open", target]):
+    for command in (
+        ["xdg-open", target],
+        ["gio", "open", target],
+        ["kde-open", target],
+    ):
         if not shutil.which(command[0], path=env.get("PATH")):
             continue
         try:
             _ = subprocess.Popen(
-                command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                command,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
             return True
@@ -390,7 +427,17 @@ def ruffle_root() -> str:
 def run(args: PlayerArgs) -> int:
     """Open the player window and block until it closes."""
     # Qt types are imported here so the helpers above need no display or Qt.
-    from PyQt6.QtCore import QByteArray, QBuffer, QCoreApplication, QEvent, QFile, QIODevice, QObject, Qt, QUrl
+    from PyQt6.QtCore import (
+        QByteArray,
+        QBuffer,
+        QCoreApplication,
+        QEvent,
+        QFile,
+        QIODevice,
+        QObject,
+        Qt,
+        QUrl,
+    )
     from PyQt6.QtGui import QAction, QContextMenuEvent, QKeySequence, QShortcut
     from PyQt6.QtWebEngineCore import (
         QWebEngineDownloadRequest,
@@ -502,33 +549,52 @@ def run(args: PlayerArgs) -> int:
             selection = QWebEnginePage.FileSelectionMode
             if mode == selection.FileSelectUploadFolder:
                 folder = QFileDialog.getExistingDirectory(
-                    window, "Choose folder", start,
+                    window,
+                    "Choose folder",
+                    start,
                     options=picker_options | QFileDialog.Option.ShowDirsOnly,
                 )
                 files = [folder] if folder else []
             elif mode == selection.FileSelectOpenMultiple:
                 files, _ = QFileDialog.getOpenFileNames(
-                    window, "Choose files", start, name_filter, options=picker_options,
+                    window,
+                    "Choose files",
+                    start,
+                    name_filter,
+                    options=picker_options,
                 )
             elif mode == selection.FileSelectOpen:
                 path, _ = QFileDialog.getOpenFileName(
-                    window, "Choose file", start, name_filter, options=picker_options,
+                    window,
+                    "Choose file",
+                    start,
+                    name_filter,
+                    options=picker_options,
                 )
                 files = [path] if path else []
             else:
                 return []
             if files and not args.sandboxed:
-                self.last_pick_folder = files[0] if mode == selection.FileSelectUploadFolder else os.path.dirname(files[0])
+                self.last_pick_folder = (
+                    files[0]
+                    if mode == selection.FileSelectUploadFolder
+                    else os.path.dirname(files[0])
+                )
             return files
 
         @override
         def acceptNavigationRequest(  # noqa: N802
-            self, url: QUrl, type: QWebEnginePage.NavigationType, isMainFrame: bool  # noqa: A002, N803
+            self,
+            url: QUrl,
+            type: QWebEnginePage.NavigationType,
+            isMainFrame: bool,  # noqa: A002, N803
         ) -> bool:
             action = classify_navigation(url.toString(), args.links, args.offline)
             if action == "allow":
                 return True
-            link_clicked = type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked
+            link_clicked = (
+                type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked
+            )
             if (
                 not isMainFrame
                 and not link_clicked
@@ -546,7 +612,9 @@ def run(args: PlayerArgs) -> int:
             return False
 
         @override
-        def createWindow(self, type: QWebEnginePage.WebWindowType) -> QWebEnginePage | None:  # noqa: A002, N802
+        def createWindow(
+            self, type: QWebEnginePage.WebWindowType
+        ) -> QWebEnginePage | None:  # noqa: A002, N802
             # New windows are routed through a throwaway page so the target URL
             # is classified like any other navigation instead of opening a window.
             probe = _LinkProbe(self.profile(), self)
@@ -557,11 +625,16 @@ def run(args: PlayerArgs) -> int:
 
         @override
         def acceptNavigationRequest(  # noqa: N802
-            self, url: QUrl, type: QWebEnginePage.NavigationType, isMainFrame: bool  # noqa: A002, N803
+            self,
+            url: QUrl,
+            type: QWebEnginePage.NavigationType,
+            isMainFrame: bool,  # noqa: A002, N803
         ) -> bool:
             if url.scheme().lower() == "devtools":
                 return True
-            if classify_navigation(url.toString(), args.links, args.offline) == "open" and (
+            if classify_navigation(
+                url.toString(), args.links, args.offline
+            ) == "open" and (
                 isMainFrame
                 or type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked
             ):
@@ -569,7 +642,9 @@ def run(args: PlayerArgs) -> int:
             return False
 
         @override
-        def createWindow(self, type: QWebEnginePage.WebWindowType) -> QWebEnginePage | None:  # noqa: A002, N802
+        def createWindow(
+            self, type: QWebEnginePage.WebWindowType
+        ) -> QWebEnginePage | None:  # noqa: A002, N802
             return _LinkProbe(self.profile(), self)
 
     class GameView(QWebEngineView):
@@ -587,7 +662,9 @@ def run(args: PlayerArgs) -> int:
                 # Qt lists its own Inspect only after a DevTools page is
                 # attached, and it cannot make the pane, so use ours: it shows
                 # the pane first and then inspects.
-                replacement = QAction(inspect.text() if inspect is not None else "Inspect", menu)
+                replacement = QAction(
+                    inspect.text() if inspect is not None else "Inspect", menu
+                )
                 _ = replacement.triggered.connect(inspect_element)  # pyright: ignore[reportUnknownMemberType]
                 if listed:
                     menu.insertAction(inspect, replacement)
@@ -601,7 +678,10 @@ def run(args: PlayerArgs) -> int:
     class _LinkProbe(QWebEnginePage):
         @override
         def acceptNavigationRequest(  # noqa: N802
-            self, url: QUrl, type: QWebEnginePage.NavigationType, isMainFrame: bool  # noqa: A002, N803
+            self,
+            url: QUrl,
+            type: QWebEnginePage.NavigationType,
+            isMainFrame: bool,  # noqa: A002, N803
         ) -> bool:
             action = classify_navigation(url.toString(), args.links, args.offline)
             if action == "allow" and url.scheme() == SCHEME:
@@ -647,26 +727,34 @@ def run(args: PlayerArgs) -> int:
     window.setWindowTitle(args.title)
     window.resize(1280, 800)
 
-    def show_export_message(title: str, text: str, saved_path: str | None = None) -> None:
+    def show_export_message(
+        title: str, text: str, saved_path: str | None = None
+    ) -> None:
         message = QMessageBox(window)
         message.setWindowTitle(title)
-        message.setIcon(QMessageBox.Icon.Information if saved_path else QMessageBox.Icon.Warning)
+        message.setIcon(
+            QMessageBox.Icon.Information if saved_path else QMessageBox.Icon.Warning
+        )
         message.setTextFormat(Qt.TextFormat.PlainText)
         message.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         message.setText(text)
         message.setStandardButtons(QMessageBox.StandardButton.Ok)
         message.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         if saved_path is not None:
+
             def use_saved_path() -> None:
                 if args.sandboxed:
                     clipboard = app.clipboard()
                     if clipboard is not None:
                         clipboard.setText(saved_path)
                 elif not open_folder_on_host(os.path.dirname(saved_path)):
-                    show_export_message("Could not open exports folder", os.path.dirname(saved_path))
+                    show_export_message(
+                        "Could not open exports folder", os.path.dirname(saved_path)
+                    )
 
             action = message.addButton(
-                "Copy path" if args.sandboxed else "Open folder", QMessageBox.ButtonRole.ActionRole,
+                "Copy path" if args.sandboxed else "Open folder",
+                QMessageBox.ButtonRole.ActionRole,
             )
             if action is not None:
                 _ = action.clicked.connect(use_saved_path)  # pyright: ignore[reportUnknownMemberType]
@@ -688,7 +776,10 @@ def run(args: PlayerArgs) -> int:
             taken.add(os.path.basename(path))
         else:
             path, _ = QFileDialog.getSaveFileName(
-                window, "Save as", os.path.join(exports, name), options=picker_options,
+                window,
+                "Save as",
+                os.path.join(exports, name),
+                options=picker_options,
             )
             if not path:
                 request.cancel()
@@ -702,11 +793,19 @@ def run(args: PlayerArgs) -> int:
                 return
             if args.sandboxed:
                 taken.discard(filename)
-            if request.state() == QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
-                saved_path = os.path.join(request.downloadDirectory(), request.downloadFileName())
+            if (
+                request.state()
+                == QWebEngineDownloadRequest.DownloadState.DownloadCompleted
+            ):
+                saved_path = os.path.join(
+                    request.downloadDirectory(), request.downloadFileName()
+                )
                 show_export_message("Download saved", saved_path, saved_path)
             else:
-                show_export_message("Download failed", request.interruptReasonString() or "The download did not finish.")
+                show_export_message(
+                    "Download failed",
+                    request.interruptReasonString() or "The download did not finish.",
+                )
 
         _ = request.isFinishedChanged.connect(on_finished)  # pyright: ignore[reportUnknownMemberType]
         request.accept()

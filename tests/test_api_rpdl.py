@@ -60,8 +60,22 @@ def test_find_scores_results_and_reports_sign_in(api, store, monkeypatch):
     def search(query, refresh=False):
         seen.append((query, refresh))
         return [
-            {"id": 1, "title": "Eternum-0.8-pc", "size": 5, "seeders": 4, "leechers": 0, "date": 1},
-            {"id": 2, "title": "Eternum-OST", "size": 1, "seeders": 4, "leechers": 0, "date": 1},
+            {
+                "id": 1,
+                "title": "Eternum-0.8-pc",
+                "size": 5,
+                "seeders": 4,
+                "leechers": 0,
+                "date": 1,
+            },
+            {
+                "id": 2,
+                "title": "Eternum-OST",
+                "size": 1,
+                "seeders": 4,
+                "leechers": 0,
+                "date": 1,
+            },
         ]
 
     monkeypatch.setattr(rpdl, "search", search)
@@ -81,13 +95,19 @@ def test_find_failure_is_reported_by_cause(api, store, monkeypatch):
 
     monkeypatch.setattr(rpdl, "search", boom)
     result = api.find_rpdl_torrents(gid, "0.8")
-    assert result == {"success": False, "error": "RPDL is unavailable", "error_code": "unavailable"}
+    assert result == {
+        "success": False,
+        "error": "RPDL is unavailable",
+        "error_code": "unavailable",
+    }
     assert api.find_rpdl_torrents(999)["success"] is False
 
 
 def test_start_requires_sign_in_and_a_valid_torrent(api, store, monkeypatch):
     gid = game()
-    monkeypatch.setattr(rpdl, "fetch_torrent", lambda tid: pytest.fail("must not contact RPDL"))
+    monkeypatch.setattr(
+        rpdl, "fetch_torrent", lambda tid: pytest.fail("must not contact RPDL")
+    )
     result = api.start_rpdl_download(gid, 5, "0.8")
     assert result["success"] is False and "Sign in to RPDL" in str(result["error"])
     store[credentials.RPDL_TOKEN] = "tok"
@@ -111,21 +131,36 @@ def test_start_runs_a_torrent_job(api, store, monkeypatch, exe, expected):
     started = {}
 
     class FakeSupervisor(_EmptySupervisor):
-        def start(self, game_id, title, version, rpdl_id, fetch, *, paused=False, job_id=""):
-            started.update(game_id=game_id, title=title, version=version, rpdl_id=rpdl_id,
-                           paused=paused, job_id=job_id)
+        def start(
+            self, game_id, title, version, rpdl_id, fetch, *, paused=False, job_id=""
+        ):
+            started.update(
+                game_id=game_id,
+                title=title,
+                version=version,
+                rpdl_id=rpdl_id,
+                paused=paused,
+                job_id=job_id,
+            )
             return job_id
 
     monkeypatch.setattr(torrents, "supervisor", FakeSupervisor())
     result = api.start_rpdl_download(gid, 5, " 0.8 ")
     assert result["success"] is True
     # Added to the queue, and prepared paused until it gets a slot.
-    assert started == {"game_id": gid, "title": "Eternum", "version": "0.8", "rpdl_id": 5,
-                       "paused": True, "job_id": result["job_id"]}
+    assert started == {
+        "game_id": gid,
+        "title": "Eternum",
+        "version": "0.8",
+        "rpdl_id": 5,
+        "paused": True,
+        "job_id": result["job_id"],
+    }
     assert get_game(gid)["latest_version"] == expected
     queued = api.get_download_queue()["jobs"]
     assert [(job["job_id"], job["kind"], job["source"]) for job in queued] == [
-        (result["job_id"], "torrent", {"rpdl_id": 5})]
+        (result["job_id"], "torrent", {"rpdl_id": 5})
+    ]
 
 
 def test_start_reports_a_job_already_running(api, store, monkeypatch):
@@ -138,7 +173,10 @@ def test_start_reports_a_job_already_running(api, store, monkeypatch):
 
     monkeypatch.setattr(torrents, "supervisor", FakeSupervisor())
     assert api.start_rpdl_download(gid, 5, "")["success"] is True
-    assert api.start_rpdl_download(gid, 6, "")["error"] == "This game is already in the downloads"
+    assert (
+        api.start_rpdl_download(gid, 6, "")["error"]
+        == "This game is already in the downloads"
+    )
 
 
 def test_fetch_checks_the_info_hash(api, store, monkeypatch):
@@ -159,7 +197,11 @@ def test_fetch_checks_the_info_hash(api, store, monkeypatch):
     monkeypatch.setattr(torrents, "supervisor", FakeSupervisor())
     monkeypatch.setattr(rpdl, "fetch_torrent", lambda tid: data)
     api.start_rpdl_download(gid, 5, "")
-    monkeypatch.setattr(rpdl, "details", lambda tid: {"info_hash": parse_torrent(data).info_hash.upper()})
+    monkeypatch.setattr(
+        rpdl,
+        "details",
+        lambda tid: {"info_hash": parse_torrent(data).info_hash.upper()},
+    )
     assert captured["fetch"]() == data
     monkeypatch.setattr(rpdl, "details", lambda tid: {"info_hash": "0" * 40})
     with pytest.raises(rpdl.RpdlError):
@@ -194,7 +236,10 @@ def test_torrent_controls_report_failures(api, monkeypatch):
             return job_id == "ok"
 
     monkeypatch.setattr(torrents, "supervisor", FakeSupervisor())
-    assert api.answer_seed_prompt("ok", True, True)["success"] and ("answer", "ok", True, True) in calls
+    assert (
+        api.answer_seed_prompt("ok", True, True)["success"]
+        and ("answer", "ok", True, True) in calls
+    )
     assert not api.answer_seed_prompt("ok", "yes")["success"]
     assert not api.answer_seed_prompt("no", False)["success"]
     assert api.stop_seeding("ok")["success"] and not api.stop_seeding("no")["success"]
@@ -208,7 +253,9 @@ def export_setup(store, monkeypatch, data=None):
     store[credentials.RPDL_TOKEN] = "tok"
     body = data if data is not None else torrent_bytes(name="Game: v1/2?")
     monkeypatch.setattr(rpdl, "fetch_torrent", lambda tid: body)
-    monkeypatch.setattr(rpdl, "details", lambda tid: {"info_hash": parse_torrent(body).info_hash})
+    monkeypatch.setattr(
+        rpdl, "details", lambda tid: {"info_hash": parse_torrent(body).info_hash}
+    )
 
     class NoSupervisor:
         def start(self, *args):
@@ -229,9 +276,14 @@ def test_save_writes_the_torrent_into_the_folder(api, store, monkeypatch, tmp_pa
 
 def test_save_refuses_a_relative_or_missing_folder(api, store, monkeypatch, tmp_path):
     export_setup(store, monkeypatch)
-    monkeypatch.setattr(rpdl, "fetch_torrent", lambda tid: pytest.fail("must not contact RPDL"))
+    monkeypatch.setattr(
+        rpdl, "fetch_torrent", lambda tid: pytest.fail("must not contact RPDL")
+    )
     for folder in ("relative", str(tmp_path / "missing"), None):
-        assert api.save_rpdl_torrent(5, folder) == {"success": False, "error": "Choose an existing folder"}
+        assert api.save_rpdl_torrent(5, folder) == {
+            "success": False,
+            "error": "Choose an existing folder",
+        }
     assert api.save_rpdl_torrent("x", str(tmp_path))["success"] is False
 
 
@@ -242,7 +294,9 @@ def test_magnet_output(api, store, monkeypatch):
     result = api.get_rpdl_magnet(5)
     assert result["success"] is True
     magnet = str(result["magnet"])
-    assert magnet.startswith(f"magnet:?xt=urn:btih:{parse_torrent(body).info_hash}&dn=Game%3A%20v1%2F2%3F&tr=http")
+    assert magnet.startswith(
+        f"magnet:?xt=urn:btih:{parse_torrent(body).info_hash}&dn=Game%3A%20v1%2F2%3F&tr=http"
+    )
 
 
 def test_send_needs_a_usable_watch_folder(api, store, monkeypatch, tmp_path):
@@ -279,7 +333,9 @@ def test_send_writes_into_the_watch_folder(api, store, monkeypatch, tmp_path):
 def test_exports_need_sign_in(api, store, monkeypatch, tmp_path):
     from core.downloads import torrent_settings
 
-    monkeypatch.setattr(rpdl, "fetch_torrent", lambda tid: pytest.fail("must not contact RPDL"))
+    monkeypatch.setattr(
+        rpdl, "fetch_torrent", lambda tid: pytest.fail("must not contact RPDL")
+    )
     monkeypatch.setattr(torrent_settings, "watch_folder", lambda: str(tmp_path))
     for result in (
         api.save_rpdl_torrent(5, str(tmp_path)),
@@ -316,7 +372,9 @@ def test_html_answer_writes_no_file(api, store, monkeypatch, tmp_path):
     assert list(out.iterdir()) == []
 
 
-def test_exports_never_log_the_passkey(api, store, monkeypatch, tmp_path, caplog, capsys):
+def test_exports_never_log_the_passkey(
+    api, store, monkeypatch, tmp_path, caplog, capsys
+):
     from test_torrents import PASSKEY  # type: ignore[import-not-found]
 
     caplog.set_level("DEBUG")

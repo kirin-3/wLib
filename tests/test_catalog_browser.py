@@ -8,7 +8,11 @@ import pytest
 from catalog_fakes import FakeClock, FakeTransport, fixture_bytes, json_response
 from catalog_server.__main__ import _try_lock, main
 from catalog_server.browser import BrowserTransport, f95_login_cookies, lc_login_cookies
-from catalog_server.config import browser_sites_from_env, f95_cookie_from_env, lc_cookie_from_env
+from catalog_server.config import (
+    browser_sites_from_env,
+    f95_cookie_from_env,
+    lc_cookie_from_env,
+)
 from catalog_server.net import Pacer, Request
 from catalog_server.store import StateStore
 
@@ -59,7 +63,9 @@ class FakeBrowser:
 
 
 def test_the_browser_stays_open_and_restarts_when_the_proxy_changes():
-    browser = FakeBrowser(lambda url: FakePage(200, b'{"ok": true}', {"Content-Type": "application/json"}))
+    browser = FakeBrowser(
+        lambda url: FakePage(200, b'{"ok": true}', {"Content-Type": "application/json"})
+    )
     transport = BrowserTransport(session_factory=browser)
     first = transport(Request("GET", "https://f95zone.to/a"))
     transport(Request("GET", "https://f95zone.to/b"))
@@ -91,7 +97,9 @@ def test_a_browser_failure_is_retryable_and_starts_a_new_browser():
 
 
 def test_the_browser_refuses_post_requests():
-    transport = BrowserTransport(session_factory=FakeBrowser(lambda url: FakePage(200, b"")))
+    transport = BrowserTransport(
+        session_factory=FakeBrowser(lambda url: FakePage(200, b""))
+    )
     with pytest.raises(ValueError, match="only sends GET"):
         transport(Request("POST", "https://api.vndb.org/kana/vn", body=b"{}"))
 
@@ -110,9 +118,13 @@ def test_pacer_sends_browser_sites_through_the_browser_and_counts_them(tmp_path)
         transports={"f95": BrowserTransport(session_factory=browser)},
     )
     assert pacer.request("f95", "https://f95zone.to/a").json() == {"browser": True}
-    assert pacer.request("ryuugames", "https://www.ryuugames.com/a").json() == {"plain": True}
+    assert pacer.request("ryuugames", "https://www.ryuugames.com/a").json() == {
+        "plain": True
+    }
     assert [url for _, url in browser.fetched] == ["https://f95zone.to/a"]
-    assert [request.url for request in plain.requests] == ["https://www.ryuugames.com/a"]
+    assert [request.url for request in plain.requests] == [
+        "https://www.ryuugames.com/a"
+    ]
     assert pacer.remaining("f95") == 89
 
 
@@ -134,7 +146,9 @@ def test_f95_cookie_accepts_the_value_as_copied(monkeypatch, value):
 
 
 def test_f95_cookie_error_never_shows_the_value(monkeypatch):
-    monkeypatch.setenv("WLIB_CATALOG_F95_COOKIE", "xf_user=secret-part; xf_session=other")
+    monkeypatch.setenv(
+        "WLIB_CATALOG_F95_COOKIE", "xf_user=secret-part; xf_session=other"
+    )
     with pytest.raises(ValueError) as error:
         f95_cookie_from_env()
     assert "secret-part" not in str(error.value)
@@ -152,7 +166,9 @@ def test_lc_cookie_accepts_the_value_as_copied(monkeypatch, value):
 
 
 def test_lc_cookie_error_never_shows_the_value(monkeypatch):
-    monkeypatch.setenv("WLIB_CATALOG_LC_COOKIE", "xf_user=secret-part; xf_session=other")
+    monkeypatch.setenv(
+        "WLIB_CATALOG_LC_COOKIE", "xf_user=secret-part; xf_session=other"
+    )
     with pytest.raises(ValueError, match="WLIB_CATALOG_LC_COOKIE") as error:
         lc_cookie_from_env()
     assert "secret-part" not in str(error.value)
@@ -175,16 +191,22 @@ def test_browser_sites_refuse_unknown_sites_and_vndb(monkeypatch, value):
 def test_cli_refuses_a_login_cookie_without_the_f95_browser(tmp_path, monkeypatch):
     monkeypatch.setenv("WLIB_CATALOG_F95_COOKIE", COOKIE)
     monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "dlsite")
-    code = main(["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "none"])
+    code = main(
+        ["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "none"]
+    )
     assert code == 2
 
 
-def test_cli_run_uses_the_browser_for_browser_sites_and_closes_it(tmp_path, monkeypatch):
+def test_cli_run_uses_the_browser_for_browser_sites_and_closes_it(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "ryuugames")
     monkeypatch.delenv("WLIB_CATALOG_F95_COOKIE", raising=False)
     plain = FakeTransport()
     browser = FakeBrowser(
-        lambda url: FakePage(200, fixture_bytes("ryuugames_posts.json"), {"X-WP-TotalPages": "1"})
+        lambda url: FakePage(
+            200, fixture_bytes("ryuugames_posts.json"), {"X-WP-TotalPages": "1"}
+        )
     )
     clock = FakeClock()
     code = main(
@@ -209,14 +231,18 @@ def _f95_home(logged_in: bool) -> bytes:
 
 
 @pytest.mark.parametrize(("logged_in", "code"), [(True, 0), (False, 1)])
-def test_check_f95_login_reports_the_account(tmp_path, monkeypatch, capsys, logged_in, code):
+def test_check_f95_login_reports_the_account(
+    tmp_path, monkeypatch, capsys, logged_in, code
+):
     monkeypatch.setenv("WLIB_CATALOG_F95_COOKIE", COOKIE)
     monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "f95")
     browser = FakeBrowser(lambda url: FakePage(200, _f95_home(logged_in)))
     clock = FakeClock()
     result = main(
         ["--data-dir", str(tmp_path), "check-f95-login"],
-        browser=BrowserTransport(cookies=f95_login_cookies(COOKIE), session_factory=browser),
+        browser=BrowserTransport(
+            cookies=f95_login_cookies(COOKIE), session_factory=browser
+        ),
         sleep=clock.sleep,
     )
     assert result == code
@@ -233,7 +259,9 @@ def test_check_f95_login_needs_a_cookie(tmp_path, monkeypatch):
     assert main(["--data-dir", str(tmp_path), "check-f95-login"]) == 2
 
 
-def test_check_f95_login_works_while_the_feed_budget_is_used_up(tmp_path, monkeypatch, capsys):
+def test_check_f95_login_works_while_the_feed_budget_is_used_up(
+    tmp_path, monkeypatch, capsys
+):
     monkeypatch.setenv("WLIB_CATALOG_F95_COOKIE", COOKIE)
     monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "f95")
     state = StateStore(str(tmp_path / "state.sqlite"))
@@ -244,7 +272,9 @@ def test_check_f95_login_works_while_the_feed_budget_is_used_up(tmp_path, monkey
     browser = FakeBrowser(lambda url: FakePage(200, _f95_home(True)))
     result = main(
         ["--data-dir", str(tmp_path), "check-f95-login"],
-        browser=BrowserTransport(cookies=f95_login_cookies(COOKIE), session_factory=browser),
+        browser=BrowserTransport(
+            cookies=f95_login_cookies(COOKIE), session_factory=browser
+        ),
     )
     assert result == 0
     assert "Logged in to F95 as SomeUser" in capsys.readouterr().out
@@ -271,7 +301,9 @@ def test_cli_refuses_an_lc_cookie_without_the_lc_browser(tmp_path, monkeypatch):
     monkeypatch.delenv("WLIB_CATALOG_F95_COOKIE", raising=False)
     monkeypatch.setenv("WLIB_CATALOG_LC_COOKIE", COOKIE)
     monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "f95")
-    code = main(["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "none"])
+    code = main(
+        ["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "none"]
+    )
     assert code == 2
 
 
@@ -291,12 +323,16 @@ def _lc_env(monkeypatch):
 
 
 @pytest.mark.parametrize(("logged_in", "code"), [(True, 0), (False, 1)])
-def test_check_lc_login_reports_the_account(tmp_path, monkeypatch, capsys, caplog, logged_in, code):
+def test_check_lc_login_reports_the_account(
+    tmp_path, monkeypatch, capsys, caplog, logged_in, code
+):
     _lc_env(monkeypatch)
     browser = FakeBrowser(lambda url: FakePage(200, _lc_home(logged_in)))
     result = main(
         ["--data-dir", str(tmp_path), "check-lc-login"],
-        browser=BrowserTransport(cookies=lc_login_cookies(COOKIE), session_factory=browser),
+        browser=BrowserTransport(
+            cookies=lc_login_cookies(COOKIE), session_factory=browser
+        ),
     )
     assert result == code
     assert browser.fetched == [(None, "https://lewdcorner.com/")]
@@ -307,6 +343,7 @@ def test_check_lc_login_reports_the_account(tmp_path, monkeypatch, capsys, caplo
     if not logged_in:
         assert "does not see a login" in caplog.text
 
+
 def test_check_lc_login_refuses_while_a_run_holds_the_lock(tmp_path, monkeypatch):
     _lc_env(monkeypatch)
     browser = FakeBrowser(lambda url: FakePage(200, _lc_home(True)))
@@ -314,7 +351,9 @@ def test_check_lc_login_refuses_while_a_run_holds_the_lock(tmp_path, monkeypatch
         assert _try_lock(handle)
         result = main(
             ["--data-dir", str(tmp_path), "check-lc-login"],
-            browser=BrowserTransport(cookies=lc_login_cookies(COOKIE), session_factory=browser),
+            browser=BrowserTransport(
+                cookies=lc_login_cookies(COOKIE), session_factory=browser
+            ),
         )
     assert result == 1
     assert browser.fetched == []
@@ -328,7 +367,9 @@ def test_check_lc_login_needs_a_cookie(tmp_path, monkeypatch):
 
 def test_the_guest_view_shares_the_one_browser_without_cookies():
     browser = FakeBrowser(lambda url: FakePage(200, b"<html></html>"))
-    transport = BrowserTransport(cookies=lc_login_cookies(COOKIE), session_factory=browser)
+    transport = BrowserTransport(
+        cookies=lc_login_cookies(COOKIE), session_factory=browser
+    )
     guest = transport.guest()
     transport(Request("GET", "https://lewdcorner.com/latest-updates/api"))
     guest(Request("GET", "https://lewdcorner.com/forums/119/"))

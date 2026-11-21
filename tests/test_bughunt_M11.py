@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M11: Download now wakes the queue thread even when the job must wait."""
+
 import pytest
 
 from core.database import init_db, update_setting

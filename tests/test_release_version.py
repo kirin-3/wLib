@@ -20,7 +20,9 @@ _spec.loader.exec_module(check)
 def _repo(tmp_path: Path, app_version: str, manifest_version: str) -> Path:
     (tmp_path / "core").mkdir(exist_ok=True)
     (tmp_path / "extension").mkdir(exist_ok=True)
-    (tmp_path / "core" / "app_version.py").write_text(f'APP_VERSION = "{app_version}"\n')
+    (tmp_path / "core" / "app_version.py").write_text(
+        f'APP_VERSION = "{app_version}"\n'
+    )
     (tmp_path / "extension" / "manifest.json").write_text(
         json.dumps({"version": manifest_version})
     )
@@ -74,10 +76,14 @@ def test_lock_file_keeps_the_exact_pins():
             name, version = specifier.split("==", 1)
             wanted[_name(name)] = version.strip()
     lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
-    locked = {_name(package["name"]): package.get("version") for package in lock["package"]}
+    locked = {
+        _name(package["name"]): package.get("version") for package in lock["package"]
+    }
     assert wanted, "pyproject.toml has no exact pins"
     for name, version in wanted.items():
-        assert locked.get(name) == version, f"uv.lock: {name} {locked.get(name)} != {version}"
+        assert locked.get(name) == version, (
+            f"uv.lock: {name} {locked.get(name)} != {version}"
+        )
     for package in lock["package"]:
         for wheel in package.get("wheels", []):
             assert wheel.get("hash", "").startswith("sha256:"), package["name"]

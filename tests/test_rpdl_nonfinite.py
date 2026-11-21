@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """RPDL replies with NaN or Infinity (which `json.loads` accepts) must not crash."""
+
 import io
 import json
 from email.message import Message
@@ -34,7 +35,9 @@ def fast(monkeypatch, tmp_path):
 @pytest.fixture
 def replies(monkeypatch):
     queue: list[bytes] = []
-    monkeypatch.setattr(rpdl, "urlopen", lambda request, timeout=30: Response(queue.pop(0)))
+    monkeypatch.setattr(
+        rpdl, "urlopen", lambda request, timeout=30: Response(queue.pop(0))
+    )
     return queue
 
 
@@ -56,7 +59,9 @@ def test_search_treats_nonfinite_numbers_as_unknown(replies, token):
 
 @pytest.mark.parametrize("token", NONFINITE)
 def test_search_drops_row_with_nonfinite_id(replies, token):
-    replies.append(f'{{"data": {{"results": [{_row("1", torrent_id=token)}, {_row("1", torrent_id="2")}]}}}}'.encode())
+    replies.append(
+        f'{{"data": {{"results": [{_row("1", torrent_id=token)}, {_row("1", torrent_id="2")}]}}}}'.encode()
+    )
     results = rpdl.search("Game")
     assert [item["id"] for item in results] == [2]
 
@@ -83,7 +88,9 @@ def test_parse_size_overflowing_text_is_unknown():
 
 def test_valid_values_are_unchanged():
     assert rpdl._int(3.9) == 3 and rpdl._int(-2) == 0 and rpdl._int("12") == 12
-    assert rpdl.parse_size(2048.5) == 2048 and rpdl.parse_size("1.5 GB") == int(1.5 * 1024**3)
+    assert rpdl.parse_size(2048.5) == 2048 and rpdl.parse_size("1.5 GB") == int(
+        1.5 * 1024**3
+    )
     assert rpdl.parse_size("1 XB") == 0
     assert rpdl.parse_date(1700000000.7) == 1700000000
     assert rpdl._num(5) == 5.0

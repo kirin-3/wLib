@@ -38,7 +38,9 @@ def _backup(games: list[dict[str, object]]) -> dict[str, object]:
 
 
 def _uid(game_id: int) -> str:
-    return str(next(game for game in get_all_games() if game["id"] == game_id)["sync_uid"])
+    return str(
+        next(game for game in get_all_games() if game["id"] == game_id)["sync_uid"]
+    )
 
 
 def _setup(tmp_path: Path) -> tuple[int, str, str]:
@@ -76,7 +78,10 @@ def test_snapshot_restore_brings_back_attachments_of_a_mirrored_deletion(tmp_pat
     path = sync_snapshot_path(snapshot)
     assert path is not None
     _ = apply_library_backup(
-        load_library_backup(path), {"sections": list(RESTORE_SECTIONS)}, mirror=True, sync=True
+        load_library_backup(path),
+        {"sections": list(RESTORE_SECTIONS)},
+        mirror=True,
+        sync=True,
     )
 
     restored = next(game for game in get_all_games() if game["sync_uid"] == gone_uid)
@@ -103,7 +108,9 @@ def test_held_attachments_go_once_no_snapshot_names_the_game(tmp_path):
         "metadata": {"title": "Keep"},
         "executable_paths": {"exe_path": "/games/keep/game.sh"},
     }
-    _ = apply_library_backup(_backup([keep]), {"sections": SECTIONS}, mirror=True, sync=True)
+    _ = apply_library_backup(
+        _backup([keep]), {"sections": SECTIONS}, mirror=True, sync=True
+    )
 
     assert not os.path.exists(held)
     assert os.path.isdir(os.path.join(database.DATA_DIR, "attachments"))

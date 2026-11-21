@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Game saves, RPG Maker saves and attachments."""
+
 from __future__ import annotations
 
 import os
@@ -416,7 +417,9 @@ class SavesMixin(ApiBase):
                         )
                     except OSError as exc:
                         name = info.backup.name
-                        print(f"[wLib] Could not note the source of backup {name}: {exc}")
+                        print(
+                            f"[wLib] Could not note the source of backup {name}: {exc}"
+                        )
         except GameSavesError as exc:
             return {"success": False, "error": str(exc)}
         message = f"{verb} {info.files} file(s) ({self._format_bytes(info.bytes)})"
@@ -497,9 +500,7 @@ class SavesMixin(ApiBase):
                     return missing_folder_error
                 if context[1] != ENGINE_RGSS:
                     return missing_folder_error
-                target = (
-                    os.path.join(context[2], relative) if relative else context[2]
-                )
+                target = os.path.join(context[2], relative) if relative else context[2]
                 if not os.path.isdir(target):
                     return missing_folder_error
                 game_save_folder = target

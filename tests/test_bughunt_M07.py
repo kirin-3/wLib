@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M07: a torrent that finished before the queue saw it reloads as ready."""
+
 from core.database import init_db
 from core.downloads.queue import PAUSED, READY, RUNNING, DownloadQueue
 from core.downloads.workers import TorrentContext, TorrentWorker
@@ -20,12 +21,20 @@ class FakeSupervisor:
         job = self.jobs.get(job_id)
         return dict(job) if job is not None else None
 
-    def start(self, game_id, title, version, rpdl_id, fetch, *, paused=False, job_id=""):
+    def start(
+        self, game_id, title, version, rpdl_id, fetch, *, paused=False, job_id=""
+    ):
         del fetch
         self.jobs[job_id] = {
-            "job_id": job_id, "game_id": game_id, "title": title, "version": version,
-            "rpdl_id": rpdl_id, "info_hash": "ab" * 20, "stage": "paused" if paused else "downloading",
-            "bytes": 0, "total": 100,
+            "job_id": job_id,
+            "game_id": game_id,
+            "title": title,
+            "version": version,
+            "rpdl_id": rpdl_id,
+            "info_hash": "ab" * 20,
+            "stage": "paused" if paused else "downloading",
+            "bytes": 0,
+            "total": 100,
         }
         return job_id
 
@@ -60,12 +69,16 @@ class FakeSupervisor:
 def _queue(sup: FakeSupervisor, clock: Clock) -> DownloadQueue:
     init_db()
     worker = TorrentWorker(lambda: sup, fetch_for=lambda rpdl_id: lambda: b"")  # pyright: ignore[reportArgumentType]
-    return DownloadQueue([worker], run_thread=False, clock=clock, free_space=lambda: 10**12)
+    return DownloadQueue(
+        [worker], run_thread=False, clock=clock, free_space=lambda: 10**12
+    )
 
 
 def _running_job(sup: FakeSupervisor, clock: Clock) -> str:
     queue = _queue(sup, clock)
-    job_id = queue.add("torrent", 1, "Game", "1", {"rpdl_id": 7}, TorrentContext(lambda: b"")).id
+    job_id = queue.add(
+        "torrent", 1, "Game", "1", {"rpdl_id": 7}, TorrentContext(lambda: b"")
+    ).id
     queue.tick()
     queue.tick()
     assert queue.get(job_id).state == RUNNING

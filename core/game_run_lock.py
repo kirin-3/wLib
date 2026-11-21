@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Cross-process game launch locks."""
+
 from __future__ import annotations
 
 import os
@@ -13,8 +14,8 @@ def acquire_launch_lock(game_id: int) -> int | None:
     from core.database import DB_PATH
 
     if game_id <= 0:
-        raise ValueError('Invalid game ID')
-    path = Path(DB_PATH).parent / 'runs' / f'{game_id}.lock'
+        raise ValueError("Invalid game ID")
+    path = Path(DB_PATH).parent / "runs" / f"{game_id}.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
     try:
@@ -26,5 +27,3 @@ def acquire_launch_lock(game_id: int) -> int | None:
     except BaseException:
         os.close(fd)
         raise
-
-

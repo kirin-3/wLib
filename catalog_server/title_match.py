@@ -30,7 +30,9 @@ MATCH_ID_KINDS = frozenset({"patreon", "subscribestar", "itch", "kofi", "steam"}
 
 _NON_ALNUM_RE = re.compile(r"[^0-9a-z]+")
 # Folded to their ASCII form, so "Summoner’s" and "Summoner's" stay the same.
-_ASCII_PUNCTUATION = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-"})
+_ASCII_PUNCTUATION = str.maketrans(
+    {"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-"}
+)
 
 
 def norm(text: str | None) -> str:
@@ -90,9 +92,13 @@ def _by_title(rows: Iterable[tuple[object, ...]]) -> dict[str, list[_Row]]:
 
 def _kept_details_filter(conn: sqlite3.Connection, table: str) -> str:
     # The comparison tool also opens older snapshots read-only.
-    has_flag = conn.execute(
-        "SELECT 1 FROM pragma_table_info(?) WHERE name = 'kept_after_failure'", (table,)
-    ).fetchone() is not None
+    has_flag = (
+        conn.execute(
+            "SELECT 1 FROM pragma_table_info(?) WHERE name = 'kept_after_failure'",
+            (table,),
+        ).fetchone()
+        is not None
+    )
     return " AND d.kept_after_failure = 0" if has_flag else ""
 
 

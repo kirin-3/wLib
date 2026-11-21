@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Seeding policy: pure functions, no I/O."""
+
 from __future__ import annotations
 
 ASK = "ask"

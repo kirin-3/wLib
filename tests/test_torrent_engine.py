@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The real torrent helper process, run against local private torrents (no peers)."""
+
 import json
 import os
 import subprocess
@@ -17,7 +18,9 @@ PASSKEY = "PASSKEY1234567890"
 TRACKER = f"http://127.0.0.1:9/announce/{PASSKEY}?k=SECRETQUERY"
 
 
-def make_torrent(folder: Path, payload: bytes = b"x" * 200_000, with_data: bool = False) -> bytes:
+def make_torrent(
+    folder: Path, payload: bytes = b"x" * 200_000, with_data: bool = False
+) -> bytes:
     """A private single-file torrent in `folder`; returns the .torrent bytes."""
     source = folder / "src"
     source.mkdir(parents=True)
@@ -42,8 +45,12 @@ class Helper:
         env = {**os.environ, "WLIB_DATA_DIR": str(tmp_path / "appdata")}
         self.proc = subprocess.Popen(
             [sys.executable, str(REPO / "main.py"), "--torrent-helper"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, env=env, cwd=str(REPO),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            env=env,
+            cwd=str(REPO),
         )
         self.events: list[dict] = []
 
@@ -86,7 +93,10 @@ def helper(tmp_path):
 
 def _status_of(h: Helper, job: str, predicate=lambda t: True) -> dict:
     event = h.read_until(
-        lambda e: e["event"] == "status" and any(t["id"] == job and predicate(t) for t in e["torrents"])
+        lambda e: (
+            e["event"] == "status"
+            and any(t["id"] == job and predicate(t) for t in e["torrents"])
+        )
     )
     return next(t for t in event["torrents"] if t["id"] == job)
 
@@ -96,12 +106,17 @@ def test_status_pause_resume_limits_remove(helper, tmp_path):
     make_torrent(folder)
     helper.send(cmd="add", id="j1", dir=str(folder), paused=False)
     first = _status_of(helper, "j1")
-    assert first["size"] == 200_000 and first["finished"] is False and first["peers"] == 0
+    assert (
+        first["size"] == 200_000 and first["finished"] is False and first["peers"] == 0
+    )
     assert "announce" not in first["tracker"]
     helper.send(cmd="pause", id="j1")
     assert _status_of(helper, "j1", lambda t: t["paused"])["state"] == "paused"
     helper.send(cmd="resume", id="j1")
-    assert _status_of(helper, "j1", lambda t: not t["paused"])["state"] in ("downloading", "checking")
+    assert _status_of(helper, "j1", lambda t: not t["paused"])["state"] in (
+        "downloading",
+        "checking",
+    )
     helper.send(cmd="set_limits", download_kib=100, upload_kib=50)
     helper.send(cmd="remove", id="j1")
     helper.read_until(lambda e: e["event"] == "removed" and e["id"] == "j1")
@@ -136,12 +151,19 @@ def test_unsafe_paths_refused(helper, tmp_path):
         folder = tmp_path / f"bad{index}"
         folder.mkdir()
         info = {
-            "name": "pack", "piece length": 16384, "pieces": b"\0" * 20, "private": 1,
+            "name": "pack",
+            "piece length": 16384,
+            "pieces": b"\0" * 20,
+            "private": 1,
             "files": [{"length": 5, "path": path}],
         }
-        (folder / "meta.torrent").write_bytes(lt.bencode({"info": info, "announce": TRACKER}))
+        (folder / "meta.torrent").write_bytes(
+            lt.bencode({"info": info, "announce": TRACKER})
+        )
         helper.send(cmd="add", id=f"b{index}", dir=str(folder), paused=False)
-        event = helper.read_until(lambda e, index=index: e["event"] == "error" and e.get("id") == f"b{index}")
+        event = helper.read_until(
+            lambda e, index=index: e["event"] == "error" and e.get("id") == f"b{index}"
+        )
         assert event["code"] == "unsafe_paths"
     assert not (tmp_path / "evil.txt").exists()
 
@@ -202,11 +224,18 @@ def test_ready_reports_the_listen_port(tmp_path):
 
 
 def _seeder(folder: Path, meta: bytes, payload_dir: Path, upload_kib: int):
-    session = lt.session({
-        "enable_dht": False, "enable_lsd": False, "enable_upnp": False, "enable_natpmp": False,
-        "listen_interfaces": "127.0.0.1:0", "ignore_limits_on_local_network": False,
-        "upload_rate_limit": upload_kib * 1024,
-    }, 0)
+    session = lt.session(
+        {
+            "enable_dht": False,
+            "enable_lsd": False,
+            "enable_upnp": False,
+            "enable_natpmp": False,
+            "listen_interfaces": "127.0.0.1:0",
+            "ignore_limits_on_local_network": False,
+            "upload_rate_limit": upload_kib * 1024,
+        },
+        0,
+    )
     params = lt.add_torrent_params()
     params.ti = lt.torrent_info(meta)
     params.save_path = str(payload_dir)

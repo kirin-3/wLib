@@ -30,9 +30,7 @@ ATTACHMENT_TYPES = {".pdf": _is_pdf, ".txt": _is_text, ".md": _is_text}
 
 
 def attachments_dir(game_id: int) -> str:
-    return os.path.join(
-        database.DATA_DIR, "attachments", str(int(game_id))
-    )
+    return os.path.join(database.DATA_DIR, "attachments", str(int(game_id)))
 
 
 def list_attachments(game_id: int) -> list[dict[str, object]]:
@@ -148,15 +146,13 @@ def _open_attachment_source(path: str) -> BinaryIO:
     A picked source (or a path from a hand-edited library file) can be a FIFO;
     opening one for reading blocks until a writer appears.
     """
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_NONBLOCK", 0)
-        | getattr(os, "O_BINARY", 0)
-    )
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
     fd = os.open(path, flags)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise UnsupportedAttachmentError("Only PDF, TXT and MD files can be attached")
+            raise UnsupportedAttachmentError(
+                "Only PDF, TXT and MD files can be attached"
+            )
     except BaseException:
         os.close(fd)
         raise
@@ -177,11 +173,15 @@ def add_attachment(game_id: int, source_path: object) -> dict[str, object]:
 
     with handle:
         if not check(handle):
-            raise UnsupportedAttachmentError("Only PDF, TXT and MD files can be attached")
+            raise UnsupportedAttachmentError(
+                "Only PDF, TXT and MD files can be attached"
+            )
 
         base_name = os.path.basename(source)
         if not base_name or base_name.startswith("."):
-            raise UnsupportedAttachmentError("Only PDF, TXT and MD files can be attached")
+            raise UnsupportedAttachmentError(
+                "Only PDF, TXT and MD files can be attached"
+            )
         folder = attachments_dir(game_id)
         os.makedirs(folder, exist_ok=True)
         target_name = _free_attachment_name(folder, base_name)
@@ -265,7 +265,9 @@ def hold_game_attachments(game_id: int, sync_uid: object) -> bool:
     uid = _held_uid(sync_uid)
     if not uid:
         return False
-    _move_folder_contents(attachments_dir(game_id), os.path.join(held_attachments_dir(), uid))
+    _move_folder_contents(
+        attachments_dir(game_id), os.path.join(held_attachments_dir(), uid)
+    )
     return True
 
 
@@ -274,7 +276,9 @@ def reclaim_held_attachments(game_id: int, sync_uid: object) -> None:
     uid = _held_uid(sync_uid)
     if not uid:
         return
-    _move_folder_contents(os.path.join(held_attachments_dir(), uid), attachments_dir(game_id))
+    _move_folder_contents(
+        os.path.join(held_attachments_dir(), uid), attachments_dir(game_id)
+    )
 
 
 def held_attachment_uids() -> list[str]:

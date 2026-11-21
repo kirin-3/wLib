@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M10: the battery hold applies before startup and user actions start a transfer."""
+
 import pytest
 
 from core.database import init_db, update_setting

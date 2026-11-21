@@ -31,7 +31,10 @@ def test_prepare_can_retry_after_invalid_proton_manifest(
     api = Api()
 
     def inline_thread(
-        *, target: Callable[[str, str, str], None], args: tuple[str, str, str], daemon: bool
+        *,
+        target: Callable[[str, str, str], None],
+        args: tuple[str, str, str],
+        daemon: bool,
     ) -> SimpleNamespace:
         assert daemon
         return SimpleNamespace(start=lambda: target(*args))

@@ -25,7 +25,9 @@ class CatalogServer:
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
-                server.requests.append({"path": self.path, "headers": dict(self.headers)})
+                server.requests.append(
+                    {"path": self.path, "headers": dict(self.headers)}
+                )
                 body = server.files.get(self.path)
                 if body is None:
                     self.send_response(404)
@@ -53,7 +55,10 @@ class CatalogServer:
         store.upsert(
             "f95_threads",
             "thread_id",
-            [{"thread_id": index, "title": title, "url": "u"} for index, title in enumerate(titles)],
+            [
+                {"thread_id": index, "title": title, "url": "u"}
+                for index, title in enumerate(titles)
+            ],
             stamp,
         )
         snapshot = build_snapshot(store, str(folder / "out"), stamp)
@@ -97,19 +102,29 @@ class Clock:
 
 
 def _client(tmp_path, clock=None, enabled=lambda: True):
-    return CatalogClient(str(tmp_path / "data"), app_version="9.9.9", enabled=enabled, clock=clock or Clock())
+    return CatalogClient(
+        str(tmp_path / "data"),
+        app_version="9.9.9",
+        enabled=enabled,
+        clock=clock or Clock(),
+    )
 
 
 def _titles(client):
     conn = sqlite3.connect(f"file:{client.catalog_path}?mode=ro", uri=True)
     try:
-        return [row[0] for row in conn.execute("SELECT title FROM f95_threads ORDER BY thread_id")]
+        return [
+            row[0]
+            for row in conn.execute("SELECT title FROM f95_threads ORDER BY thread_id")
+        ]
     finally:
         conn.close()
 
 
 def _leftovers(client):
-    return [name for name in os.listdir(client.data_dir) if name.startswith(".catalog-")]
+    return [
+        name for name in os.listdir(client.data_dir) if name.startswith(".catalog-")
+    ]
 
 
 def test_installs_a_snapshot_and_reports_status(tmp_path, server):
@@ -120,7 +135,9 @@ def test_installs_a_snapshot_and_reports_status(tmp_path, server):
     status = client.status()
     assert status["installed"] is True
     assert status["built_at"] == "2026-10-27T05:00:00Z"
-    assert status["sources"] == {"f95": {"count": 2, "updated_at": "2026-10-27T05:00:00Z"}}
+    assert status["sources"] == {
+        "f95": {"count": 2, "updated_at": "2026-10-27T05:00:00Z"}
+    }
     assert status["last_check"] and status["last_error"] is None
     assert _leftovers(client) == []
 
@@ -160,7 +177,9 @@ def test_snapshot_data_is_flushed_before_the_replace(tmp_path, server, monkeypat
     assert calls.index("fsync") < calls.index("replace")
 
 
-def test_turning_off_during_the_install_leaves_no_catalog(tmp_path, server, monkeypatch):
+def test_turning_off_during_the_install_leaves_no_catalog(
+    tmp_path, server, monkeypatch
+):
     server.publish(tmp_path, "2026-10-27T05:00:00Z")
     enabled = {"on": True}
     client = _client(tmp_path, enabled=lambda: enabled["on"])
@@ -331,7 +350,9 @@ def test_requests_carry_no_query_cookies_or_library_data(tmp_path, server):
 
 
 def test_unreachable_address_is_recorded_without_raising(tmp_path, monkeypatch):
-    monkeypatch.setenv("WLIB_CATALOG_MANIFEST_URL", "http://127.0.0.1:9/v1/manifest.json")
+    monkeypatch.setenv(
+        "WLIB_CATALOG_MANIFEST_URL", "http://127.0.0.1:9/v1/manifest.json"
+    )
     client = _client(tmp_path)
     result = client.check()
     assert result["success"] is False
@@ -356,17 +377,25 @@ def test_disabled_makes_no_requests_and_remove_deletes_files(tmp_path, server):
 
 def test_default_url_and_override(monkeypatch):
     monkeypatch.delenv("WLIB_CATALOG_MANIFEST_URL", raising=False)
-    assert catalog_module.manifest_url() == "https://wlib-db.thekirin.net/v1/manifest.json"
     assert (
-        catalog_module.snapshot_url(catalog_module.manifest_url(), "v1/snapshots/catalog-1.sqlite.xz")
+        catalog_module.manifest_url() == "https://wlib-db.thekirin.net/v1/manifest.json"
+    )
+    assert (
+        catalog_module.snapshot_url(
+            catalog_module.manifest_url(), "v1/snapshots/catalog-1.sqlite.xz"
+        )
         == "https://wlib-db.thekirin.net/v1/snapshots/catalog-1.sqlite.xz"
     )
-    monkeypatch.setenv("WLIB_CATALOG_MANIFEST_URL", "http://127.0.0.1:8000/v1/manifest.json")
+    monkeypatch.setenv(
+        "WLIB_CATALOG_MANIFEST_URL", "http://127.0.0.1:8000/v1/manifest.json"
+    )
     assert catalog_module.manifest_url() == "http://127.0.0.1:8000/v1/manifest.json"
     with pytest.raises(catalog_module.CatalogError):
         catalog_module.snapshot_url(catalog_module.manifest_url(), "../../etc/passwd")
     with pytest.raises(catalog_module.CatalogError):
-        catalog_module.snapshot_url(catalog_module.manifest_url(), "https://evil.example/x.sqlite.xz")
+        catalog_module.snapshot_url(
+            catalog_module.manifest_url(), "https://evil.example/x.sqlite.xz"
+        )
 
 
 def test_background_check_stays_available_when_a_thread_cannot_start(
@@ -514,7 +543,9 @@ def test_first_background_run_without_a_catalog_does_not_call_back(tmp_path):
     assert calls == []
 
 
-def test_snapshot_with_lc_data_installs_and_old_lookups_still_work(tmp_path, server, monkeypatch):
+def test_snapshot_with_lc_data_installs_and_old_lookups_still_work(
+    tmp_path, server, monkeypatch
+):
     """A snapshot with LC tables and title links keeps schema 1 and the F95/DLsite reads."""
     from catalog_fakes import fixture_json
 
@@ -533,15 +564,33 @@ def test_snapshot_with_lc_data_installs_and_old_lookups_still_work(tmp_path, ser
     lc_rows, names, *_ = parse_page(fixture_json("lc_latest_page.json"))
     store.upsert("lc_threads", "thread_id", lc_rows, stamp)
     store.upsert_lc_prefix_names(names)
-    store.upsert("f95_threads", "thread_id", [{
-        "thread_id": 100, "title": "Dirty Fame", "creator": "Vixwood Games",
-        "cover_url": "https://attachments.f95zone.to/cover.png",
-        "url": "https://f95zone.to/threads/100/",
-    }], stamp)
-    store.upsert("dlsite_works", "product_id", [{
-        "product_id": "RJ123", "title": "Work", "circle": "Circle",
-        "url": "https://www.dlsite.com/maniax/work/=/product_id/RJ123.html",
-    }], stamp)
+    store.upsert(
+        "f95_threads",
+        "thread_id",
+        [
+            {
+                "thread_id": 100,
+                "title": "Dirty Fame",
+                "creator": "Vixwood Games",
+                "cover_url": "https://attachments.f95zone.to/cover.png",
+                "url": "https://f95zone.to/threads/100/",
+            }
+        ],
+        stamp,
+    )
+    store.upsert(
+        "dlsite_works",
+        "product_id",
+        [
+            {
+                "product_id": "RJ123",
+                "title": "Work",
+                "circle": "Circle",
+                "url": "https://www.dlsite.com/maniax/work/=/product_id/RJ123.html",
+            }
+        ],
+        stamp,
+    )
     assert rebuild_links(store) == 1
     for name in ("f95", "lc", "dlsite"):
         state.record_source(state.start_run(stamp), name, "ok", 1, 1, None, stamp)
@@ -552,17 +601,19 @@ def test_snapshot_with_lc_data_installs_and_old_lookups_still_work(tmp_path, ser
     data = open(snapshot.path, "rb").read()
     path = f"v1/snapshots/{snapshot.name}"
     server.files["/" + path] = data
-    server.files["/v1/manifest.json"] = json.dumps({
-        "schema_version": 1,
-        "generated_at": stamp,
-        "snapshot": {
-            "path": path,
-            "size": len(data),
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "uncompressed_size": snapshot.uncompressed_size,
-        },
-        "sources": sources,
-    }).encode()
+    server.files["/v1/manifest.json"] = json.dumps(
+        {
+            "schema_version": 1,
+            "generated_at": stamp,
+            "snapshot": {
+                "path": path,
+                "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "uncompressed_size": snapshot.uncompressed_size,
+            },
+            "sources": sources,
+        }
+    ).encode()
 
     client = _client(tmp_path)
     assert client.check() == {"success": True, "updated": True}
@@ -571,8 +622,12 @@ def test_snapshot_with_lc_data_installs_and_old_lookups_still_work(tmp_path, ser
     assert list(status["sources"])[:2] == ["f95", "lc"]
     conn = sqlite3.connect(f"file:{client.catalog_path}?mode=ro", uri=True)
     try:
-        assert conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone() == ("1",)
-        assert conn.execute("SELECT * FROM links").fetchall() == [("lc", "25050", "f95", "100", "title")]
+        assert conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone() == ("1",)
+        assert conn.execute("SELECT * FROM links").fetchall() == [
+            ("lc", "25050", "f95", "100", "title")
+        ]
     finally:
         conn.close()
 

@@ -269,7 +269,9 @@ def test_save_settings_writes_nothing_when_the_database_is_locked(api, monkeypat
     from core import database
     from core.database import get_custom_play_statuses, get_setting
 
-    assert api.save_settings({"proton_path": "/old", "custom_play_statuses": ["Backlog"]})["success"]
+    assert api.save_settings(
+        {"proton_path": "/old", "custom_play_statuses": ["Backlog"]}
+    )["success"]
     original = database.get_connection
 
     class LockedConnection:

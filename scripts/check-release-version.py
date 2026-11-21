@@ -26,7 +26,9 @@ _APP_VERSION_RE = re.compile(r'^APP_VERSION = "([^"]+)"$', re.MULTILINE)
 
 
 def app_version(root: Path = ROOT) -> str:
-    match = _APP_VERSION_RE.search((root / "core" / "app_version.py").read_text(encoding="utf-8"))
+    match = _APP_VERSION_RE.search(
+        (root / "core" / "app_version.py").read_text(encoding="utf-8")
+    )
     if match is None:
         raise SystemExit("APP_VERSION was not found in core/app_version.py.")
     return match.group(1)

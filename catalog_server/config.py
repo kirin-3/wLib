@@ -141,7 +141,9 @@ def discord_webhook_from_env() -> str | None:
         or not parts.path.startswith("/api/webhooks/")
     ):
         # The message never shows the value: the URL is a secret.
-        raise ValueError(f"{DISCORD_WEBHOOK_ENV} must be a https://discord.com/api/webhooks/ URL")
+        raise ValueError(
+            f"{DISCORD_WEBHOOK_ENV} must be a https://discord.com/api/webhooks/ URL"
+        )
     return value
 
 

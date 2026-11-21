@@ -38,26 +38,86 @@ if TYPE_CHECKING:
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SERVER_PORT = 8183
 
-ENGINES = ("Ren'Py", "Unity", "RPGM", "HTML", "Unreal Engine", "Wolf RPG", "QSP", "Others")
+ENGINES = (
+    "Ren'Py",
+    "Unity",
+    "RPGM",
+    "HTML",
+    "Unreal Engine",
+    "Wolf RPG",
+    "QSP",
+    "Others",
+)
 STATUSES = (
-    "Not Started", "Plan to Play", "Playing", "Waiting For Update",
-    "On Hold", "Completed", "Abandoned",
+    "Not Started",
+    "Plan to Play",
+    "Playing",
+    "Waiting For Update",
+    "On Hold",
+    "Completed",
+    "Abandoned",
 )
 WORDS = (
-    "Summer", "Night", "Academy", "Secret", "Lust", "Island", "Dream", "Shadow",
-    "Crimson", "Village", "Office", "Legacy", "Hearts", "Echoes", "Witch",
-    "Kingdom", "Station", "Desire", "Lost", "Frontier", "Harem", "Campus",
-    "Neon", "Tower", "Fallen", "Pact", "Garden", "Mansion", "Rogue", "Signal",
+    "Summer",
+    "Night",
+    "Academy",
+    "Secret",
+    "Lust",
+    "Island",
+    "Dream",
+    "Shadow",
+    "Crimson",
+    "Village",
+    "Office",
+    "Legacy",
+    "Hearts",
+    "Echoes",
+    "Witch",
+    "Kingdom",
+    "Station",
+    "Desire",
+    "Lost",
+    "Frontier",
+    "Harem",
+    "Campus",
+    "Neon",
+    "Tower",
+    "Fallen",
+    "Pact",
+    "Garden",
+    "Mansion",
+    "Rogue",
+    "Signal",
 )
 TAG_POOL = tuple(
     f"{a} {b}".strip()
     for a in ("", "male", "female", "3d", "2d", "big")
     for b in (
-        "protagonist", "romance", "sandbox", "corruption", "harem", "humor",
-        "animated", "fantasy", "sci-fi", "voyeurism", "milf", "teasing",
-        "vaginal sex", "oral sex", "groping", "handjob", "dating sim", "rpg",
-        "school setting", "incest", "graphic violence", "management", "mobile game",
-        "point & click", "multiple endings",
+        "protagonist",
+        "romance",
+        "sandbox",
+        "corruption",
+        "harem",
+        "humor",
+        "animated",
+        "fantasy",
+        "sci-fi",
+        "voyeurism",
+        "milf",
+        "teasing",
+        "vaginal sex",
+        "oral sex",
+        "groping",
+        "handjob",
+        "dating sim",
+        "rpg",
+        "school setting",
+        "incest",
+        "graphic violence",
+        "management",
+        "mobile game",
+        "point & click",
+        "multiple endings",
     )
 )
 # Static covers: width x height, in the mix that F95 and DLsite covers use.
@@ -82,27 +142,32 @@ def make_game_specs(count: int, seed: int) -> list[dict[str, object]]:
         has_update = rng.random() < 0.15
         played = rng.random() < 0.6
         title = " ".join(rng.sample(WORDS, rng.randint(2, 3)))
-        specs.append({
-            "title": f"{title} {index:04d}",
-            "exe_path": f"/games/bench/{index:04d}/Game.exe",
-            "f95_url": f"https://f95zone.to/threads/bench-{index}.{200000 + index}/",
-            "version": version,
-            "latest_version": f"0.{rng.randint(31, 40)}" if has_update else version,
-            "engine": rng.choice(ENGINES),
-            "developer": f"Studio {rng.randint(1, 150):03d}",
-            "play_status": rng.choice(STATUSES),
-            "tags": sorted(rng.sample(TAG_POOL, rng.randint(8, 20))),
-            "rating": f"{rng.uniform(2.5, 5.0):.1f}",
-            "is_favorite": rng.random() < 0.05,
-            "overview": " ".join(rng.choices(WORDS, k=rng.randint(80, 160))).lower(),
-            "screenshots": [
-                f"https://attachments.f95zone.to/2026/0{rng.randint(1, 9)}/{200000 + index}_{shot}.jpg"
-                for shot in range(rng.randint(4, 10))
-            ],
-            "playtime_seconds": rng.randint(600, 200_000) if played else 0,
-            "last_played": (now - timedelta(hours=rng.randint(1, 8000))).isoformat()
-            if played else None,
-        })
+        specs.append(
+            {
+                "title": f"{title} {index:04d}",
+                "exe_path": f"/games/bench/{index:04d}/Game.exe",
+                "f95_url": f"https://f95zone.to/threads/bench-{index}.{200000 + index}/",
+                "version": version,
+                "latest_version": f"0.{rng.randint(31, 40)}" if has_update else version,
+                "engine": rng.choice(ENGINES),
+                "developer": f"Studio {rng.randint(1, 150):03d}",
+                "play_status": rng.choice(STATUSES),
+                "tags": sorted(rng.sample(TAG_POOL, rng.randint(8, 20))),
+                "rating": f"{rng.uniform(2.5, 5.0):.1f}",
+                "is_favorite": rng.random() < 0.05,
+                "overview": " ".join(
+                    rng.choices(WORDS, k=rng.randint(80, 160))
+                ).lower(),
+                "screenshots": [
+                    f"https://attachments.f95zone.to/2026/0{rng.randint(1, 9)}/{200000 + index}_{shot}.jpg"
+                    for shot in range(rng.randint(4, 10))
+                ],
+                "playtime_seconds": rng.randint(600, 200_000) if played else 0,
+                "last_played": (now - timedelta(hours=rng.randint(1, 8000))).isoformat()
+                if played
+                else None,
+            }
+        )
     return specs
 
 
@@ -125,9 +190,12 @@ def make_static_covers(seed: int) -> list[tuple[str, bytes]]:
         for _ in range(BASE_VARIANTS):
             small_w, small_h = max(8, width // 12), max(8, height // 12)
             data = _noise_rgb(rng, small_w, small_h)
-            small = QImage(data, small_w, small_h, small_w * 3, QImage.Format.Format_RGB888).copy()
+            small = QImage(
+                data, small_w, small_h, small_w * 3, QImage.Format.Format_RGB888
+            ).copy()
             image = small.scaled(
-                width, height,
+                width,
+                height,
                 Qt.AspectRatioMode.IgnoreAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
@@ -149,22 +217,32 @@ def _gif_image_data(pixels: bytes) -> bytes:
     table would need 9-bit codes, so any GIF decoder reads it."""
     clear, end = b"\x80", b"\x81"
     step = 120  # 130 + 120 stays below 256, so codes stay 8 bits wide
-    codes = b"".join(clear + pixels[i:i + step] for i in range(0, len(pixels), step)) + clear + end
+    codes = (
+        b"".join(clear + pixels[i : i + step] for i in range(0, len(pixels), step))
+        + clear
+        + end
+    )
     blocks = b"".join(
-        bytes((len(codes[i:i + 255]),)) + codes[i:i + 255] for i in range(0, len(codes), 255)
+        bytes((len(codes[i : i + 255]),)) + codes[i : i + 255]
+        for i in range(0, len(codes), 255)
     )
     return b"\x07" + blocks + b"\x00"
 
 
-def make_animated_gif(rng: random.Random, width: int, height: int, frames: int) -> bytes:
+def make_animated_gif(
+    rng: random.Random, width: int, height: int, frames: int
+) -> bytes:
     """An animated GIF with a moving gradient and noise, 128 colors, looping."""
     palette = b"".join(
-        bytes((min(255, i * 2), (i * 5) % 256, 255 - min(255, i * 2))) for i in range(128)
+        bytes((min(255, i * 2), (i * 5) % 256, 255 - min(255, i * 2)))
+        for i in range(128)
     )
     header = (
         b"GIF89a"
-        + width.to_bytes(2, "little") + height.to_bytes(2, "little")
-        + b"\xf6\x00\x00" + palette  # global table of 128 colors
+        + width.to_bytes(2, "little")
+        + height.to_bytes(2, "little")
+        + b"\xf6\x00\x00"
+        + palette  # global table of 128 colors
         + b"!\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00"  # loop forever
     )
     parts = [header]
@@ -174,11 +252,14 @@ def make_animated_gif(rng: random.Random, width: int, height: int, frames: int) 
         for y in range(height):
             base = (y * 96 // height + frame * 12) % 128
             table = bytes((base + (i & 15)) % 128 for i in range(256))
-            rows.append(noise[y * width:(y + 1) * width].translate(table))
+            rows.append(noise[y * width : (y + 1) * width].translate(table))
         parts.append(b"!\xf9\x04\x04\x08\x00\x00\x00")  # 80 ms per frame
         parts.append(
-            b"," + b"\x00\x00\x00\x00"
-            + width.to_bytes(2, "little") + height.to_bytes(2, "little") + b"\x00"
+            b","
+            + b"\x00\x00\x00\x00"
+            + width.to_bytes(2, "little")
+            + height.to_bytes(2, "little")
+            + b"\x00"
         )
         parts.append(_gif_image_data(b"".join(rows)))
     parts.append(b";")
@@ -223,7 +304,8 @@ def seed_library(
     rng = random.Random(seed + 2)
     statics = make_static_covers(seed)
     animated = [
-        make_animated_gif(rng, *ANIMATED_SIZE, ANIMATED_FRAMES) for _ in range(BASE_VARIANTS)
+        make_animated_gif(rng, *ANIMATED_SIZE, ANIMATED_FRAMES)
+        for _ in range(BASE_VARIANTS)
     ]
     folder = covers_dir()
     folder.mkdir(parents=True, exist_ok=True)
@@ -242,12 +324,15 @@ def seed_library(
         )
         if game_id is None:
             raise RuntimeError(f"could not add {spec['title']}")
-        _ = database.update_game(game_id, {
-            "latest_version": spec["latest_version"],
-            "play_status": spec["play_status"],
-            "is_favorite": spec["is_favorite"],
-            "overview": spec["overview"],
-        })
+        _ = database.update_game(
+            game_id,
+            {
+                "latest_version": spec["latest_version"],
+                "play_status": spec["play_status"],
+                "is_favorite": spec["is_favorite"],
+                "overview": spec["overview"],
+            },
+        )
         if rng.random() < animated_share:
             data, extension = rng.choice(animated), "gif"
             animated_count += 1
@@ -263,7 +348,12 @@ def seed_library(
         _ = conn.executemany(
             "UPDATE games SET playtime_seconds = ?, last_played = ?, screenshots = ? WHERE title = ?",
             [
-                (spec["playtime_seconds"], spec["last_played"], json.dumps(spec["screenshots"]), spec["title"])
+                (
+                    spec["playtime_seconds"],
+                    spec["last_played"],
+                    json.dumps(spec["screenshots"]),
+                    spec["title"],
+                )
                 for spec in specs
             ],
         )
@@ -321,7 +411,11 @@ def _fetch(url: str) -> int:
 
 
 def measure_cover_serving(api: Api) -> dict[str, object]:
-    urls = [str(game["cover_local_url"]) for game in api.get_games() if game.get("cover_local_url")]
+    urls = [
+        str(game["cover_local_url"])
+        for game in api.get_games()
+        if game.get("cover_local_url")
+    ]
     start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=COVER_THREADS) as pool:
         sizes = list(pool.map(_fetch, urls))
@@ -337,7 +431,11 @@ def measure_cover_serving(api: Api) -> dict[str, object]:
 
 
 def measure_card_copies() -> dict[str, object]:
-    from core.cover_cards import make_card_copies, pending_sources, webp_writer_available
+    from core.cover_cards import (
+        make_card_copies,
+        pending_sources,
+        webp_writer_available,
+    )
 
     if not webp_writer_available():
         return {"skipped": "Qt has no WebP writer"}
@@ -355,7 +453,9 @@ def measure_card_copies() -> dict[str, object]:
         "sources": len(sources),
         "still_copies_made": made,
         "total_ms": round(total, 1),
-        "median_ms_per_cover": round(statistics.median(per_cover), 1) if per_cover else 0.0,
+        "median_ms_per_cover": round(statistics.median(per_cover), 1)
+        if per_cover
+        else 0.0,
         "max_ms_per_cover": round(max(per_cover), 1) if per_cover else 0.0,
     }
 
@@ -367,7 +467,10 @@ def git_commit() -> str:
     try:
         return subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return ""
@@ -375,7 +478,9 @@ def git_commit() -> str:
 
 def print_table(report: dict[str, object]) -> None:
     results = cast(dict[str, object], report["results"])
-    print(f"\nwLib backend benchmark: {report['games']} games, seed {report['seed']}, commit {report['commit'] or '?'}")
+    print(
+        f"\nwLib backend benchmark: {report['games']} games, seed {report['seed']}, commit {report['commit'] or '?'}"
+    )
     print("-" * 72)
     for section, values in results.items():
         print(f"{section}")
@@ -384,7 +489,9 @@ def print_table(report: dict[str, object]) -> None:
             continue
         for key, value in cast(dict[str, object], values).items():
             if isinstance(value, dict):
-                inner = ", ".join(f"{k} {v}" for k, v in cast(dict[str, object], value).items())
+                inner = ", ".join(
+                    f"{k} {v}" for k, v in cast(dict[str, object], value).items()
+                )
                 print(f"  {key:<24} {inner}")
             else:
                 print(f"  {key:<24} {value}")
@@ -401,16 +508,27 @@ class Options:
 
 
 def parse_args(argv: Sequence[str] | None) -> Options:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
-    _ = parser.add_argument("--games", type=int, default=1000, help="library size (default 1000)")
-    _ = parser.add_argument("--seed", type=int, default=1, help="random seed (default 1)")
+    parser = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0] if __doc__ else None
+    )
     _ = parser.add_argument(
-        "--animated-share", type=float, default=0.1,
+        "--games", type=int, default=1000, help="library size (default 1000)"
+    )
+    _ = parser.add_argument(
+        "--seed", type=int, default=1, help="random seed (default 1)"
+    )
+    _ = parser.add_argument(
+        "--animated-share",
+        type=float,
+        default=0.1,
         help="share of games with an animated GIF cover (default 0.1)",
     )
-    _ = parser.add_argument("--json", type=Path, help="also write the results to this JSON file")
     _ = parser.add_argument(
-        "--keep", action="store_true",
+        "--json", type=Path, help="also write the results to this JSON file"
+    )
+    _ = parser.add_argument(
+        "--keep",
+        action="store_true",
         help="keep the temporary library and print the command that opens it in wLib",
     )
     namespace = parser.parse_args(argv)
@@ -496,13 +614,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         print_table(report)
         if args.json is not None:
-            _ = args.json.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            _ = args.json.write_text(
+                json.dumps(report, indent=2) + "\n", encoding="utf-8"
+            )
             print(f"Results written to {args.json}")
         if keep:
             home = temp_root / "home"
             # Without DEV_MODE the app loads the production build in ui/dist;
             # Vue dev mode is several times slower and would distort timings.
-            print("\nThe library was kept. Build the UI, then open the library in wLib:")
+            print(
+                "\nThe library was kept. Build the UI, then open the library in wLib:"
+            )
             print("  (cd ui && npm run build)")
             print(f"  HOME={home} WLIB_DATA_DIR={data_dir} .venv/bin/python main.py")
             print(f"Delete it afterwards with: rm -rf {temp_root}")

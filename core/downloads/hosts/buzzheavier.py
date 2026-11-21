@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Transfer a Buzzheavier address resolved in the browser."""
+
 from __future__ import annotations
 
 from http.client import HTTPResponse
@@ -20,7 +21,10 @@ def urlopen(request: Request, timeout: int = 30) -> object:
 def matches(url: str) -> bool:
     parsed = urlsplit(url)
     host = parsed.hostname or ""
-    return parsed.scheme == "https" and any(host == domain or host.endswith("." + domain) for domain in ("buzzheavier.com", "bzzhr.to"))
+    return parsed.scheme == "https" and any(
+        host == domain or host.endswith("." + domain)
+        for domain in ("buzzheavier.com", "bzzhr.to")
+    )
 
 
 def classify_error(status: int, body: str = "") -> str:
@@ -37,14 +41,22 @@ def probe(url: str, share_url: str = "") -> FileInfo:
     if not matches(url) or not matches(share_url):
         raise DownloadError("unsupported Buzzheavier link")
     try:
-        response = cast(HTTPResponse, urlopen(Request(url, headers={"Referer": share_url}), timeout=30))
+        response = cast(
+            HTTPResponse,
+            urlopen(Request(url, headers={"Referer": share_url}), timeout=30),
+        )
     except HTTPError as exc:
-        raise DownloadError(classify_error(exc.code, "cf-mitigated" if exc.headers.get("cf-mitigated") else "")) from exc
+        raise DownloadError(
+            classify_error(
+                exc.code, "cf-mitigated" if exc.headers.get("cf-mitigated") else ""
+            )
+        ) from exc
     except (URLError, OSError) as exc:
         raise DownloadError("network error") from exc
     disposition = response.headers.get_filename()
     name = disposition or unquote(urlsplit(url).path.rsplit("/", 1)[-1])
     length = response.headers.get("Content-Length", "")
+
     # Ownership of this response passes to the transfer loop.
     def stream() -> BinaryIO:
         return cast(BinaryIO, response)
@@ -53,7 +65,9 @@ def probe(url: str, share_url: str = "") -> FileInfo:
         return open_range(
             lambda extra: cast(
                 BinaryIO,
-                urlopen(Request(url, headers={"Referer": share_url, **extra}), timeout=30),
+                urlopen(
+                    Request(url, headers={"Referer": share_url, **extra}), timeout=30
+                ),
             ),
             offset,
         )

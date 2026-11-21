@@ -346,7 +346,10 @@ def test_mounts_never_expose_the_wlib_data_dir(monkeypatch, tmp_path):
     "executable,folder",
     [
         ("/opt/wine-ge/bin/wine", "/opt/wine-ge"),
-        ("/home/u/.local/share/wLib/proton/GE/proton", "/home/u/.local/share/wLib/proton/GE"),
+        (
+            "/home/u/.local/share/wLib/proton/GE/proton",
+            "/home/u/.local/share/wLib/proton/GE",
+        ),
         ("/home/u/.local/bin/wine", "/home/u/.local/bin"),
         ("/home/u/bin/wine", "/home/u/bin"),
     ],
@@ -492,67 +495,114 @@ def test_sandboxie_bad_process_list_is_not_empty(monkeypatch, output):
 
 
 def test_arch_install_information_and_cancel(monkeypatch):
-    monkeypatch.setattr(sandbox,'get_host_name',lambda *args:'linux')
-    monkeypatch.setattr(sandbox,'host_which',lambda name:'/usr/bin/'+name if name in ('pacman','pkexec') else None)
-    info=sandbox.get_sandbox_install_info()
-    assert info['command']=='sudo pacman -S bubblewrap'
-    assert info['pkexec_available'] and info['can_install']
-    run=Mock(return_value=Mock(returncode=126,stderr='Authentication cancelled',stdout=''))
-    monkeypatch.setattr(sandbox.subprocess,'run',run)
-    monkeypatch.setattr(sandbox,'host_command',lambda cmd:['flatpak-spawn','--host',*cmd])
-    with pytest.raises(RuntimeError,match='cancelled'):
-        sandbox.install_sandbox_tool('bwrap')
-    assert run.call_args.args[0]==['flatpak-spawn','--host','/usr/bin/pkexec','/usr/bin/pacman','-S','--noconfirm','bubblewrap']
+    monkeypatch.setattr(sandbox, "get_host_name", lambda *args: "linux")
+    monkeypatch.setattr(
+        sandbox,
+        "host_which",
+        lambda name: "/usr/bin/" + name if name in ("pacman", "pkexec") else None,
+    )
+    info = sandbox.get_sandbox_install_info()
+    assert info["command"] == "sudo pacman -S bubblewrap"
+    assert info["pkexec_available"] and info["can_install"]
+    run = Mock(
+        return_value=Mock(returncode=126, stderr="Authentication cancelled", stdout="")
+    )
+    monkeypatch.setattr(sandbox.subprocess, "run", run)
+    monkeypatch.setattr(
+        sandbox, "host_command", lambda cmd: ["flatpak-spawn", "--host", *cmd]
+    )
+    with pytest.raises(RuntimeError, match="cancelled"):
+        sandbox.install_sandbox_tool("bwrap")
+    assert run.call_args.args[0] == [
+        "flatpak-spawn",
+        "--host",
+        "/usr/bin/pkexec",
+        "/usr/bin/pacman",
+        "-S",
+        "--noconfirm",
+        "bubblewrap",
+    ]
 
 
-@pytest.mark.parametrize('host,tool',[('linux','sandboxie'),('windows','bwrap')])
-def test_installers_reject_wrong_host_before_starting(monkeypatch,host,tool):
-    monkeypatch.setattr(sandbox,'get_host_name',lambda *args:host)
-    command=Mock()
-    monkeypatch.setattr(sandbox,'_install_command',command)
-    with pytest.raises(ValueError,match='unsupported_platform'):
+@pytest.mark.parametrize("host,tool", [("linux", "sandboxie"), ("windows", "bwrap")])
+def test_installers_reject_wrong_host_before_starting(monkeypatch, host, tool):
+    monkeypatch.setattr(sandbox, "get_host_name", lambda *args: host)
+    command = Mock()
+    monkeypatch.setattr(sandbox, "_install_command", command)
+    with pytest.raises(ValueError, match="unsupported_platform"):
         sandbox.install_sandbox_tool(tool)
     command.assert_not_called()
 
 
-@pytest.mark.parametrize('has_winget',[True,False])
-def test_windows_install_routes(monkeypatch,has_winget):
-    monkeypatch.setattr(sandbox,'get_host_name',lambda *args:'windows')
-    monkeypatch.setattr(sandbox,'host_which',lambda _: 'winget.exe' if has_winget else None)
-    command=Mock()
-    download=Mock()
-    monkeypatch.setattr(sandbox,'_install_command',command)
-    monkeypatch.setattr(sandbox,'_download_sandboxie_installer',download)
-    sandbox.install_sandbox_tool('sandboxie')
+@pytest.mark.parametrize("has_winget", [True, False])
+def test_windows_install_routes(monkeypatch, has_winget):
+    monkeypatch.setattr(sandbox, "get_host_name", lambda *args: "windows")
+    monkeypatch.setattr(
+        sandbox, "host_which", lambda _: "winget.exe" if has_winget else None
+    )
+    command = Mock()
+    download = Mock()
+    monkeypatch.setattr(sandbox, "_install_command", command)
+    monkeypatch.setattr(sandbox, "_download_sandboxie_installer", download)
+    sandbox.install_sandbox_tool("sandboxie")
     if has_winget:
-        assert command.call_args.args[0][:5]==['winget.exe','install','--id','Sandboxie.Plus','-e']
+        assert command.call_args.args[0][:5] == [
+            "winget.exe",
+            "install",
+            "--id",
+            "Sandboxie.Plus",
+            "-e",
+        ]
         download.assert_not_called()
     else:
         download.assert_called_once()
         command.assert_not_called()
 
 
-@pytest.mark.parametrize('valid_signature',[False,True])
-def test_direct_installer_verification_and_elevation_cancel(monkeypatch,tmp_path,valid_signature):
+@pytest.mark.parametrize("valid_signature", [False, True])
+def test_direct_installer_verification_and_elevation_cancel(
+    monkeypatch, tmp_path, valid_signature
+):
     import io
     import json
     import tempfile
     import urllib.request
     import platform
-    monkeypatch.setattr(tempfile,'tempdir',str(tmp_path))
-    monkeypatch.setattr(platform,'machine',lambda:'AMD64')
-    release={'assets':[{'name':'Sandboxie-Plus-x64-v1.exe','browser_download_url':'https://github.com/sandboxie-plus/Sandboxie/releases/download/v1/installer.exe'}]}
-    def response(url,**kwargs):
-        return io.BytesIO(json.dumps(release).encode() if not isinstance(url,str) else b'installer')
-    monkeypatch.setattr(urllib.request,'urlopen',response)
-    signature={'Status':'Valid' if valid_signature else 'NotSigned','Publisher':'CN=NOVASYNC LABS PTE. LTD., O=NOVASYNC LABS PTE. LTD.'}
-    monkeypatch.setattr(sandbox.subprocess,'run',Mock(return_value=Mock(returncode=0,stdout=json.dumps(signature),stderr='')))
-    install=Mock(side_effect=RuntimeError('Elevation cancelled'))
-    monkeypatch.setattr(sandbox,'_install_command',install)
-    with pytest.raises(RuntimeError,match='cancelled' if valid_signature else 'signature'):
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(platform, "machine", lambda: "AMD64")
+    release = {
+        "assets": [
+            {
+                "name": "Sandboxie-Plus-x64-v1.exe",
+                "browser_download_url": "https://github.com/sandboxie-plus/Sandboxie/releases/download/v1/installer.exe",
+            }
+        ]
+    }
+
+    def response(url, **kwargs):
+        return io.BytesIO(
+            json.dumps(release).encode() if not isinstance(url, str) else b"installer"
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", response)
+    signature = {
+        "Status": "Valid" if valid_signature else "NotSigned",
+        "Publisher": "CN=NOVASYNC LABS PTE. LTD., O=NOVASYNC LABS PTE. LTD.",
+    }
+    monkeypatch.setattr(
+        sandbox.subprocess,
+        "run",
+        Mock(return_value=Mock(returncode=0, stdout=json.dumps(signature), stderr="")),
+    )
+    install = Mock(side_effect=RuntimeError("Elevation cancelled"))
+    monkeypatch.setattr(sandbox, "_install_command", install)
+    with pytest.raises(
+        RuntimeError, match="cancelled" if valid_signature else "signature"
+    ):
         sandbox._download_sandboxie_installer()
     assert not list(tmp_path.iterdir())
-    assert install.call_count==int(valid_signature)
+    assert install.call_count == int(valid_signature)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
@@ -579,6 +629,7 @@ def test_bwrap_refuses_read_only_mounts_that_expose_home(tmp_path):
     assert ["--ro-bind", "/opt/proton", "/opt/proton"] in [
         argv[i : i + 3] for i in range(len(argv) - 2)
     ]
+
 
 def test_umu_runtime_mounts_are_restricted(tmp_path):
     home = tmp_path / "home"
@@ -616,33 +667,64 @@ def test_umu_runtime_mounts_are_restricted(tmp_path):
 
 
 def test_umu_runtime_cannot_overlap_writable_game_or_prefix(tmp_path):
-    home = tmp_path / 'home'
-    data = home / '.local' / 'share' / 'umu'
-    runtime = data / 'steamrt4'
-    var = tmp_path / 'var'
-    game = tmp_path / 'game'
+    home = tmp_path / "home"
+    data = home / ".local" / "share" / "umu"
+    runtime = data / "steamrt4"
+    var = tmp_path / "var"
+    game = tmp_path / "game"
     home.mkdir()
     game.mkdir()
     var.mkdir()
     runtime.mkdir(parents=True)
-    common = dict(home=str(home), sandbox_home=str(tmp_path / 'sandbox'), cwd=str(game), umu_data=str(data), umu_runtime=str(runtime), umu_var=str(var))
-    with pytest.raises(ValueError, match='overlaps'):
-        sandbox.build_bwrap_argv(['game'], game_dir=str(data), **common)
-    with pytest.raises(ValueError, match='overlaps'):
-        sandbox.build_bwrap_argv(['game'], game_dir=str(game), prefix=str(runtime), **common)
+    common = dict(
+        home=str(home),
+        sandbox_home=str(tmp_path / "sandbox"),
+        cwd=str(game),
+        umu_data=str(data),
+        umu_runtime=str(runtime),
+        umu_var=str(var),
+    )
+    with pytest.raises(ValueError, match="overlaps"):
+        sandbox.build_bwrap_argv(["game"], game_dir=str(data), **common)
+    with pytest.raises(ValueError, match="overlaps"):
+        sandbox.build_bwrap_argv(
+            ["game"], game_dir=str(game), prefix=str(runtime), **common
+        )
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='bubblewrap is Linux-only')
+@pytest.mark.skipif(sys.platform == "win32", reason="bubblewrap is Linux-only")
 def test_sandbox_parent_thread_outlives_bridge_thread():
     import threading
     import time
     from core.launcher import _spawn_sandbox_process
 
-    if sandbox.get_sandbox_status(platform='linux')['status'] != 'ready':
-        pytest.skip('bubblewrap is unavailable')
+    if sandbox.get_sandbox_status(platform="linux")["status"] != "ready":
+        pytest.skip("bubblewrap is unavailable")
     processes = []
+
     def bridge_call():
-        processes.append(_spawn_sandbox_process(lambda: subprocess.Popen(['bwrap', '--die-with-parent', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', 'sh', '-c', 'sleep 2'], start_new_session=True)))
+        processes.append(
+            _spawn_sandbox_process(
+                lambda: subprocess.Popen(
+                    [
+                        "bwrap",
+                        "--die-with-parent",
+                        "--ro-bind",
+                        "/",
+                        "/",
+                        "--proc",
+                        "/proc",
+                        "--dev",
+                        "/dev",
+                        "sh",
+                        "-c",
+                        "sleep 2",
+                    ],
+                    start_new_session=True,
+                )
+            )
+        )
+
     bridge = threading.Thread(target=bridge_call)
     bridge.start()
     bridge.join(timeout=5)
@@ -658,21 +740,59 @@ def test_sandbox_parent_thread_outlives_bridge_thread():
 
 
 def test_system_symlinks_and_network_argv(monkeypatch):
-    monkeypatch.setattr(sandbox.os.path, "islink", lambda path: path in ("/bin", "/lib"))
+    monkeypatch.setattr(
+        sandbox.os.path, "islink", lambda path: path in ("/bin", "/lib")
+    )
     monkeypatch.setattr(sandbox.os, "readlink", lambda path: "usr" + path)
-    argv = sandbox.build_bwrap_argv(["game"], game_dir="/games", home="/home/u", sandbox_home="/s", cwd="/games", network=True)
-    triples = [argv[i:i+3] for i in range(len(argv)-2)]
+    argv = sandbox.build_bwrap_argv(
+        ["game"],
+        game_dir="/games",
+        home="/home/u",
+        sandbox_home="/s",
+        cwd="/games",
+        network=True,
+    )
+    triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
     assert ["--symlink", "usr/lib", "/lib"] in triples
     assert ["--symlink", "usr/bin", "/bin"] in triples
     assert ["--ro-bind-try", "/lib64", "/lib64"] in triples
     assert "--unshare-net" in argv
-    assert sandbox.build_network_bwrap_argv(["game", "arg"], cwd="/games") == ["bwrap", "--unshare-user", "--unshare-net", "--dev-bind", "/", "/", "--tmpfs", "/tmp/.X11-unix", "--chdir", "/games", "--", "game", "arg"]
-    assert sandbox.build_network_bwrap_argv(["game"], cwd="/games", x11_sockets=("X0", "X2")) == [
-        "bwrap", "--unshare-user", "--unshare-net", "--dev-bind", "/", "/",
-        "--tmpfs", "/tmp/.X11-unix",
-        "--ro-bind-try", "/tmp/.X11-unix/X0", "/tmp/.X11-unix/X0",
-        "--ro-bind-try", "/tmp/.X11-unix/X2", "/tmp/.X11-unix/X2",
-        "--chdir", "/games", "--", "game",
+    assert sandbox.build_network_bwrap_argv(["game", "arg"], cwd="/games") == [
+        "bwrap",
+        "--unshare-user",
+        "--unshare-net",
+        "--dev-bind",
+        "/",
+        "/",
+        "--tmpfs",
+        "/tmp/.X11-unix",
+        "--chdir",
+        "/games",
+        "--",
+        "game",
+        "arg",
+    ]
+    assert sandbox.build_network_bwrap_argv(
+        ["game"], cwd="/games", x11_sockets=("X0", "X2")
+    ) == [
+        "bwrap",
+        "--unshare-user",
+        "--unshare-net",
+        "--dev-bind",
+        "/",
+        "/",
+        "--tmpfs",
+        "/tmp/.X11-unix",
+        "--ro-bind-try",
+        "/tmp/.X11-unix/X0",
+        "/tmp/.X11-unix/X0",
+        "--ro-bind-try",
+        "/tmp/.X11-unix/X2",
+        "/tmp/.X11-unix/X2",
+        "--chdir",
+        "/games",
+        "--",
+        "game",
     ]
 
 
@@ -681,13 +801,31 @@ def test_sandboxie_network_setting(monkeypatch, tmp_path):
     call = Mock(return_value="")
     monkeypatch.setattr(sandbox, "_sandboxie_call", call)
     sandbox.configure_sandboxie_box(r"C:\Sandboxie\Start.exe", 1, r"D:\Game", True)
-    assert any(args.args[1] == ["set", "wLib_1", "ClosedFilePath", "!<InternetAccess>,InternetAccessDevices"] for args in call.call_args_list)
+    assert any(
+        args.args[1]
+        == [
+            "set",
+            "wLib_1",
+            "ClosedFilePath",
+            "!<InternetAccess>,InternetAccessDevices",
+        ]
+        for args in call.call_args_list
+    )
     # A blocked game must not make Sandboxie open a message window (SBIE1307).
-    assert any(args.args[1] == ["set", "wLib_1", "NotifyInternetAccessDenied", "n"] for args in call.call_args_list)
+    assert any(
+        args.args[1] == ["set", "wLib_1", "NotifyInternetAccessDenied", "n"]
+        for args in call.call_args_list
+    )
     call.reset_mock()
     sandbox.configure_sandboxie_box(r"C:\Sandboxie\Start.exe", 1, r"D:\Game", False)
-    assert any(args.args[1] == ["set", "wLib_1", "ClosedFilePath", ""] for args in call.call_args_list)
-    assert any(args.args[1] == ["set", "wLib_1", "NotifyInternetAccessDenied", ""] for args in call.call_args_list)
+    assert any(
+        args.args[1] == ["set", "wLib_1", "ClosedFilePath", ""]
+        for args in call.call_args_list
+    )
+    assert any(
+        args.args[1] == ["set", "wLib_1", "NotifyInternetAccessDenied", ""]
+        for args in call.call_args_list
+    )
 
 
 def test_bwrap_uses_host_system_links_when_given(monkeypatch):
@@ -710,7 +848,9 @@ def test_flatpak_host_layout_is_read_from_the_host(monkeypatch):
     from core import host_platform
 
     monkeypatch.setattr(host_platform, "is_flatpak", lambda: True)
-    completed = subprocess.CompletedProcess([], 0, stdout="nix\nlink /bin usr/bin\n", stderr="")
+    completed = subprocess.CompletedProcess(
+        [], 0, stdout="nix\nlink /bin usr/bin\n", stderr=""
+    )
     run = Mock(return_value=completed)
     monkeypatch.setattr(host_platform.subprocess, "run", run)
     assert host_platform.host_system_layout() == (True, {"/bin": "usr/bin"})
@@ -752,8 +892,14 @@ def test_wine_service_names_fit_proc_comm():
 
 
 def test_sandbox_environment_drops_host_secrets():
-    host = {"PATH": "/usr/bin", "DISPLAY": ":0", "GITHUB_TOKEN": "secret",
-            "SSH_AUTH_SOCK": "/run/ssh", "LC_ALL": "C", "DXVK_HUD": "1"}
+    host = {
+        "PATH": "/usr/bin",
+        "DISPLAY": ":0",
+        "GITHUB_TOKEN": "secret",
+        "SSH_AUTH_SOCK": "/run/ssh",
+        "LC_ALL": "C",
+        "DXVK_HUD": "1",
+    }
     env = {**host, "WINEPREFIX": "/p", "LANG": "ja_JP.UTF-8", "MY_FLAG": "1"}
     result = sandbox.sandbox_environment(env, host)
     assert "GITHUB_TOKEN" not in result and "SSH_AUTH_SOCK" not in result
@@ -797,7 +943,11 @@ def test_gamescope_sandbox_binds_only_gamescope_display(tmp_path):
         home="/home/u",
         sandbox_home="/s",
         cwd="/games",
-        environment={"XDG_RUNTIME_DIR": "/run/user/1000", "WAYLAND_DISPLAY": "wayland-1", "XAUTHORITY": "/home/u/.Xauthority"},
+        environment={
+            "XDG_RUNTIME_DIR": "/run/user/1000",
+            "WAYLAND_DISPLAY": "wayland-1",
+            "XAUTHORITY": "/home/u/.Xauthority",
+        },
         x11_sockets=("X0", "X1"),
         gamescope=True,
     )
@@ -821,25 +971,63 @@ def test_gamescope_sandbox_binds_only_gamescope_display(tmp_path):
     folder = pairs.index(["--dir", "/tmp/.X11-unix"])
     run_tmpfs = pairs.index(["--tmpfs", "/run"])
     x_bind = triples.index(["--ro-bind-try", "/tmp/.X11-unix/X3", "/tmp/.X11-unix/X3"])
-    auth = triples.index(["--ro-bind-try", "/run/user/1000/xauth_ab cd", "/run/user/1000/xauth_ab cd"])
-    wayland = triples.index(["--ro-bind-try", "/run/user/1000/gamescope-0", "/run/user/1000/gamescope-0"])
+    auth = triples.index(
+        ["--ro-bind-try", "/run/user/1000/xauth_ab cd", "/run/user/1000/xauth_ab cd"]
+    )
+    wayland = triples.index(
+        ["--ro-bind-try", "/run/user/1000/gamescope-0", "/run/user/1000/gamescope-0"]
+    )
     assert folder < run_tmpfs < x_bind < auth < wayland < out.index("--")
-    assert [a for a in out if a.startswith("/tmp/.X11-unix/")] == ["/tmp/.X11-unix/X3"] * 2
+    assert [a for a in out if a.startswith("/tmp/.X11-unix/")] == [
+        "/tmp/.X11-unix/X3"
+    ] * 2
     assert out[-1] == "game"
     # Every original argument is kept, in order.
-    added = {x_bind, x_bind + 1, x_bind + 2, auth, auth + 1, auth + 2, wayland, wayland + 1, wayland + 2}
+    added = {
+        x_bind,
+        x_bind + 1,
+        x_bind + 2,
+        auth,
+        auth + 1,
+        auth + 2,
+        wayland,
+        wayland + 1,
+        wayland + 2,
+    }
     assert [a for i, a in enumerate(out) if i not in added] == inner[1:]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh shim")
 def test_gamescope_network_wrapper_binds_x_socket_after_tmpfs(tmp_path):
-    argv = sandbox.build_network_bwrap_argv(["game", "a b"], cwd="/games", x11_sockets=("X0",), gamescope=True)
-    out = _run_gamescope_shim(argv, tmp_path, {"DISPLAY": "unix:2.0", "XAUTHORITY": "/x", "GAMESCOPE_WAYLAND_DISPLAY": "gamescope-0", "XDG_RUNTIME_DIR": "/run/user/1"})
+    argv = sandbox.build_network_bwrap_argv(
+        ["game", "a b"], cwd="/games", x11_sockets=("X0",), gamescope=True
+    )
+    out = _run_gamescope_shim(
+        argv,
+        tmp_path,
+        {
+            "DISPLAY": "unix:2.0",
+            "XAUTHORITY": "/x",
+            "GAMESCOPE_WAYLAND_DISPLAY": "gamescope-0",
+            "XDG_RUNTIME_DIR": "/run/user/1",
+        },
+    )
     assert out == [
-        "--unshare-user", "--unshare-net", "--dev-bind", "/", "/",
-        "--tmpfs", "/tmp/.X11-unix",
-        "--ro-bind-try", "/tmp/.X11-unix/X2", "/tmp/.X11-unix/X2",
-        "--chdir", "/games", "--", "game", "a b",
+        "--unshare-user",
+        "--unshare-net",
+        "--dev-bind",
+        "/",
+        "/",
+        "--tmpfs",
+        "/tmp/.X11-unix",
+        "--ro-bind-try",
+        "/tmp/.X11-unix/X2",
+        "/tmp/.X11-unix/X2",
+        "--chdir",
+        "/games",
+        "--",
+        "game",
+        "a b",
     ]
 
 
@@ -847,11 +1035,25 @@ def test_gamescope_network_wrapper_binds_x_socket_after_tmpfs(tmp_path):
 def test_gamescope_shim_without_display_adds_nothing(tmp_path):
     argv = sandbox.build_network_bwrap_argv(["game"], cwd="/games", gamescope=True)
     out = _run_gamescope_shim(argv, tmp_path, {})
-    assert out == ["--unshare-user", "--unshare-net", "--dev-bind", "/", "/", "--tmpfs", "/tmp/.X11-unix", "--chdir", "/games", "--", "game"]
+    assert out == [
+        "--unshare-user",
+        "--unshare-net",
+        "--dev-bind",
+        "/",
+        "/",
+        "--tmpfs",
+        "/tmp/.X11-unix",
+        "--chdir",
+        "/games",
+        "--",
+        "game",
+    ]
 
 
 def _mangohud_config(pairs, home):
-    return next(src for src, dst in pairs if dst == os.path.join(home, ".config", "MangoHud"))
+    return next(
+        src for src, dst in pairs if dst == os.path.join(home, ".config", "MangoHud")
+    )
 
 
 def test_mangohud_mounts_default_and_custom_folder(monkeypatch, tmp_path):
@@ -861,13 +1063,19 @@ def test_mangohud_mounts_default_and_custom_folder(monkeypatch, tmp_path):
     pairs = sandbox.mangohud_mounts({}, home)
     for path in sandbox.MANGOHUD_SYS_CLASSES:
         assert (path, path) in pairs
-    assert _mangohud_config(pairs, home) == os.path.realpath(os.path.join(home, ".config", "MangoHud"))
+    assert _mangohud_config(pairs, home) == os.path.realpath(
+        os.path.join(home, ".config", "MangoHud")
+    )
     custom = str(tmp_path / "xdg")
     pairs = sandbox.mangohud_mounts({"XDG_CONFIG_HOME": custom}, home)
-    assert _mangohud_config(pairs, home) == os.path.realpath(os.path.join(custom, "MangoHud"))
+    assert _mangohud_config(pairs, home) == os.path.realpath(
+        os.path.join(custom, "MangoHud")
+    )
     # HOST_XDG_CONFIG_HOME is only for Flatpak.
     pairs = sandbox.mangohud_mounts({"HOST_XDG_CONFIG_HOME": custom}, home)
-    assert _mangohud_config(pairs, home) == os.path.realpath(os.path.join(home, ".config", "MangoHud"))
+    assert _mangohud_config(pairs, home) == os.path.realpath(
+        os.path.join(home, ".config", "MangoHud")
+    )
 
 
 def test_mangohud_mounts_flatpak_host_folder(monkeypatch, tmp_path):
@@ -878,7 +1086,9 @@ def test_mangohud_mounts_flatpak_host_folder(monkeypatch, tmp_path):
     pairs = sandbox.mangohud_mounts(
         {"HOST_XDG_CONFIG_HOME": host, "XDG_CONFIG_HOME": str(tmp_path / "app")}, home
     )
-    assert _mangohud_config(pairs, home) == os.path.realpath(os.path.join(host, "MangoHud"))
+    assert _mangohud_config(pairs, home) == os.path.realpath(
+        os.path.join(host, "MangoHud")
+    )
 
 
 @pytest.mark.parametrize("value", ["", "relative/config"])
@@ -887,10 +1097,16 @@ def test_mangohud_mounts_ignore_relative_or_empty(monkeypatch, tmp_path, value):
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
     home = str(tmp_path / "home")
     pairs = sandbox.mangohud_mounts(
-        {"XDG_CONFIG_HOME": value, "MANGOHUD_CONFIGFILE": value, "MANGOHUD_PRESETSFILE": value},
+        {
+            "XDG_CONFIG_HOME": value,
+            "MANGOHUD_CONFIGFILE": value,
+            "MANGOHUD_PRESETSFILE": value,
+        },
         home,
     )
-    assert _mangohud_config(pairs, home) == os.path.realpath(os.path.join(home, ".config", "MangoHud"))
+    assert _mangohud_config(pairs, home) == os.path.realpath(
+        os.path.join(home, ".config", "MangoHud")
+    )
     assert len(pairs) == len(sandbox.MANGOHUD_SYS_CLASSES) + 1
 
 
@@ -925,7 +1141,10 @@ def test_mangohud_mounts_refuse_symlink_to_home(monkeypatch, tmp_path):
 
 
 def test_bwrap_mangohud_binds_follow_home_and_readonly():
-    pairs = (("/sys/class/drm", "/sys/class/drm"), ("/cfg/MangoHud", "/home/u/.config/MangoHud"))
+    pairs = (
+        ("/sys/class/drm", "/sys/class/drm"),
+        ("/cfg/MangoHud", "/home/u/.config/MangoHud"),
+    )
     argv = sandbox.build_bwrap_argv(
         ["true"],
         game_dir="/games",
@@ -939,7 +1158,9 @@ def test_bwrap_mangohud_binds_follow_home_and_readonly():
     home_bind = triples.index(["--bind", "/s", "/home/u"])
     runner = triples.index(["--ro-bind", "/runner", "/runner"])
     drm = triples.index(["--ro-bind-try", "/sys/class/drm", "/sys/class/drm"])
-    config = triples.index(["--ro-bind-try", "/cfg/MangoHud", "/home/u/.config/MangoHud"])
+    config = triples.index(
+        ["--ro-bind-try", "/cfg/MangoHud", "/home/u/.config/MangoHud"]
+    )
     assert home_bind < runner < drm < config
     plain = sandbox.build_bwrap_argv(
         ["true"], game_dir="/games", home="/home/u", sandbox_home="/s", cwd="/games"

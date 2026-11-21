@@ -46,12 +46,15 @@ def rebuild_links(catalog: CatalogStore) -> int:
         _ = catalog.conn.execute("DELETE FROM links")
         for query in _LINK_QUERIES:
             _ = catalog.conn.execute(
-                "INSERT OR IGNORE INTO links (src_a, id_a, src_b, id_b, origin) " + query
+                "INSERT OR IGNORE INTO links (src_a, id_a, src_b, id_b, origin) "
+                + query
             )
         _ = catalog.conn.executemany(
             "INSERT OR IGNORE INTO links (src_a, id_a, src_b, id_b, origin) "
             + "VALUES ('lc', ?, 'f95', ?, 'title')",
             [(str(lc_id), str(f95_id)) for lc_id, f95_id in match_lc_f95(catalog)],
         )
-    row = cast(tuple[int], catalog.conn.execute("SELECT COUNT(*) FROM links").fetchone())
+    row = cast(
+        tuple[int], catalog.conn.execute("SELECT COUNT(*) FROM links").fetchone()
+    )
     return row[0]

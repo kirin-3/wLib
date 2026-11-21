@@ -98,7 +98,9 @@ def run_source(source: Source, ctx: SourceContext) -> SourceResult:
     return result
 
 
-def manifest_sources(catalog: CatalogStore, state: StateStore) -> dict[str, dict[str, object]]:
+def manifest_sources(
+    catalog: CatalogStore, state: StateStore
+) -> dict[str, dict[str, object]]:
     from core.catalog_format import SOURCES
 
     return {

@@ -24,11 +24,17 @@ def test_vns_and_release_store_ids_are_stored(tmp_path):
     ctx, _ = make_context(tmp_path, transport)
     result = run_source(VndbSource(), ctx)
     assert result.status == "ok" and result.sweep_completed
-    vn = rows(ctx.catalog, "SELECT title, alttitle, developers, tags, url FROM vndb_vns WHERE vn_id = 'v1'")[0]
+    vn = rows(
+        ctx.catalog,
+        "SELECT title, alttitle, developers, tags, url FROM vndb_vns WHERE vn_id = 'v1'",
+    )[0]
     assert vn[1] == "みんなでニャンニャン"
     assert json.loads(vn[2]) == ["Yamikumo-Communications"]
     assert json.loads(vn[3]) and vn[4] == "https://vndb.org/v1"
-    release = rows(ctx.catalog, "SELECT vn_ids, dlsite_ids FROM vndb_releases WHERE release_id = 'r80'")[0]
+    release = rows(
+        ctx.catalog,
+        "SELECT vn_ids, dlsite_ids FROM vndb_releases WHERE release_id = 'r80'",
+    )[0]
     assert json.loads(release[0]) == ["v37"]
     assert json.loads(release[1]) == ["VJ002520"]
     # Only 18+ material is asked for.

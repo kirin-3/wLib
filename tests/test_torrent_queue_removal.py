@@ -11,7 +11,9 @@ from core.downloads.torrents import TorrentSupervisor, torrents_dir
 from core.downloads.workers import TorrentWorker
 
 
-def _load_downloads(monkeypatch: pytest.MonkeyPatch) -> tuple[TorrentSupervisor, DownloadQueue]:
+def _load_downloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TorrentSupervisor, DownloadQueue]:
     supervisor = TorrentSupervisor()
     spawn = Mock(return_value=True)
     monkeypatch.setattr(supervisor, "_spawn", spawn)
@@ -23,7 +25,8 @@ def _load_downloads(monkeypatch: pytest.MonkeyPatch) -> tuple[TorrentSupervisor,
 
 
 @pytest.mark.parametrize(
-    ("phase", "seed_state"), [("seeding", "seeding"), ("awaiting_seed_answer", "awaiting_answer")]
+    ("phase", "seed_state"),
+    [("seeding", "seeding"), ("awaiting_seed_answer", "awaiting_answer")],
 )
 def test_removed_torrent_stays_out_of_queue_after_restart(
     monkeypatch: pytest.MonkeyPatch, phase: str, seed_state: str
@@ -31,10 +34,22 @@ def test_removed_torrent_stays_out_of_queue_after_restart(
     init_db()
     folder = torrents_dir() / ("a" * 40)
     (folder / "data").mkdir(parents=True)
-    _ = (folder / "state.json").write_text(json.dumps({
-        "job_id": "seed-job", "game_id": 1, "rpdl_id": 7, "title": "Game", "version": "1",
-        "phase": phase, "size": 100, "downloaded": 100, "updated": time.time(),
-    }), encoding="utf-8")
+    _ = (folder / "state.json").write_text(
+        json.dumps(
+            {
+                "job_id": "seed-job",
+                "game_id": 1,
+                "rpdl_id": 7,
+                "title": "Game",
+                "version": "1",
+                "phase": phase,
+                "size": 100,
+                "downloaded": 100,
+                "updated": time.time(),
+            }
+        ),
+        encoding="utf-8",
+    )
 
     supervisor, queue = _load_downloads(monkeypatch)
     # An older state without a queue row is still eligible for adoption.
@@ -57,10 +72,22 @@ def test_removed_torrent_held_by_install_dialog_is_deleted_on_release(
     init_db()
     folder = torrents_dir() / ("b" * 40)
     (folder / "data").mkdir(parents=True)
-    _ = (folder / "state.json").write_text(json.dumps({
-        "job_id": "held-job", "game_id": 2, "rpdl_id": 8, "title": "Game", "version": "1",
-        "phase": "finished", "size": 100, "downloaded": 100, "updated": time.time(),
-    }), encoding="utf-8")
+    _ = (folder / "state.json").write_text(
+        json.dumps(
+            {
+                "job_id": "held-job",
+                "game_id": 2,
+                "rpdl_id": 8,
+                "title": "Game",
+                "version": "1",
+                "phase": "finished",
+                "size": 100,
+                "downloaded": 100,
+                "updated": time.time(),
+            }
+        ),
+        encoding="utf-8",
+    )
 
     # A finished torrent that does not seed needs no helper process.
     supervisor = TorrentSupervisor()

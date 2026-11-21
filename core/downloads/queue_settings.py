@@ -4,6 +4,7 @@
 All four keys are device-local: never exported or synced (they are not in
 GENERAL_SETTINGS_KEYS).
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -63,7 +64,11 @@ def limit_kib() -> int:
 
 def max_active() -> int:
     value = _int(_raw(MAX_ACTIVE_KEY))
-    return value if value is not None and MIN_ACTIVE <= value <= MAX_ACTIVE else DEFAULT_MAX_ACTIVE
+    return (
+        value
+        if value is not None and MIN_ACTIVE <= value <= MAX_ACTIVE
+        else DEFAULT_MAX_ACTIVE
+    )
 
 
 def pause_while_playing() -> bool:

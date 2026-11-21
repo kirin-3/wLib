@@ -228,7 +228,9 @@ def test_start_move_needs_existing_destination(env, tmp_path):
     assert result["success"] is False
 
 
-def test_moving_or_uninstalling_game_refuses_mod_tools_and_save_restore(env, tmp_path, monkeypatch):
+def test_moving_or_uninstalling_game_refuses_mod_tools_and_save_restore(
+    env, tmp_path, monkeypatch
+):
     import threading
 
     from core.game_saves import GameSavesError

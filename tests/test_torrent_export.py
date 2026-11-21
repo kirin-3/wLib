@@ -7,7 +7,11 @@ from core.downloads import torrent_export
 from core.downloads.bencode import parse_torrent, trackers
 from core.downloads.torrent_export import magnet_link, safe_file_name, write_torrent
 
-INFO = b"4:infod6:lengthi5e4:name4:game12:piece lengthi16384e6:pieces20:" + b"x" * 20 + b"e"
+INFO = (
+    b"4:infod6:lengthi5e4:name4:game12:piece lengthi16384e6:pieces20:"
+    + b"x" * 20
+    + b"e"
+)
 
 
 def bstr(text: str) -> bytes:
@@ -15,7 +19,9 @@ def bstr(text: str) -> bytes:
     return str(len(raw)).encode() + b":" + raw
 
 
-def torrent(announce: str | None = None, tiers: bytes | None = None, info: bytes = INFO) -> bytes:
+def torrent(
+    announce: str | None = None, tiers: bytes | None = None, info: bytes = INFO
+) -> bytes:
     body = b"d"
     if announce is not None:
         body += b"8:announce" + bstr(announce)
@@ -25,7 +31,11 @@ def torrent(announce: str | None = None, tiers: bytes | None = None, info: bytes
 
 
 def tier_list(*tiers: list[str]) -> bytes:
-    return b"l" + b"".join(b"l" + b"".join(bstr(u) for u in tier) + b"e" for tier in tiers) + b"e"
+    return (
+        b"l"
+        + b"".join(b"l" + b"".join(bstr(u) for u in tier) + b"e" for tier in tiers)
+        + b"e"
+    )
 
 
 def test_single_tracker():
@@ -33,7 +43,10 @@ def test_single_tracker():
 
 
 def test_multi_tier_without_duplicates():
-    data = torrent("http://a/x", tier_list(["http://a/x", "http://b/y"], ["udp://c:1", "http://b/y"]))
+    data = torrent(
+        "http://a/x",
+        tier_list(["http://a/x", "http://b/y"], ["udp://c:1", "http://b/y"]),
+    )
     assert trackers(data) == ["http://a/x", "http://b/y", "udp://c:1"]
 
 
@@ -50,7 +63,11 @@ def test_malformed_announce_list_is_skipped():
 
 
 def test_magnet_holds_hash_name_and_trackers():
-    info = b"4:infod6:lengthi5e4:name9:a b&c.zip12:piece lengthi16384e6:pieces20:" + b"x" * 20 + b"e"
+    info = (
+        b"4:infod6:lengthi5e4:name9:a b&c.zip12:piece lengthi16384e6:pieces20:"
+        + b"x" * 20
+        + b"e"
+    )
     data = torrent("http://t/ann/PASS?k=1", tier_list(["udp://u:80"]), info)
     link = magnet_link(data)
     assert link == (

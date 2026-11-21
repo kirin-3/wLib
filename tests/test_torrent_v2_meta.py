@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """v2-only and hybrid (BEP 52) `.torrent` metadata: hashes, size and magnet link."""
+
 import hashlib
 
 import pytest
@@ -16,13 +17,25 @@ ROOT = bstr(b"pieces root") + bstr(b"r" * 32)
 # Keys in sorted order, as bencode needs.
 TREE = (
     b"9:file treed"
-    + bstr(b"a.bin") + b"d0:d6:lengthi40000e" + ROOT + b"ee"
-    + bstr(b"sub") + b"d" + bstr(b"b.bin") + b"d0:d6:lengthi100e" + ROOT + b"eeee"
+    + bstr(b"a.bin")
+    + b"d0:d6:lengthi40000e"
+    + ROOT
+    + b"ee"
+    + bstr(b"sub")
+    + b"d"
+    + bstr(b"b.bin")
+    + b"d0:d6:lengthi100e"
+    + ROOT
+    + b"eeee"
 )
 V2_INFO = b"d" + TREE + b"12:meta versioni2e4:name4:game12:piece lengthi16384ee"
 HYBRID_INFO = (
-    b"d" + TREE + b"5:filesld6:lengthi40000e4:pathl5:a.bineed6:lengthi100e4:pathl3:sub5:b.bineee"
-    + b"12:meta versioni2e4:name4:game12:piece lengthi16384e6:pieces20:" + b"x" * 20 + b"e"
+    b"d"
+    + TREE
+    + b"5:filesld6:lengthi40000e4:pathl5:a.bineed6:lengthi100e4:pathl3:sub5:b.bineee"
+    + b"12:meta versioni2e4:name4:game12:piece lengthi16384e6:pieces20:"
+    + b"x" * 20
+    + b"e"
 )
 
 
@@ -45,13 +58,17 @@ def test_hybrid_torrent_keeps_the_v1_hash_and_adds_the_v2_hash():
 
 
 def test_v1_torrent_has_no_v2_hash():
-    info = b"d6:lengthi5e4:name4:game12:piece lengthi16384e6:pieces20:" + b"x" * 20 + b"e"
+    info = (
+        b"d6:lengthi5e4:name4:game12:piece lengthi16384e6:pieces20:" + b"x" * 20 + b"e"
+    )
     assert parse_torrent(torrent(info)).info_hash_v2 == ""
 
 
 def test_magnet_uses_btmh_for_the_v2_hash():
     v2 = hashlib.sha256(V2_INFO).hexdigest()
-    assert magnet_link(torrent(V2_INFO)).startswith(f"magnet:?xt=urn:btmh:1220{v2}&dn=game&tr=")
+    assert magnet_link(torrent(V2_INFO)).startswith(
+        f"magnet:?xt=urn:btmh:1220{v2}&dn=game&tr="
+    )
     hybrid = magnet_link(torrent(HYBRID_INFO))
     assert hybrid.startswith(
         f"magnet:?xt=urn:btih:{hashlib.sha1(HYBRID_INFO).hexdigest()}"

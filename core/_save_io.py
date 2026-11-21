@@ -78,9 +78,7 @@ def read_fingerprint(
     return data, (len(data), stat.st_mtime_ns, stat.st_dev, stat.st_ino, digest)
 
 
-def atomic_replace_checked(
-    path: str, encoded: bytes, fingerprint: Fingerprint
-) -> None:
+def atomic_replace_checked(path: str, encoded: bytes, fingerprint: Fingerprint) -> None:
     """Write `encoded` to a temp file, recheck `fingerprint`, and replace `path`."""
     temp = ""
     try:

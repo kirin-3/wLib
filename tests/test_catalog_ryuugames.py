@@ -13,7 +13,11 @@ def _transport():
     transport = FakeTransport()
     transport.route(
         "/wp-json/wp/v2/posts",
-        Response(200, fixture_bytes("ryuugames_posts.json"), {"X-WP-Total": "3", "X-WP-TotalPages": "1"}),
+        Response(
+            200,
+            fixture_bytes("ryuugames_posts.json"),
+            {"X-WP-Total": "3", "X-WP-TotalPages": "1"},
+        ),
     )
     return transport
 
@@ -98,6 +102,12 @@ def test_incremental_uses_modified_after(tmp_path):
 
 
 def test_clean_title():
-    assert clean_title("[ENG] Snow x Hime (V2.7.1) (V26.10.24) Uncensored") == ("Snow x Hime", "V2.7.1")
-    assert clean_title("Aniyome wa Ijippari Free Download") == ("Aniyome wa Ijippari", None)
+    assert clean_title("[ENG] Snow x Hime (V2.7.1) (V26.10.24) Uncensored") == (
+        "Snow x Hime",
+        "V2.7.1",
+    )
+    assert clean_title("Aniyome wa Ijippari Free Download") == (
+        "Aniyome wa Ijippari",
+        None,
+    )
     assert clean_title("Saimin App (RJ01071738)")[0] == "Saimin App"

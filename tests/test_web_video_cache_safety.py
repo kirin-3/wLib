@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The video check cache and in-place conversion keep newer data."""
+
 from __future__ import annotations
 
 import json
@@ -89,7 +90,10 @@ def test_other_folders_are_capped(tmp_path, monkeypatch):
     for root in roots:
         _ = web_video.set_play_anyway(5, str(root))
     data = json.loads(Path(web_video.scan_cache_path(5)).read_text())
-    assert list(data["other_roots"]) == [str(roots[1].resolve()), str(roots[2].resolve())]
+    assert list(data["other_roots"]) == [
+        str(roots[1].resolve()),
+        str(roots[2].resolve()),
+    ]
     assert web_video.scan_game(5, str(roots[0]))["play_anyway"] is False
 
 

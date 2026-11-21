@@ -4,6 +4,7 @@
 `TorrentWorker` wraps `TorrentSupervisor`: a waiting torrent is a paused
 torrent (design D4). `HostWorker` wraps `DownloadManager` (design D5, D6).
 """
+
 from __future__ import annotations
 
 import threading
@@ -34,17 +35,35 @@ from core.downloads.torrents import ACTIVE_STAGES, MSG_LOW_DISK, TorrentSupervis
 from core.downloads.transfer import DownloadError, delete_part, staging_dir
 
 _TORRENT_DETAIL_KEYS = (
-    "stage", "hint", "peers", "upload_speed", "ratio", "ratio_target", "seed_state",
-    "archive_path", "folder_path", "payload_kind", "installed", "restarting",
+    "stage",
+    "hint",
+    "peers",
+    "upload_speed",
+    "ratio",
+    "ratio_target",
+    "seed_state",
+    "archive_path",
+    "folder_path",
+    "payload_kind",
+    "installed",
+    "restarting",
 )
 
 
 def _int(value: object) -> int:
-    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+    return (
+        int(value)
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+        else 0
+    )
 
 
 def _float(value: object) -> float:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
+    return (
+        float(value)
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+        else 0.0
+    )
 
 
 @dataclass
@@ -80,14 +99,23 @@ class TorrentWorker:
                 raise DownloadError("Torrent downloads are unavailable in this build")
             fetch = self._fetch_for(self._rpdl_id(job))
         _ = self._supervisor().start(
-            job.game_id, job.title, job.version, self._rpdl_id(job),
-            fetch, paused=True, job_id=job.id,
+            job.game_id,
+            job.title,
+            job.version,
+            self._rpdl_id(job),
+            fetch,
+            paused=True,
+            job_id=job.id,
         )
 
     def start(self, job: QueueJob) -> None:
         supervisor = self._supervisor()
         snapshot = self._snapshot(job.id)
-        if snapshot is not None and snapshot.get("stage") == "failed" and not snapshot.get("info_hash"):
+        if (
+            snapshot is not None
+            and snapshot.get("stage") == "failed"
+            and not snapshot.get("info_hash")
+        ):
             # The `.torrent` never arrived: fetch it again.
             _ = supervisor.cancel(job.id)
             snapshot = None
@@ -95,8 +123,13 @@ class TorrentWorker:
             if self._fetch_for is None:
                 raise DownloadError("Torrent downloads are unavailable in this build")
             _ = supervisor.start(
-                job.game_id, job.title, job.version, self._rpdl_id(job),
-                self._fetch_for(self._rpdl_id(job)), paused=False, job_id=job.id,
+                job.game_id,
+                job.title,
+                job.version,
+                self._rpdl_id(job),
+                self._fetch_for(self._rpdl_id(job)),
+                paused=False,
+                job_id=job.id,
             )
             return
         if snapshot.get("stage") == "fetching":
@@ -135,15 +168,21 @@ class TorrentWorker:
         if snapshot is None:
             if job.state == READY:
                 return WorkerState(PHASE_DONE)
-            return WorkerState(PHASE_IDLE, bytes_done=job.bytes_done, bytes_total=job.bytes_total)
+            return WorkerState(
+                PHASE_IDLE, bytes_done=job.bytes_done, bytes_total=job.bytes_total
+            )
         info_hash = str(snapshot.get("info_hash") or "")
         if info_hash and job.source.get("info_hash") != info_hash:
             job.source["info_hash"] = info_hash
-        details = {key: snapshot.get(key) for key in _TORRENT_DETAIL_KEYS if key in snapshot}
+        details = {
+            key: snapshot.get(key) for key in _TORRENT_DETAIL_KEYS if key in snapshot
+        }
         total = snapshot.get("total")
         state = WorkerState(
             bytes_done=_int(snapshot.get("bytes")),
-            bytes_total=_int(total) if isinstance(total, (int, float)) and total else None,
+            bytes_total=_int(total)
+            if isinstance(total, (int, float)) and total
+            else None,
             speed=float(_int(snapshot.get("speed"))),
             can_continue=True,
             details=details,
@@ -173,7 +212,11 @@ class TorrentWorker:
             return True
         # A torrent whose `.torrent` never arrived has no folder; it fetches
         # again at its turn. One that had a folder lost its data.
-        return not job.source.get("info_hash") and self._rpdl_id(job) > 0 and job.state != READY
+        return (
+            not job.source.get("info_hash")
+            and self._rpdl_id(job) > 0
+            and job.state != READY
+        )
 
     def unclaimed(self, claimed: set[str]) -> list[QueueJob]:
         adopted: list[QueueJob] = []
@@ -206,7 +249,9 @@ class TorrentWorker:
                     "info_hash": str(snapshot.get("info_hash") or ""),
                 },
                 bytes_done=_int(snapshot.get("bytes")),
-                bytes_total=_int(total) if isinstance(total, (int, float)) and total else None,
+                bytes_total=_int(total)
+                if isinstance(total, (int, float)) and total
+                else None,
                 created_at=float(_int(snapshot.get("created"))),
             )
             if state == ATTENTION:
@@ -223,12 +268,19 @@ class TorrentWorker:
         del jobs
 
 
-
 # A failure that says the held address is no good: the next start reads the thread again.
-_LINK_FAILURES = frozenset({
-    failures.REMOVED, failures.CHECK_TIMEOUT, failures.EXTENSION, failures.PERMISSION,
-    failures.MIRROR_GONE, failures.CHALLENGE, failures.INVALID, failures.SIGN_IN,
-})
+_LINK_FAILURES = frozenset(
+    {
+        failures.REMOVED,
+        failures.CHECK_TIMEOUT,
+        failures.EXTENSION,
+        failures.PERMISSION,
+        failures.MIRROR_GONE,
+        failures.CHALLENGE,
+        failures.INVALID,
+        failures.SIGN_IN,
+    }
+)
 
 _HOST_PHASES = {
     "idle": PHASE_IDLE,
@@ -284,7 +336,9 @@ class HostWorker:
         if relink is None:
             return None
 
-        def resolve(progress: Callable[[str], None], cancel: threading.Event) -> dict[str, object]:
+        def resolve(
+            progress: Callable[[str], None], cancel: threading.Event
+        ) -> dict[str, object]:
             # Runs in the job's thread: reading the thread may wait for the browser.
             return relink(job)(progress, cancel)
 
@@ -332,8 +386,12 @@ class HostWorker:
     def snapshot(self, job: QueueJob) -> WorkerState:
         snapshot = self._manager.snapshot(job.id)
         if snapshot is None:
-            return WorkerState(PHASE_IDLE, bytes_done=job.bytes_done, bytes_total=job.bytes_total,
-                               can_continue=self._host(job) in RESUMABLE_HOSTS)
+            return WorkerState(
+                PHASE_IDLE,
+                bytes_done=job.bytes_done,
+                bytes_total=job.bytes_total,
+                can_continue=self._host(job) in RESUMABLE_HOSTS,
+            )
         part = str(snapshot.get("part_name") or "")
         if part and job.source.get("part_file") != part:
             job.source["part_file"] = part
@@ -343,7 +401,10 @@ class HostWorker:
         total = snapshot.get("total")
         phase = _HOST_PHASES.get(str(snapshot.get("outcome") or ""), PHASE_IDLE)
         # A finished job's partial file became its archive.
-        self._note_part(job.id, "" if phase == PHASE_DONE else str(job.source.get("part_file") or ""))
+        self._note_part(
+            job.id,
+            "" if phase == PHASE_DONE else str(job.source.get("part_file") or ""),
+        )
         return WorkerState(
             phase=phase,
             error=str(snapshot.get("error") or ""),
@@ -351,7 +412,11 @@ class HostWorker:
             bytes_total=_int(total) if isinstance(total, int) and total > 0 else None,
             speed=_float(snapshot.get("speed")),
             can_continue=bool(snapshot.get("can_continue")),
-            details={"stage": snapshot.get("stage"), "host": self._host(job), "archive_path": archive},
+            details={
+                "stage": snapshot.get("stage"),
+                "host": self._host(job),
+                "archive_path": archive,
+            },
         )
 
     def restore(self, job: QueueJob) -> bool:
@@ -360,7 +425,9 @@ class HostWorker:
             path = staging_dir() / name if name else None
             if path is None or not path.is_file():
                 return False
-            self._manager.restore_finished(job.id, job.game_id, self._host(job), str(path))
+            self._manager.restore_finished(
+                job.id, job.game_id, self._host(job), str(path)
+            )
             return True
         self._ensure(job)
         self._note_part(job.id, str(job.source.get("part_file") or ""))
@@ -379,5 +446,7 @@ class HostWorker:
         self._manager.set_rate(kib * 1024 if kib > 0 else 1)
 
     def cleanup(self, jobs: list[QueueJob]) -> None:
-        keep = [str(job.source.get("part_file") or "") for job in jobs if job.state != READY]
+        keep = [
+            str(job.source.get("part_file") or "") for job in jobs if job.state != READY
+        ]
         self._manager.cleanup([name for name in keep if name])

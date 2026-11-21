@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Video conversion for the built-in web player (H.264/H.265/AAC to AV1 or VP9 and Opus)."""
+
 from __future__ import annotations
 
 import os
@@ -58,13 +59,23 @@ class WebMediaMixin(ApiBase):
             return {"success": False, "error": portal_error}
         info = ffmpeg_info(refresh=True)
         if not info["available"]:
-            return {"success": False, "code": "ffmpeg_unavailable", "error": "Converting videos needs ffmpeg."}
+            return {
+                "success": False,
+                "code": "ffmpeg_unavailable",
+                "error": "Converting videos needs ffmpeg.",
+            }
         # _status_lock serializes this with the launcher's reservation.
         with self._status_lock:
             if self._web_media_jobs:
-                return {"success": False, "error": "Another game's videos are being converted. Wait for it to finish."}
+                return {
+                    "success": False,
+                    "error": "Another game's videos are being converted. Wait for it to finish.",
+                }
             if coerced_id in self.get_running_games():
-                return {"success": False, "error": "Close the game before converting its videos."}
+                return {
+                    "success": False,
+                    "error": "Close the game before converting its videos.",
+                }
             busy = self._game_busy_reason(coerced_id)
             if busy:
                 return {"success": False, "code": "game_busy", "error": busy}
@@ -112,13 +123,17 @@ class WebMediaMixin(ApiBase):
                 if self._web_media_cancel.is_set():
                     break
                 self._web_media_update(game_id, done=index, current=relative)
-                result = converter.convert(os.path.join(real_root, *relative.split("/")))
+                result = converter.convert(
+                    os.path.join(real_root, *relative.split("/"))
+                )
                 if self._web_media_cancel.is_set() and not result["ok"]:
                     # wLib quits or the user cancelled while ffmpeg ran.
                     break
                 if result["ok"]:
                     converted += 1
-                    mark_converted(game_id, relative, result["size"], result["mtime_ns"])
+                    mark_converted(
+                        game_id, relative, result["size"], result["mtime_ns"]
+                    )
                 else:
                     print(f"[wLib] Could not convert {relative}: {result['error']}")
                     failed_files.append(relative)
@@ -160,19 +175,28 @@ class WebMediaMixin(ApiBase):
         """Stop the job after the current file; converted files stay converted."""
         coerced_id = self._coerce_db_id(game_id)
         with self._status_lock:
-            status = self._web_media_jobs.get(coerced_id) if coerced_id is not None else None
+            status = (
+                self._web_media_jobs.get(coerced_id) if coerced_id is not None else None
+            )
             if status is None:
-                return {"success": False, "error": "No conversion is running for this game."}
+                return {
+                    "success": False,
+                    "error": "No conversion is running for this game.",
+                }
             status["cancelled"] = True
             self._web_media_cancel.set()
         return {"success": True}
 
-    def get_web_media_conversion_status(self, game_id: object = None) -> dict[str, object]:
+    def get_web_media_conversion_status(
+        self, game_id: object = None
+    ) -> dict[str, object]:
         coerced_id = self._coerce_db_id(game_id)
         with self._status_lock:
             status = None
             if coerced_id is not None:
-                status = self._web_media_jobs.get(coerced_id) or self._web_media_results.get(coerced_id)
+                status = self._web_media_jobs.get(
+                    coerced_id
+                ) or self._web_media_results.get(coerced_id)
             payload = dict(status) if status is not None else _idle_status()
         return {"success": True, **payload}
 
@@ -185,7 +209,10 @@ class WebMediaMixin(ApiBase):
             return {"success": False, "error": "Game was not found"}
         root = cached_root(coerced_id)
         if not root:
-            return {"success": False, "error": "This game's videos were not checked yet."}
+            return {
+                "success": False,
+                "error": "This game's videos were not checked yet.",
+            }
         try:
             _ = set_play_anyway(coerced_id, root)
         except OSError as exc:

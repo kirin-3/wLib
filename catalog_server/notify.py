@@ -44,7 +44,9 @@ def _is_login_problem(outcome: SourceResult) -> bool:
 def _duration(start: str, end: str) -> str:
     try:
         seconds = int(
-            (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds()
+            (
+                datetime.fromisoformat(end) - datetime.fromisoformat(start)
+            ).total_seconds()
         )
     except ValueError:
         return "?"
@@ -97,7 +99,9 @@ def build_report(
     else:
         title, color = "Catalog published", COLOR_OK
 
-    lines = [f"Run #{result.run_id} · {_duration(result.started_at, result.finished_at)}"]
+    lines = [
+        f"Run #{result.run_id} · {_duration(result.started_at, result.finished_at)}"
+    ]
     if result.manifest is not None:
         snapshot = result.manifest.get(MANIFEST_SNAPSHOT)
         if isinstance(snapshot, dict):
@@ -110,7 +114,8 @@ def build_report(
         lines.append(f"Links: {result.links:,}")
 
     steps = [
-        _step_line(name, outcome, name in sources) for name, outcome in result.sources.items()
+        _step_line(name, outcome, name in sources)
+        for name, outcome in result.sources.items()
     ]
     fields: list[dict[str, object]] = [
         {

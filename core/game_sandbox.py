@@ -38,30 +38,86 @@ BWRAP_NAMESPACE_OPTIONS = (
 # environment (tokens, SSH/GPG agents, cloud credentials) stays outside.
 SANDBOX_ENV_NAMES = frozenset(
     {
-        "PATH", "LANG", "LANGUAGE", "TERM", "TZ", "USER", "LOGNAME", "SHELL",
-        "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR",
-        "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP",
-        "XDG_DATA_DIRS", "XDG_CONFIG_DIRS", "XMODIFIERS", "GTK_IM_MODULE",
-        "QT_IM_MODULE", "SDL_IM_MODULE", "PULSE_SERVER", "PULSE_SINK",
-        "PIPEWIRE_RUNTIME_DIR", "LD_LIBRARY_PATH", "LIBGL_ALWAYS_SOFTWARE",
-        "GAMEID", "STORE", "SteamAppId", "SteamGameId", "SteamOverlayGameId",
+        "PATH",
+        "LANG",
+        "LANGUAGE",
+        "TERM",
+        "TZ",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XAUTHORITY",
+        "XDG_RUNTIME_DIR",
+        "XDG_SESSION_TYPE",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "XDG_DATA_DIRS",
+        "XDG_CONFIG_DIRS",
+        "XMODIFIERS",
+        "GTK_IM_MODULE",
+        "QT_IM_MODULE",
+        "SDL_IM_MODULE",
+        "PULSE_SERVER",
+        "PULSE_SINK",
+        "PIPEWIRE_RUNTIME_DIR",
+        "LD_LIBRARY_PATH",
+        "LIBGL_ALWAYS_SOFTWARE",
+        "GAMEID",
+        "STORE",
+        "SteamAppId",
+        "SteamGameId",
+        "SteamOverlayGameId",
     }
 )
 SANDBOX_ENV_PREFIXES = (
-    "LC_", "WINE", "PROTON", "DXVK_", "VKD3D_", "MESA_", "__GL", "__NV",
-    "__VK", "VK_", "NVIDIA_", "DRI_", "LIBGL_", "SDL_", "MANGOHUD", "ENABLE_VK",
-    "STEAM_", "UMU_", "PRESSURE_VESSEL_", "WLIB_", "GST_", "ALSA_",
-    "RADV_", "AMD_", "INTEL_", "ANV_", "PULSE_",
+    "LC_",
+    "WINE",
+    "PROTON",
+    "DXVK_",
+    "VKD3D_",
+    "MESA_",
+    "__GL",
+    "__NV",
+    "__VK",
+    "VK_",
+    "NVIDIA_",
+    "DRI_",
+    "LIBGL_",
+    "SDL_",
+    "MANGOHUD",
+    "ENABLE_VK",
+    "STEAM_",
+    "UMU_",
+    "PRESSURE_VESSEL_",
+    "WLIB_",
+    "GST_",
+    "ALSA_",
+    "RADV_",
+    "AMD_",
+    "INTEL_",
+    "ANV_",
+    "PULSE_",
 )
 
 
 # Qt and Chromium settings the built-in web player needs from its own runtime.
 PLAYER_ENV_NAMES = frozenset(
     {
-        "QT_QPA_PLATFORM", "QT_PLUGIN_PATH", "QT_QUICK_BACKEND", "QT_OPENGL",
-        "QSG_RHI_BACKEND", "QTWEBENGINE_CHROMIUM_FLAGS", "QTWEBENGINE_DISABLE_SANDBOX",
-        "QTWEBENGINE_RESOURCES_PATH", "QTWEBENGINE_LOCALES_PATH", "QML2_IMPORT_PATH",
-        "PYTHONHOME", "PYTHONPATH", "DEV_MODE",
+        "QT_QPA_PLATFORM",
+        "QT_PLUGIN_PATH",
+        "QT_QUICK_BACKEND",
+        "QT_OPENGL",
+        "QSG_RHI_BACKEND",
+        "QTWEBENGINE_CHROMIUM_FLAGS",
+        "QTWEBENGINE_DISABLE_SANDBOX",
+        "QTWEBENGINE_RESOURCES_PATH",
+        "QTWEBENGINE_LOCALES_PATH",
+        "QML2_IMPORT_PATH",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "DEV_MODE",
     }
 )
 
@@ -267,7 +323,7 @@ SUPERVISOR = (
     "for p in /proc/[0-9]*; do "
     'pid=${p#/proc/}; case "$pid" in 1|$$) continue;; esac; '
     '{ read -r stat < "$p/stat"; } 2>/dev/null || continue; '
-    'comm=${stat#*[(]}; comm=${comm%) *}; '
+    "comm=${stat#*[(]}; comm=${comm%) *}; "
     f'case "$comm" in {_BUS_HELPER_PATTERN}) continue;; esac; '
     "n=$((n+1)); done; "
     '[ "$n" -eq 0 ] && { kill -KILL -1 2>/dev/null; exit "$result"; }; '
@@ -318,7 +374,7 @@ def cheat_engine_wrapper(game_command: list[str], ce_command: list[str]) -> list
         "for p in /proc/[0-9]*; do "
         'pid=${p#/proc/}; case "$pid" in 1|$$|$PPID) continue;; esac; '
         '{ read -r stat < "$p/stat"; } 2>/dev/null || continue; '
-        'comm=${stat#*[(]}; comm=${comm%) *}; '
+        "comm=${stat#*[(]}; comm=${comm%) *}; "
         f'case "$comm" in {_WINE_SERVICE_PATTERN}) continue;; esac; '
         'set -- ${stat##*) }; [ "$3" = "$ce" ] || n=$((n+1)); done; '
         '[ "$n" -eq 0 ] && { kill -TERM -- "-$ce" 2>/dev/null; break; }; '
@@ -342,9 +398,9 @@ _GAMESCOPE_BINDS = (
     "fi; "
 )
 GAMESCOPE_BIND_SHIM = (
-    'i=$1; mode=$2; shift 2; c=$#; n=0; '
+    "i=$1; mode=$2; shift 2; c=$#; n=0; "
     'd=${DISPLAY:-}; d=${d##*:}; d=${d%%.*}; case "$d" in ""|*[!0-9]*) d=;; esac; '
-    'w=${GAMESCOPE_WAYLAND_DISPLAY:-}; '
+    "w=${GAMESCOPE_WAYLAND_DISPLAY:-}; "
     'case "$w" in ""|/*) ;; *) if [ -n "${XDG_RUNTIME_DIR:-}" ]; then w=$XDG_RUNTIME_DIR/$w; else w=; fi;; esac; '
     # Rotate the arguments once, adding the binds before element <index>.
     'while [ "$n" -lt "$c" ]; do '
@@ -491,7 +547,16 @@ def build_bwrap_argv(
     # (gamescope, Xvfb) can create its display here. Only the host's display
     # sockets are bound in; the host folder belongs to root, which shows as
     # nobody in the user namespace.
-    argv += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--dir", "/tmp/.X11-unix"]
+    argv += [
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        "--dir",
+        "/tmp/.X11-unix",
+    ]
     argv += ["--tmpfs", "/run"]
     if nixos:
         argv += ["--ro-bind-try", "/run/current-system", "/run/current-system"]
@@ -704,7 +769,11 @@ def prune_removed_sandboxes(now: float | None = None) -> int:
             continue
         for entry in entries:
             try:
-                if entry.is_symlink() or not entry.is_dir() or entry.stat().st_mtime >= cutoff:
+                if (
+                    entry.is_symlink()
+                    or not entry.is_dir()
+                    or entry.stat().st_mtime >= cutoff
+                ):
                     continue
             except OSError:
                 continue
@@ -841,7 +910,13 @@ def configure_sandboxie_box(
     for extra in extra_write_paths:
         if extra:
             _ = _sandboxie_call(
-                ini, ["append", box, "OpenFilePath", ntpath.normpath(extra).rstrip("\\/") + "\\"]
+                ini,
+                [
+                    "append",
+                    box,
+                    "OpenFilePath",
+                    ntpath.normpath(extra).rstrip("\\/") + "\\",
+                ],
             )
     _ = _sandboxie_call(start, ["/reload"])
     return box

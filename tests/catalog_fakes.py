@@ -45,12 +45,20 @@ class FakeTransport:
     """Answers each request with the first route whose predicate matches."""
 
     def __init__(self) -> None:
-        self.routes: list[tuple[Callable[[Request], bool], Callable[[Request], Response]]] = []
+        self.routes: list[
+            tuple[Callable[[Request], bool], Callable[[Request], Response]]
+        ] = []
         self.requests: list[Request] = []
 
     def route(self, match, respond) -> None:
-        predicate = match if callable(match) else (lambda request, text=match: text in request.url)
-        handler = respond if callable(respond) else (lambda request, value=respond: value)
+        predicate = (
+            match
+            if callable(match)
+            else (lambda request, text=match: text in request.url)
+        )
+        handler = (
+            respond if callable(respond) else (lambda request, value=respond: value)
+        )
         self.routes.append((predicate, handler))
 
     def __call__(self, request: Request) -> Response:
@@ -65,7 +73,13 @@ def make_context(tmp_path, transport, clock=None, wait_for_budget=()):
     clock = clock or FakeClock()
     catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
     state = StateStore(str(tmp_path / "state.sqlite"))
-    pacer = Pacer(state, transport, clock=clock, sleep=clock.sleep, wait_for_budget=wait_for_budget)
+    pacer = Pacer(
+        state,
+        transport,
+        clock=clock,
+        sleep=clock.sleep,
+        wait_for_budget=wait_for_budget,
+    )
     return SourceContext(catalog, state, pacer, clock.iso), clock
 
 

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Torrent staging files hold the RPDL passkey, so only the owner can read them."""
+
 from __future__ import annotations
 
 import json
@@ -43,7 +44,15 @@ def open_umask(tmp_path, monkeypatch):
 
 def test_new_torrent_folder_and_meta_are_owner_only(tmp_path):
     sup = TorrentSupervisor(
-        command=lambda: ([sys.executable, FAKE], {**os.environ, "FAKE_MODE": "complete", "FAKE_LOG": str(tmp_path / "fake.log"), "FAKE_STATE": str(tmp_path / "fake.count")}),
+        command=lambda: (
+            [sys.executable, FAKE],
+            {
+                **os.environ,
+                "FAKE_MODE": "complete",
+                "FAKE_LOG": str(tmp_path / "fake.log"),
+                "FAKE_STATE": str(tmp_path / "fake.count"),
+            },
+        ),
         free_space_fn=lambda path: 1 << 40,
     )
     job = torrents._Job(1, "Game", "1", 7)  # pyright: ignore[reportPrivateUsage]
@@ -79,7 +88,9 @@ def test_load_tightens_files_an_older_version_left_readable():
     folder.mkdir(parents=True)
     _ = (folder / "meta.torrent").write_bytes(_torrent_bytes())
     _ = (folder / "resume.dat").write_bytes(b"resume")
-    _ = (folder / "state.json").write_text(json.dumps({"phase": "failed", "job_id": "x", "updated": 9e12}))
+    _ = (folder / "state.json").write_text(
+        json.dumps({"phase": "failed", "job_id": "x", "updated": 9e12})
+    )
     for path in (root, folder, folder / "meta.torrent", folder / "resume.dat"):
         path.chmod(0o755 if path.is_dir() else 0o644)
     TorrentSupervisor().load()

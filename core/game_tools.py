@@ -81,9 +81,7 @@ def rpgm_data_root(folder: str) -> str | None:
 
 _RGSS_ARCHIVE_EXTENSIONS = (".rgssad", ".rgss2a", ".rgss3a")
 _RGSS_BACKUP_SUFFIX = ".wlib-backup"
-_RGSS_SCRIPT_NAMES = frozenset(
-    ("scripts.rxdata", "scripts.rvdata", "scripts.rvdata2")
-)
+_RGSS_SCRIPT_NAMES = frozenset(("scripts.rxdata", "scripts.rvdata", "scripts.rvdata2"))
 
 
 def is_rgss_folder(folder: str) -> bool:
@@ -100,7 +98,11 @@ def is_rgss_folder(folder: str) -> bool:
             else lowered
         )
         path = os.path.join(folder, name)
-        if base.endswith(_RGSS_ARCHIVE_EXTENSIONS) and not os.path.islink(path) and os.path.isfile(path):
+        if (
+            base.endswith(_RGSS_ARCHIVE_EXTENSIONS)
+            and not os.path.islink(path)
+            and os.path.isfile(path)
+        ):
             return True
         if lowered == "data" and os.path.isdir(path):
             try:
@@ -116,7 +118,7 @@ def is_rgss_folder(folder: str) -> bool:
 
 
 def detect_engine(folder: str, exe_path: str = "") -> str:
-    """"renpy", "rpgm", "rgss", "unity" or "" from the files on disk (the stored label is ignored)."""
+    """ "renpy", "rpgm", "rgss", "unity" or "" from the files on disk (the stored label is ignored)."""
     if not folder or not os.path.isdir(folder):
         return ""
     if is_renpy_folder(folder):

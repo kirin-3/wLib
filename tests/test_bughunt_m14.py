@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M14: a helper restart whose spawn fails must spend the budget and try again or fail the jobs."""
+
 import json
 from pathlib import Path
 
@@ -63,7 +64,9 @@ def timers(monkeypatch: pytest.MonkeyPatch) -> _Timers:
 def sup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TorrentSupervisor:
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(torrents.subprocess, "Popen", _FakeProc)
-    supervisor = TorrentSupervisor(command=lambda: (["helper"], {}), options=lambda: {}, backoff=(1.0, 5.0, 15.0))
+    supervisor = TorrentSupervisor(
+        command=lambda: (["helper"], {}), options=lambda: {}, backoff=(1.0, 5.0, 15.0)
+    )
     monkeypatch.setattr(supervisor, "_read", lambda proc: None)
     return supervisor
 
@@ -82,7 +85,10 @@ def _crash_with_active_job(sup: TorrentSupervisor, tmp_path: Path) -> _Job:
 
 
 def test_failed_respawn_schedules_the_next_try(
-    sup: TorrentSupervisor, tmp_path: Path, timers: _Timers, monkeypatch: pytest.MonkeyPatch
+    sup: TorrentSupervisor,
+    tmp_path: Path,
+    timers: _Timers,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     job = _crash_with_active_job(sup, tmp_path)
     assert timers.delays == [1.0] and job.restarting
@@ -95,7 +101,10 @@ def test_failed_respawn_schedules_the_next_try(
 
 
 def test_failed_respawns_spend_the_budget_then_fail_the_jobs(
-    sup: TorrentSupervisor, tmp_path: Path, timers: _Timers, monkeypatch: pytest.MonkeyPatch
+    sup: TorrentSupervisor,
+    tmp_path: Path,
+    timers: _Timers,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     job = _crash_with_active_job(sup, tmp_path)
     monkeypatch.setattr(torrents.subprocess, "Popen", _no_popen)
@@ -109,7 +118,9 @@ def test_failed_respawns_spend_the_budget_then_fail_the_jobs(
     assert len(timers.delays) == 3
 
 
-def test_a_working_respawn_schedules_nothing(sup: TorrentSupervisor, tmp_path: Path, timers: _Timers):
+def test_a_working_respawn_schedules_nothing(
+    sup: TorrentSupervisor, tmp_path: Path, timers: _Timers
+):
     _ = _crash_with_active_job(sup, tmp_path)
     sup._restart()  # pyright: ignore[reportPrivateUsage]
     assert isinstance(sup._proc, _FakeProc)  # pyright: ignore[reportPrivateUsage]

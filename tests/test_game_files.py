@@ -125,7 +125,9 @@ def test_plan_uninstall_refuses_folder_with_other_game(lib):
     library, ctx = lib
     game_id, _ = _install(library / "Pack" / "A")
     _other, _ = _install(library / "Pack" / "B", title="Other")
-    entry = gf.plan_uninstall([game_id], {game_id: str(library / "Pack")}, _hooks(), ctx)[0]
+    entry = gf.plan_uninstall(
+        [game_id], {game_id: str(library / "Pack")}, _hooks(), ctx
+    )[0]
     assert entry["reason"] == "The folder contains another library game."
 
 
@@ -155,9 +157,13 @@ def test_plan_uninstall_saves_inside_root(lib, tmp_path):
     inside.mkdir(parents=True)
     outside = tmp_path / "renpy"
     outside.mkdir()
-    entry = gf.plan_uninstall([game_id], {}, _hooks(saves={game_id: str(inside)}), ctx)[0]
+    entry = gf.plan_uninstall([game_id], {}, _hooks(saves={game_id: str(inside)}), ctx)[
+        0
+    ]
     assert entry["saves_inside_root"] is True
-    entry = gf.plan_uninstall([game_id], {}, _hooks(saves={game_id: str(outside)}), ctx)[0]
+    entry = gf.plan_uninstall(
+        [game_id], {}, _hooks(saves={game_id: str(outside)}), ctx
+    )[0]
     assert entry["saves_inside_root"] is False
     assert entry["saves_folder"] == str(outside)
 
@@ -380,7 +386,9 @@ def test_same_device_move_renames_and_repoints(lib, tmp_path):
     assert row is not None
     assert row["exe_path"] == str(dest / "Game" / "Game.exe")
     assert row["custom_prefix"] == str(dest / "Game" / "prefix")
-    assert list_game_launch_targets(game_id)[0]["exe_path"] == str(dest / "Game" / "patch.exe")
+    assert list_game_launch_targets(game_id)[0]["exe_path"] == str(
+        dest / "Game" / "patch.exe"
+    )
     assert moved == [game_id]
 
 
@@ -490,7 +498,9 @@ def test_move_job_rechecks_plan(lib, tmp_path):
     (dest / "Game").mkdir(parents=True)
     outcome = _run(gf.MoveJob(game_id, str(dest)), ctx)
     assert (outcome.status, outcome.reason) == ("skipped", gf.TARGET_EXISTS)
-    running = _run(gf.MoveJob(game_id, str(tmp_path)), ctx, _move_hooks(running={game_id}))
+    running = _run(
+        gf.MoveJob(game_id, str(tmp_path)), ctx, _move_hooks(running={game_id})
+    )
     assert (running.status, running.reason) == ("skipped", gf.MOVE_RUNNING)
 
 
@@ -524,7 +534,9 @@ def test_queue_runs_in_order_and_summarizes():
         return gf.MoveOutcome("moved")
 
     queue = gf.MoveQueue(runner)
-    assert queue.enqueue([gf.MoveJob(1, "/d"), gf.MoveJob(2, "/d"), gf.MoveJob(3, "/d")]) == [1, 2, 3]
+    assert queue.enqueue(
+        [gf.MoveJob(1, "/d"), gf.MoveJob(2, "/d"), gf.MoveJob(3, "/d")]
+    ) == [1, 2, 3]
     assert queue.enqueue([gf.MoveJob(4, "/d"), gf.MoveJob(2, "/d")]) == [4]
     deadline = time.monotonic() + 5
     while queue.state(1) != "moving" and time.monotonic() < deadline:
@@ -603,7 +615,14 @@ def test_uninstall_error_in_one_game_keeps_other_results(lib):
         saves_folder=lambda _gid: "",
         release=released.append,
     )
-    results = gf.run_uninstall([first, second], {}, backup=False, remove_from_library=False, hooks=hooks, ctx=ctx)
+    results = gf.run_uninstall(
+        [first, second],
+        {},
+        backup=False,
+        remove_from_library=False,
+        hooks=hooks,
+        ctx=ctx,
+    )
     assert [r["success"] for r in results] == [True, False]
     assert results[1]["error"] == "database is locked"
     assert released == [first]

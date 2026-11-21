@@ -58,14 +58,21 @@ def test_link_root_is_refused_and_real_root_works(lib, tmp_path):
     assert plan["removable"] is False
     assert str(real) in str(plan["reason"])
 
-    results = gf.run_uninstall([game_id], {}, backup=False, remove_from_library=False, hooks=_hooks(), ctx=ctx)
+    results = gf.run_uninstall(
+        [game_id], {}, backup=False, remove_from_library=False, hooks=_hooks(), ctx=ctx
+    )
     assert results[0]["success"] is False
     assert link.is_symlink() and exe.exists()
     game = get_game(game_id)
     assert game is not None and game["exe_path"]
 
     results = gf.run_uninstall(
-        [game_id], {game_id: str(real)}, backup=False, remove_from_library=False, hooks=_hooks(), ctx=ctx
+        [game_id],
+        {game_id: str(real)},
+        backup=False,
+        remove_from_library=False,
+        hooks=_hooks(),
+        ctx=ctx,
     )
     assert results[0]["success"] is True
     assert not real.exists()
@@ -83,7 +90,9 @@ def test_failed_renames_keep_files_and_entry(lib, monkeypatch):
         real_rename(src, dst)
 
     monkeypatch.setattr(gf.os, "rename", refuse)
-    results = gf.run_uninstall([game_id], {}, backup=False, remove_from_library=False, hooks=_hooks(), ctx=ctx)
+    results = gf.run_uninstall(
+        [game_id], {}, backup=False, remove_from_library=False, hooks=_hooks(), ctx=ctx
+    )
     assert results[0]["success"] is False
     assert "nothing was deleted" in str(results[0]["error"])
     assert "Read-only file system" in str(results[0]["error"])
@@ -113,7 +122,12 @@ def test_loose_saves_are_planned_and_backed_up(lib, tmp_path):
         return None
 
     results = gf.run_uninstall(
-        [game_id], {}, backup=True, remove_from_library=False, hooks=_hooks(backup_save_files=backup_files), ctx=ctx
+        [game_id],
+        {},
+        backup=True,
+        remove_from_library=False,
+        hooks=_hooks(backup_save_files=backup_files),
+        ctx=ctx,
     )
     assert results[0]["success"] is True
     assert calls == [(game_id, str(root), ["Save01.rvdata2"])]

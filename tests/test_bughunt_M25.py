@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M25: the requested build must not be pushed out of the shown list by older builds with more seeders."""
+
 from __future__ import annotations
 
 from core.downloads import rpdl_match
@@ -13,7 +14,12 @@ def _older(count: int) -> list[dict[str, object]]:
 
 
 def test_exact_version_survives_cutoff_against_capped_older_builds() -> None:
-    wanted: dict[str, object] = {"id": 99, "title": "Eternum-0.9-pc", "seeders": 1, "date": 1}
+    wanted: dict[str, object] = {
+        "id": 99,
+        "title": "Eternum-0.9-pc",
+        "seeders": 1,
+        "date": 1,
+    }
     results = [*_older(rpdl_match.MAX_SHOWN), wanted]
     ranked = rpdl_match.rank(results, "Eternum", "0.9")
     shown = ranked["results"]

@@ -41,7 +41,11 @@ from core.database import (
 from core.f95zone import normalize_thread_url, thread_match_key, thread_urls_match
 from core.host_platform import is_windows
 from core.store_links import MATCHABLE_SOURCES, coerce_store_links
-from core.thread_details import BASELINE_COLUMN, THREAD_DETAIL_FIELDS, normalize_baseline
+from core.thread_details import (
+    BASELINE_COLUMN,
+    THREAD_DETAIL_FIELDS,
+    normalize_baseline,
+)
 from core.thread_details import column_value as thread_detail_column_value
 
 __all__ = [
@@ -178,7 +182,9 @@ BOOLEAN_SETTINGS_KEYS = frozenset(
     }
 )
 # Exported with the path settings but not filesystem paths, so never host-checked.
-NON_PATH_SETTINGS_KEYS = frozenset({"library_folder_pattern", "download_detection_enabled"})
+NON_PATH_SETTINGS_KEYS = frozenset(
+    {"library_folder_pattern", "download_detection_enabled"}
+)
 
 BOOLEAN_GAME_FIELDS = (
     "thread_completed",
@@ -446,10 +452,16 @@ def _get_settings_payload(keys: Sequence[str]) -> dict[str, str]:
     return {key: values.get(key, "") for key in keys}
 
 
-
 # Older rows store local time without an offset; export them with this
 # device's offset so another time zone reads the same moment.
-_TIME_FIELDS = ("last_played", "date_added", "created_at", "updated_at", "started_at", "ended_at")
+_TIME_FIELDS = (
+    "last_played",
+    "date_added",
+    "created_at",
+    "updated_at",
+    "started_at",
+    "ended_at",
+)
 
 
 def _zone_times(record: dict[str, object]) -> dict[str, object]:
@@ -645,7 +657,9 @@ def write_sync_snapshot(*, prune: bool = True, keep_empty: bool = False) -> str 
     if not keep_empty and not database.get_all_games():
         return None
     name = _snapshot_name(datetime.now(UTC))
-    _ = write_library_backup(os.path.join(folder, name), {"sections": SUPPORTED_SECTIONS})
+    _ = write_library_backup(
+        os.path.join(folder, name), {"sections": SUPPORTED_SECTIONS}
+    )
     if prune:
         prune_sync_snapshots()
     return name
@@ -943,8 +957,12 @@ class _ThreadOwners:
     instead of re-reading and re-parsing every URL for each imported game.
     """
 
-    def __init__(self, cursor: sqlite3.Cursor, column: Literal["f95_url", "lc_url"]) -> None:
-        self._match_key: Callable[[object], str] = thread_match_key if column == "f95_url" else lewdcorner.extract_thread_id
+    def __init__(
+        self, cursor: sqlite3.Cursor, column: Literal["f95_url", "lc_url"]
+    ) -> None:
+        self._match_key: Callable[[object], str] = (
+            thread_match_key if column == "f95_url" else lewdcorner.extract_thread_id
+        )
         self._ids: dict[str, set[int]] = {}
         self._keys: dict[int, str] = {}
         rows = cast(
@@ -1007,22 +1025,29 @@ def _match_imported_game(
             return match
     if thread_conflict:
         return {
-            "status": "ambiguous", "game": imported_game, "title": title,
+            "status": "ambiguous",
+            "game": imported_game,
+            "title": title,
             "reason": "The F95 and LewdCorner threads match different local games.",
-            "candidate_count": len(thread_matches), "candidate_ids": sorted(thread_matches),
+            "candidate_count": len(thread_matches),
+            "candidate_ids": sorted(thread_matches),
             "thread_conflict": True,
         }
     if len(thread_matches) == 1:
         return {
-            "status": "matched", "game": imported_game,
+            "status": "matched",
+            "game": imported_game,
             "local_id": next(iter(thread_matches)),
             "match_type": "f95_url" if f95_matches else "lc_url",
         }
     if len(thread_matches) > 1:
         return {
-            "status": "ambiguous", "game": imported_game, "title": title,
+            "status": "ambiguous",
+            "game": imported_game,
+            "title": title,
             "reason": "Multiple local games share this thread identity.",
-            "candidate_count": len(thread_matches), "candidate_ids": sorted(thread_matches),
+            "candidate_count": len(thread_matches),
+            "candidate_ids": sorted(thread_matches),
         }
 
     title_key, developer_key = _fallback_identity_key(metadata)
@@ -1047,9 +1072,10 @@ def _match_imported_game(
     elif len(linked_games) == 1:
         linked_game = linked_games[0]
         if (
-            (not linked_game.get("f95_url") or (not f95_url and bool(lc_id)) or thread_urls_match(linked_game.get("f95_url"), f95_url))
-            and (not linked_game.get("lc_url") or not lc_id)
-        ):
+            not linked_game.get("f95_url")
+            or (not f95_url and bool(lc_id))
+            or thread_urls_match(linked_game.get("f95_url"), f95_url)
+        ) and (not linked_game.get("lc_url") or not lc_id):
             link_match = {
                 "status": "matched",
                 "game": imported_game,
@@ -1132,7 +1158,8 @@ def _match_imported_game(
         title_matches = [
             game
             for game in index.by_title.get(title_key, [])
-            if not _coerce_text(game.get("f95_url")).strip() and not game.get("lc_url")
+            if not _coerce_text(game.get("f95_url")).strip()
+            and not game.get("lc_url")
             and not _coerce_text(game.get("developer")).strip()
             and (not exe_key or not _coerce_text(game.get("exe_path")).strip())
         ]
@@ -1162,9 +1189,7 @@ def _build_import_plan(
     local_games = _local_games()
     index = _LocalGameIndex(local_games)
     plan = [
-        _match_imported_game(
-            _coerce_mapping(game), local_games, sync=sync, index=index
-        )
+        _match_imported_game(_coerce_mapping(game), local_games, sync=sync, index=index)
         for game in _coerce_sequence(backup.get("games"))
     ]
     _release_duplicate_claims(plan)
@@ -1195,7 +1220,9 @@ def _release_duplicate_claims(plan: list[dict[str, object]]) -> None:
             claims.setdefault(int(str(item.get("local_id", 0))), []).append(item)
 
     def strength(entry: Mapping[str, object]) -> int:
-        return _MATCH_STRENGTH.get(str(entry.get("match_type") or ""), _WEAK_MATCH_STRENGTH)
+        return _MATCH_STRENGTH.get(
+            str(entry.get("match_type") or ""), _WEAK_MATCH_STRENGTH
+        )
 
     def title(entry: Mapping[str, object]) -> str:
         game = _coerce_mapping(entry.get("game"))
@@ -1542,7 +1569,9 @@ def _normalize_game_field(field: str, value: object) -> object:
         return lewdcorner.normalize_mode(value)
     if field == "lc_dismissed":
         dismissed = _coerce_text(value).strip()
-        return dismissed.lstrip("0") if dismissed.isascii() and dismissed.isdigit() else ""
+        return (
+            dismissed.lstrip("0") if dismissed.isascii() and dismissed.isdigit() else ""
+        )
     if field in {"tags", "user_f95_tags"}:
         return _coerce_text(value)
     if field == "f95_tags":
@@ -2029,7 +2058,9 @@ _COLLECTION_SETTING_KEYS = (
 )
 
 
-def _lc_plus_general_group(group: Mapping[str, object], sync: bool) -> dict[str, object]:
+def _lc_plus_general_group(
+    group: Mapping[str, object], sync: bool
+) -> dict[str, object]:
     """Carry an older backup's "I have LC Plus" switch over to the LC Plus mode.
 
     On becomes Yes. Off becomes Auto on a restore, but a sync merge keeps the
@@ -2047,7 +2078,10 @@ def _lc_plus_general_group(group: Mapping[str, object], sync: bool) -> dict[str,
     if "lc_plus" not in result:
         return result
     raw_old = result["lc_plus"]
-    if not isinstance(raw_old, (bool, int, float)) and not _coerce_text(raw_old).strip():
+    if (
+        not isinstance(raw_old, (bool, int, float))
+        and not _coerce_text(raw_old).strip()
+    ):
         return result
     if _coerce_bool(raw_old):
         result[lewdcorner.LC_PLUS_MODE] = "yes"
@@ -2121,7 +2155,11 @@ def _import_setting_groups(
                 except ValueError:
                     incoming = []
                 names = (
-                    [name for name in cast(list[object], incoming) if isinstance(name, str)]
+                    [
+                        name
+                        for name in cast(list[object], incoming)
+                        if isinstance(name, str)
+                    ]
                     if isinstance(incoming, list)
                     else []
                 )
@@ -2188,13 +2226,19 @@ def _is_thread_less_fallback(
     if item.get("match_type") == "sync_uid":
         return False
     metadata = _game_section(imported_game, SECTION_METADATA)
-    if normalize_thread_url(metadata.get("f95_url")) or lewdcorner.extract_thread_id(metadata.get("lc_url")):
+    if normalize_thread_url(metadata.get("f95_url")) or lewdcorner.extract_thread_id(
+        metadata.get("lc_url")
+    ):
         return False
     row = cast(
         sqlite3.Row | None,
-        cursor.execute("SELECT f95_url, lc_url FROM games WHERE id = ?", (local_id,)).fetchone(),
+        cursor.execute(
+            "SELECT f95_url, lc_url FROM games WHERE id = ?", (local_id,)
+        ).fetchone(),
     )
-    return row is not None and bool(cast(object, row["f95_url"]) or cast(object, row["lc_url"]))
+    return row is not None and bool(
+        cast(object, row["f95_url"]) or cast(object, row["lc_url"])
+    )
 
 
 def _filter_fill_missing(
@@ -2237,7 +2281,10 @@ def _is_fill_missing_empty(field: str, local_value: object) -> bool:
         return database.normalize_tool_override(local_value) == "default"
     if field == "html_player":
         return database.normalize_html_player(local_value) == ""
-    if field in database.THREAD_STATE_COLUMNS or field == database.THREAD_STATES_AT_COLUMN:
+    if (
+        field in database.THREAD_STATE_COLUMNS
+        or field == database.THREAD_STATES_AT_COLUMN
+    ):
         return local_value is None
     if field == "play_status":
         if local_value is None:
@@ -2312,7 +2359,9 @@ def _prune_held_attachments() -> None:
     keep: set[str] = set()
     folder = sync_snapshot_dir()
     try:
-        names = [entry for entry in os.listdir(folder) if _SYNC_SNAPSHOT_RE.match(entry)]
+        names = [
+            entry for entry in os.listdir(folder) if _SYNC_SNAPSHOT_RE.match(entry)
+        ]
     except FileNotFoundError:
         names = []
     except OSError:
@@ -2406,7 +2455,10 @@ def apply_library_backup(
                     cursor, backup, merge_mode
                 )
 
-            owners = {column: _ThreadOwners(cursor, column) for column in ("f95_url", "lc_url")}
+            owners = {
+                column: _ThreadOwners(cursor, column)
+                for column in ("f95_url", "lc_url")
+            }
             # A game split off a UID-matched row goes last, so that row first
             # gives up the thread the split game now holds.
             for item in sorted(plan, key=lambda entry: bool(entry.get("separate"))):
@@ -2418,7 +2470,9 @@ def apply_library_backup(
                     status = "sync_separate"
                 if status == "ambiguous":
                     ambiguous += 1
-                    if item.get("thread_conflict") or not (sync and _sync_uid(imported_game.get("uid"))):
+                    if item.get("thread_conflict") or not (
+                        sync and _sync_uid(imported_game.get("uid"))
+                    ):
                         skipped += 1
                         continue
                     # Skipping a synced game would drop it from the other
@@ -2436,8 +2490,11 @@ def apply_library_backup(
                     # copy merges into the row created earlier in this import
                     # instead of adding a second game for the same thread.
                     metadata = _game_section(imported_game, SECTION_METADATA)
-                    matched = {owner for column, index in owners.items()
-                               if (owner := index.owner(metadata.get(column))) is not None}
+                    matched = {
+                        owner
+                        for column, index in owners.items()
+                        if (owner := index.owner(metadata.get(column))) is not None
+                    }
                     if len(matched) > 1:
                         ambiguous += 1
                         skipped += 1
@@ -2477,11 +2534,15 @@ def apply_library_backup(
                         if url_owner is not None and url_owner != local_id:
                             _ = fields.pop(column)
                             title = _coerce_text(
-                                _game_section(imported_game, SECTION_METADATA).get("title")
+                                _game_section(imported_game, SECTION_METADATA).get(
+                                    "title"
+                                )
                             )
                             warnings.append(
                                 {
-                                    "type": "duplicate_url", "scope": "game", "title": title,
+                                    "type": "duplicate_url",
+                                    "scope": "game",
+                                    "title": title,
                                     "message": f"{title or 'Game'}: thread URL kept unchanged because another game already uses it.",
                                 }
                             )
@@ -2541,13 +2602,11 @@ def apply_library_backup(
                     local_id is None or SECTION_METADATA in sections
                 ):
                     keep_links = (
-                        (merge_mode == "fill_missing" or metadata_fill_only)
-                        and cursor.execute(
-                            "SELECT 1 FROM game_links WHERE game_id = ? LIMIT 1",
-                            (game_id,),
-                        ).fetchone()
-                        is not None
-                    )
+                        merge_mode == "fill_missing" or metadata_fill_only
+                    ) and cursor.execute(
+                        "SELECT 1 FROM game_links WHERE game_id = ? LIMIT 1",
+                        (game_id,),
+                    ).fetchone() is not None
                     if not keep_links:
                         replace_game_links(
                             game_id,
@@ -2588,7 +2647,9 @@ def apply_library_backup(
                                     (game_id,),
                                 ).fetchone(),
                             )
-                            keep_local_label = bool(row is not None and str(row[0] or "").strip())
+                            keep_local_label = bool(
+                                row is not None and str(row[0] or "").strip()
+                            )
                         if not keep_local_label:
                             _ = cursor.execute(
                                 "UPDATE games SET default_target_label = ? WHERE id = ?",
@@ -2624,7 +2685,9 @@ def apply_library_backup(
                         ).fetchone(),
                     )
                     if row is not None:
-                        replaced_covers.append(str(cast(object, row["cover_local"]) or ""))
+                        replaced_covers.append(
+                            str(cast(object, row["cover_local"]) or "")
+                        )
                         deleted_uids[game_id] = str(cast(object, row["sync_uid"]) or "")
                     _ = cursor.execute("DELETE FROM games WHERE id = ?", (game_id,))
                     deleted += 1
@@ -2786,7 +2849,9 @@ def import_external_library(
     from core.external_import import read_external_library
 
     backup, stats = read_external_library(source, path)
-    result = apply_library_backup(backup, _external_import_options(options), source_covers=True)
+    result = apply_library_backup(
+        backup, _external_import_options(options), source_covers=True
+    )
     if SECTION_USER_STATE in _coerce_sequence(result.get("selected_sections")):
         try:
             _register_imported_collections(backup)

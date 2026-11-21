@@ -5,7 +5,14 @@ from core.downloads import rpdl_match as m
 
 
 def _r(i, title, seeders=5, date=1):
-    return {"id": i, "title": title, "seeders": seeders, "leechers": 0, "size": 1, "date": date}
+    return {
+        "id": i,
+        "title": title,
+        "seeders": seeders,
+        "leechers": 0,
+        "size": 1,
+        "date": date,
+    }
 
 
 @pytest.mark.parametrize(
@@ -26,7 +33,10 @@ def test_same_game_scores_high(game, title):
 
 
 def test_sequel_number_differs():
-    assert m.title_score("Game 2", "Game-2-1.0") > m.title_score("Game 2", "Game-3-1.0") + 30
+    assert (
+        m.title_score("Game 2", "Game-2-1.0")
+        > m.title_score("Game 2", "Game-3-1.0") + 30
+    )
     assert m.title_score("Game 2", "Game-3-1.0") < 40
 
 
@@ -70,7 +80,11 @@ def test_versions_compare_with_suffixes():
 
 
 def test_query_plan_falls_back_in_order():
-    assert m.plan_queries("Game Name [v0.5]", "Dev") == ["Game Name [v0.5]", "Game Name", "Game Name Dev"]
+    assert m.plan_queries("Game Name [v0.5]", "Dev") == [
+        "Game Name [v0.5]",
+        "Game Name",
+        "Game Name Dev",
+    ]
     assert m.plan_queries("Game Name", "") == ["Game Name"]
     assert m.plan_queries("A!", "") == []
 
@@ -93,7 +107,9 @@ def test_clear_match_preselected():
 
 
 def test_two_close_matches_need_a_choice():
-    out = m.rank([_r(1, "Eternum-0.8-pc"), _r(2, "Eternum-0.8-fix2-linux")], "Eternum", "0.8")
+    out = m.rank(
+        [_r(1, "Eternum-0.8-pc"), _r(2, "Eternum-0.8-fix2-linux")], "Eternum", "0.8"
+    )
     assert out["preselected_id"] is None and out["needs_choice"] is True
     assert len(out["results"]) == 2
 
@@ -127,7 +143,9 @@ def test_joined_season_or_sequel_number_counts():
     assert m.title_score("Game", "GameSeason2-1.0") < m.HIDE_BELOW
     assert m.title_score("Game Season 2", "GameSeason2-1.0") >= 90
     assert m.title_score("Game Season 2", "GameSeason3-1.0") < m.HIDE_BELOW
-    assert m.title_score("Game 2", "Game2-1.0") > m.title_score("Game 2", "Game3-1.0") + 30
+    assert (
+        m.title_score("Game 2", "Game2-1.0") > m.title_score("Game 2", "Game3-1.0") + 30
+    )
     assert m.title_score("Area51", "Area 51-0.3") >= 90
     assert m.title_score("Game", "Game-0.5-win10") >= 90
     assert m.title_score("Game", "Game-1.0-pc64") >= 90

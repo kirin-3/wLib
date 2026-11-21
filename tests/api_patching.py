@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Patch a name that the ``core.api_mixins`` modules import."""
+
 import sys
 
 import pytest
@@ -19,7 +20,9 @@ def patch_api_name(monkeypatch: pytest.MonkeyPatch, name: str, value: object) ->
     for module_name, module in list(sys.modules.items()):
         if module is None:
             continue
-        if module_name != MIXIN_PACKAGE and not module_name.startswith(MIXIN_PACKAGE + "."):
+        if module_name != MIXIN_PACKAGE and not module_name.startswith(
+            MIXIN_PACKAGE + "."
+        ):
             continue
         if name in vars(module):
             monkeypatch.setattr(module, name, value)

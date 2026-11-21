@@ -38,7 +38,13 @@ def test_no_battery(tmp_path):
 
 
 def test_peripheral_battery_is_ignored(tmp_path):
-    supply(tmp_path, "hidpp_battery_0", type="Battery", status="Discharging", scope="Device")
+    supply(
+        tmp_path,
+        "hidpp_battery_0",
+        type="Battery",
+        status="Discharging",
+        scope="Device",
+    )
     assert power.linux_on_battery(str(tmp_path)) is None
 
 

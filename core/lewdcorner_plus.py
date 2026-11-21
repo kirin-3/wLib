@@ -6,6 +6,7 @@ through the browser extension, as a background LC request. A signed-in page
 in a Plus forum means Plus; LC's signed-in 403 error page means Standard; any
 other page says nothing. The result and its time stay on this device.
 """
+
 from __future__ import annotations
 
 import logging
@@ -105,10 +106,14 @@ def detect(trigger: Trigger) -> Detection:
         for thread_id in candidates:
             try:
                 response = extension_bridge.fetch(
-                    f"https://lewdcorner.com/threads/{thread_id}/", site="lc", background=True
+                    f"https://lewdcorner.com/threads/{thread_id}/",
+                    site="lc",
+                    background=True,
                 )
             except extension_bridge.BridgeUnavailable:
-                logger.info("LC Plus check stopped: no extension can fetch from LewdCorner")
+                logger.info(
+                    "LC Plus check stopped: no extension can fetch from LewdCorner"
+                )
                 break
             except extension_bridge.BridgeFailed as exc:
                 failed = True
@@ -117,8 +122,13 @@ def detect(trigger: Trigger) -> Detection:
             read = True
             signal = lewdcorner.tier_signal(response.body, response.status)
             # Never log the page body: it is the user's signed-in page.
-            logger.info("LC Plus check (%s): thread %s, HTTP %s, %s",
-                        trigger, thread_id, response.status, signal or "unknown")
+            logger.info(
+                "LC Plus check (%s): thread %s, HTTP %s, %s",
+                trigger,
+                thread_id,
+                response.status,
+                signal or "unknown",
+            )
             if signal:
                 break
         if not read:
@@ -131,7 +141,9 @@ def detect(trigger: Trigger) -> Detection:
 
 def start(trigger: Trigger) -> None:
     """Run a detection in a background thread."""
-    threading.Thread(target=detect, kwargs={"trigger": trigger}, name="lc-plus-detect", daemon=True).start()
+    threading.Thread(
+        target=detect, kwargs={"trigger": trigger}, name="lc-plus-detect", daemon=True
+    ).start()
 
 
 def note_thread_page(thread_id: str, body: str, status: int) -> None:
@@ -141,7 +153,10 @@ def note_thread_page(thread_id: str, body: str, status: int) -> None:
     not show the forum) counts only for a thread the catalog marks Premium.
     """
     try:
-        if lewdcorner.plus_mode(database.get_setting(lewdcorner.LC_PLUS_MODE)) != "auto":
+        if (
+            lewdcorner.plus_mode(database.get_setting(lewdcorner.LC_PLUS_MODE))
+            != "auto"
+        ):
             return
         signal = lewdcorner.tier_signal(body, status)
         if signal == "standard":

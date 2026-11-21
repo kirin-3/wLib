@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The shared speed limit: the token bucket and the host/torrent split (design D8)."""
+
 from __future__ import annotations
 
 import io
@@ -99,7 +100,9 @@ def test_cancel_returns_at_once_during_a_wait():
     limiter.set_rate(1024)
     stop = Event()
     result: list[bool] = []
-    worker = threading.Thread(target=lambda: result.append(limiter.acquire(1024 * 1024, stop)))
+    worker = threading.Thread(
+        target=lambda: result.append(limiter.acquire(1024 * 1024, stop))
+    )
     started = time.monotonic()
     worker.start()
     time.sleep(0.1)
@@ -117,8 +120,12 @@ def test_transfer_loop_uses_the_limiter(tmp_path):
     data = b"PK\x03\x04" + b"x" * (256 * 1024)
     limiter, fake = _limiter(128 * 1024)
     path = transfer(
-        FileInfo("game.zip", len(data), lambda: io.BytesIO(data)), "paced", Event(), lambda *_: None,
-        directory=tmp_path, limiter=limiter,
+        FileInfo("game.zip", len(data), lambda: io.BytesIO(data)),
+        "paced",
+        Event(),
+        lambda *_: None,
+        directory=tmp_path,
+        limiter=limiter,
     )
     assert path.read_bytes() == data
     # 256 KiB at 128 KiB/s with a quarter-second burst: at least 1.75 s.
@@ -137,7 +144,9 @@ def test_transfer_loop_uses_the_limiter(tmp_path):
         (5, 1, 1, 0.0, 5.0),
     ],
 )
-def test_shares_always_add_up_to_the_limit(limit, host_n, torrent_n, host_used, torrent_used):
+def test_shares_always_add_up_to_the_limit(
+    limit, host_n, torrent_n, host_used, torrent_used
+):
     host, torrent = split_limit(limit, host_n, torrent_n, host_used, torrent_used)
     assert host + torrent == limit
     assert host >= 0 and torrent >= 0
@@ -162,4 +171,7 @@ def test_unused_share_moves_to_the_other_side():
     host, torrent = split_limit(1000, 1, 1, host_used_kib=0.0, torrent_used_kib=500.0)
     assert (host, torrent) == (100, 900)
     # Both under-use: the split by job count stays.
-    assert split_limit(1000, 1, 1, host_used_kib=10.0, torrent_used_kib=10.0) == (500, 500)
+    assert split_limit(1000, 1, 1, host_used_kib=10.0, torrent_used_kib=10.0) == (
+        500,
+        500,
+    )

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Saving port mapping reaches a running torrent helper."""
+
 import pytest
 
 from core.downloads import torrent_settings, torrents
@@ -17,9 +18,13 @@ def _flags(engine: Engine) -> tuple[bool, bool]:
 def test_set_limits_turns_port_mapping_on_and_off_in_a_running_session():
     engine = Engine(lambda event: None, {"port_mapping": False})
     assert _flags(engine) == (False, False)
-    engine.handle({"cmd": "set_limits", "download_kib": 0, "upload_kib": 0, "port_mapping": True})
+    engine.handle(
+        {"cmd": "set_limits", "download_kib": 0, "upload_kib": 0, "port_mapping": True}
+    )
     assert _flags(engine) == (True, True)
-    engine.handle({"cmd": "set_limits", "download_kib": 0, "upload_kib": 0, "port_mapping": False})
+    engine.handle(
+        {"cmd": "set_limits", "download_kib": 0, "upload_kib": 0, "port_mapping": False}
+    )
     assert _flags(engine) == (False, False)
 
 
@@ -38,4 +43,6 @@ def test_apply_limits_sends_the_saved_port_mapping(monkeypatch):
     monkeypatch.setattr(torrent_settings, "port_mapping", lambda: True)
     assert torrents.torrent_settings is torrent_settings
     sup.apply_limits()
-    assert sent == [{"cmd": "set_limits", "download_kib": 0, "upload_kib": 7, "port_mapping": True}]
+    assert sent == [
+        {"cmd": "set_limits", "download_kib": 0, "upload_kib": 7, "port_mapping": True}
+    ]

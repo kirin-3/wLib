@@ -297,7 +297,8 @@ def read_entry(
     if not target or max_bytes < 0:
         return None
     archives = sorted(
-        discover_archives(folder), key=lambda archive: (archive.backup, archive.filename)
+        discover_archives(folder),
+        key=lambda archive: (archive.backup, archive.filename),
     )
     step = max(4, CHUNK_SIZE & ~3)
     for archive in archives:
@@ -373,7 +374,9 @@ def extract_archives(
         skipped_invalid += index.skipped_invalid
         if mode == "folder":
             stem, _ext = os.path.splitext(archive.name)
-            root = export_root(output_real, folder_real, stem or "archive", used_targets)
+            root = export_root(
+                output_real, folder_real, stem or "archive", used_targets
+            )
             root_real = os.path.realpath(root)
         else:
             root = folder
@@ -449,9 +452,7 @@ def extract_archives(
 # ── Tab state and in-game switch ──
 
 
-def _count_loose_files(
-    folder: str, indexes: list[RgssIndex]
-) -> tuple[int, int]:
+def _count_loose_files(folder: str, indexes: list[RgssIndex]) -> tuple[int, int]:
     """Return (missing, differs) across unique safe entries of `indexes`."""
     folder_real = os.path.realpath(folder)
     seen: set[str] = set()

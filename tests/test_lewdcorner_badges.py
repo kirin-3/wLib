@@ -73,14 +73,22 @@ run().catch(error => { console.error(error); process.exitCode = 1; });
 """
 
 
-@pytest.mark.parametrize("code", ["pairing_required", "pairing_denied", "extension_outdated"])
+@pytest.mark.parametrize(
+    "code", ["pairing_required", "pairing_denied", "extension_outdated"]
+)
 def test_lewdcorner_cards_retry_after_pairing_error(code):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Requires Node.js")
     result = subprocess.run(
-        [node, "-e", SCENARIO, str(EXTENSION / "background.js"),
-         str(EXTENSION / "sites" / "lewdcorner.js"), code],
+        [
+            node,
+            "-e",
+            SCENARIO,
+            str(EXTENSION / "background.js"),
+            str(EXTENSION / "sites" / "lewdcorner.js"),
+            code,
+        ],
         capture_output=True,
         text=True,
         timeout=15,
@@ -146,7 +154,13 @@ def test_lewdcorner_card_checks(scenario):
     if node is None:
         pytest.skip("Requires Node.js")
     result = subprocess.run(
-        [node, "-e", CARD_SCENARIO, str(EXTENSION / "sites" / "lewdcorner.js"), scenario],
+        [
+            node,
+            "-e",
+            CARD_SCENARIO,
+            str(EXTENSION / "sites" / "lewdcorner.js"),
+            scenario,
+        ],
         capture_output=True,
         text=True,
         timeout=15,

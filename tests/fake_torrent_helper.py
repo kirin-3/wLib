@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A stand-in torrent helper for supervisor tests; behaviour comes from FAKE_MODE."""
+
 import json
 import os
 import sys
@@ -35,7 +36,13 @@ def launches():
 def main():
     n = launches()
     if MODE == "noimport":
-        emit({"event": "error", "message": "Torrent downloads are unavailable in this build", "code": "engine_missing"})
+        emit(
+            {
+                "event": "error",
+                "message": "Torrent downloads are unavailable in this build",
+                "code": "engine_missing",
+            }
+        )
         sys.exit(3)
     jobs = {}
     adds = 0
@@ -51,10 +58,22 @@ def main():
             if MODE == "crash_always" or (MODE == "crash_once" and n == 0):
                 sys.exit(1)
             if MODE == "badpaths":
-                emit({"event": "error", "id": cmd["id"], "message": "x", "code": "unsafe_paths"})
+                emit(
+                    {
+                        "event": "error",
+                        "id": cmd["id"],
+                        "message": "x",
+                        "code": "unsafe_paths",
+                    }
+                )
                 continue
             # error_once: the first torrent added hits a write error.
-            jobs[cmd["id"]] = {"dir": cmd["dir"], "paused": cmd["paused"], "done": 0.0, "error": MODE == "error_once" and adds == 0}
+            jobs[cmd["id"]] = {
+                "dir": cmd["dir"],
+                "paused": cmd["paused"],
+                "done": 0.0,
+                "error": MODE == "error_once" and adds == 0,
+            }
             adds += 1
         elif name in ("pause", "resume"):
             if cmd["id"] not in jobs:
@@ -75,12 +94,55 @@ def main():
                     data = os.path.join(job["dir"], "data")
                     os.makedirs(data, exist_ok=True)
                     open(os.path.join(data, "game.zip"), "wb").write(b"PK")
-                    emit({"event": "status", "torrents": [{"id": job_id, "state": "seeding", "size": 100, "downloaded": 100, "down": 0, "up": 0, "peers": peers, "seeds": 1, "uploaded": 0, "seeding_seconds": 0, "finished": True, "paused": False, "progress": 1.0, "tracker": ""}]})
+                    emit(
+                        {
+                            "event": "status",
+                            "torrents": [
+                                {
+                                    "id": job_id,
+                                    "state": "seeding",
+                                    "size": 100,
+                                    "downloaded": 100,
+                                    "down": 0,
+                                    "up": 0,
+                                    "peers": peers,
+                                    "seeds": 1,
+                                    "uploaded": 0,
+                                    "seeding_seconds": 0,
+                                    "finished": True,
+                                    "paused": False,
+                                    "progress": 1.0,
+                                    "tracker": "",
+                                }
+                            ],
+                        }
+                    )
                     emit({"event": "finished", "id": job_id})
         elif MODE in ("stalled", "crash_once", "crash_always", "error_once"):
-            emit({"event": "status", "torrents": [
-                {"id": job_id, "state": "error" if job["error"] else "downloading", "size": 100, "downloaded": 30, "down": int(os.environ.get("FAKE_SPEED", "0")), "up": 0, "peers": peers, "seeds": 0, "uploaded": 0, "seeding_seconds": 0, "finished": False, "paused": job["paused"], "progress": 0.3, "tracker": ""}
-                for job_id, job in jobs.items()]})
+            emit(
+                {
+                    "event": "status",
+                    "torrents": [
+                        {
+                            "id": job_id,
+                            "state": "error" if job["error"] else "downloading",
+                            "size": 100,
+                            "downloaded": 30,
+                            "down": int(os.environ.get("FAKE_SPEED", "0")),
+                            "up": 0,
+                            "peers": peers,
+                            "seeds": 0,
+                            "uploaded": 0,
+                            "seeding_seconds": 0,
+                            "finished": False,
+                            "paused": job["paused"],
+                            "progress": 0.3,
+                            "tracker": "",
+                        }
+                        for job_id, job in jobs.items()
+                    ],
+                }
+            )
 
 
 main()

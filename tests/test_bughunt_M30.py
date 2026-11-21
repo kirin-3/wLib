@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M30: the library database holds host account secrets, so only the owner may read it."""
+
 import os
 import sqlite3
 import stat

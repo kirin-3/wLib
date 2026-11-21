@@ -21,7 +21,9 @@ from core.api import Api
 
 
 def _make_extension_handler(path, matching_game=None, headers=None):
-    handler = server_module.ExtensionRequestHandler.__new__(server_module.ExtensionRequestHandler)
+    handler = server_module.ExtensionRequestHandler.__new__(
+        server_module.ExtensionRequestHandler
+    )
     handler.path = path
     message_headers = Message()
     # Paired by default (see conftest); a test of the gate sends its own header.
@@ -48,7 +50,8 @@ def test_cover_route_is_read_only_without_cors(tmp_path, monkeypatch, extension)
     source = tmp_path / "source.png"
     data = (
         (Path(__file__).parent / "fixtures/playnite/avif/cover.png").read_bytes()
-        if extension == "avif" else b"\x89PNG\r\n\x1a\nimage"
+        if extension == "avif"
+        else b"\x89PNG\r\n\x1a\nimage"
     )
     source.write_bytes(data)
     name = game_covers.copy_cover_file(source)
@@ -125,7 +128,9 @@ def test_dropbox_callback_without_origin(monkeypatch):
 )
 @pytest.mark.parametrize("success,status", [(True, 200), (False, 400)])
 def test_sync_oauth_callbacks_over_http(path, method, label, success, status):
-    server = server_module.ExtensionServer(("127.0.0.1", 0), server_module.ExtensionRequestHandler)
+    server = server_module.ExtensionServer(
+        ("127.0.0.1", 0), server_module.ExtensionRequestHandler
+    )
     server.sync_api = MagicMock()
     getattr(server.sync_api, method).return_value = {"success": success}
     thread = threading.Thread(
@@ -306,7 +311,9 @@ def extension_server(tmp_path, monkeypatch):
     # Requests resolve links against the library, so never touch the real one.
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "extension.db"))
     database.init_db()
-    server = server_module.ThreadingHTTPServer(("127.0.0.1", 0), server_module.ExtensionRequestHandler)
+    server = server_module.ThreadingHTTPServer(
+        ("127.0.0.1", 0), server_module.ExtensionRequestHandler
+    )
     thread = threading.Thread(
         target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
     )
@@ -350,7 +357,9 @@ def test_extension_request_validates_host_and_origin(
 ):
     lookup = MagicMock(return_value={"play_status": "Playing"})
     window = MagicMock()
-    monkeypatch.setattr(server_module.ExtensionRequestHandler, "_find_matching_game", lookup)
+    monkeypatch.setattr(
+        server_module.ExtensionRequestHandler, "_find_matching_game", lookup
+    )
     monkeypatch.setattr(server_module, "window_ref", window)
     monkeypatch.setattr(server_module, "DEV_MODE", dev_mode)
     connection = HTTPConnection(*extension_server.server_address, timeout=3)
@@ -404,7 +413,9 @@ def test_extension_open_requires_extension_origin_or_header(
     window = MagicMock()
     monkeypatch.setattr(server_module, "window_ref", window)
     monkeypatch.setattr(
-        server_module.ExtensionRequestHandler, "_find_matching_game", lambda _self, _url: None
+        server_module.ExtensionRequestHandler,
+        "_find_matching_game",
+        lambda _self, _url: None,
     )
     connection = HTTPConnection(*extension_server.server_address, timeout=3)
     try:
@@ -486,7 +497,11 @@ def test_extension_wishlist_saves_without_executable_and_rejects_duplicate(
                 "POST",
                 "/api/wishlist",
                 body,
-                headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib", "X-wLib-Extension": PAIRED_EXTENSION_TOKEN},
+                headers={
+                    "Host": "localhost:8183",
+                    "Origin": "chrome-extension://wlib",
+                    "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+                },
             )
             reply = connection.getresponse()
             return reply.status, json.loads(reply.read())
@@ -532,7 +547,9 @@ def test_extension_wishlist_rejects_web_origin_and_oversized_body(
         # The oversized body is sent in full, as a browser would, so the reply
         # must arrive as a 413 rather than a connection reset.
         connection.endheaders(
-            b"{}" if not oversized else b" " * (server_module.MAX_EXTENSION_BODY_BYTES + 1)
+            b"{}"
+            if not oversized
+            else b" " * (server_module.MAX_EXTENSION_BODY_BYTES + 1)
         )
         reply = connection.getresponse()
         assert reply.status == expected_status
@@ -565,7 +582,11 @@ def test_extension_wishlist_requires_title_and_thread_url(
             "POST",
             "/api/wishlist",
             json.dumps(payload),
-            headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib", "X-wLib-Extension": PAIRED_EXTENSION_TOKEN},
+            headers={
+                "Host": "localhost:8183",
+                "Origin": "chrome-extension://wlib",
+                "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+            },
         )
         reply = connection.getresponse()
         assert reply.status == 400
@@ -634,10 +655,14 @@ def test_bind_extension_server_uses_threaded_loopback_server(monkeypatch):
 
 
 def test_second_instance_cannot_share_the_extension_port():
-    first = server_module.ExtensionServer(("127.0.0.1", 0), server_module.ExtensionRequestHandler)
+    first = server_module.ExtensionServer(
+        ("127.0.0.1", 0), server_module.ExtensionRequestHandler
+    )
     try:
         with pytest.raises(OSError):
-            server_module.ExtensionServer(first.server_address, server_module.ExtensionRequestHandler)
+            server_module.ExtensionServer(
+                first.server_address, server_module.ExtensionRequestHandler
+            )
     finally:
         first.server_close()
 
@@ -647,14 +672,20 @@ def test_extension_get_rejects_prefix_squat_paths(monkeypatch, extension_server,
     window = MagicMock()
     monkeypatch.setattr(server_module, "window_ref", window)
     monkeypatch.setattr(
-        server_module.ExtensionRequestHandler, "_find_matching_game", lambda _s, _u: None
+        server_module.ExtensionRequestHandler,
+        "_find_matching_game",
+        lambda _s, _u: None,
     )
     connection = HTTPConnection(*extension_server.server_address, timeout=3)
     try:
         connection.request(
             "GET",
             f"{path}?url=https://f95zone.to/threads/demo.123/",
-            headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib", "X-wLib-Extension": PAIRED_EXTENSION_TOKEN},
+            headers={
+                "Host": "localhost:8183",
+                "Origin": "chrome-extension://wlib",
+                "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+            },
         )
         response = connection.getresponse()
         _ = response.read()
@@ -685,9 +716,7 @@ def _bridge_request(
         if upgrade:
             connection.putheader("Upgrade", "websocket")
             connection.putheader("Connection", "Upgrade")
-            connection.putheader(
-                "Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="
-            )
+            connection.putheader("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
             connection.putheader("Sec-WebSocket-Version", "13")
         connection.endheaders()
         response = connection.getresponse()
@@ -740,7 +769,9 @@ def test_bridge_handshake_uses_http_1_1_status_line(extension_server, monkeypatc
     )
     with socket.create_connection(extension_server.server_address, timeout=3) as sock:
         sock.sendall(
-            b"GET /api/bridge?token=" + PAIRED_EXTENSION_TOKEN.encode() + b" HTTP/1.1\r\n"
+            b"GET /api/bridge?token="
+            + PAIRED_EXTENSION_TOKEN.encode()
+            + b" HTTP/1.1\r\n"
             b"Host: localhost:8183\r\n"
             b"Origin: moz-extension://wlib\r\n"
             b"Upgrade: websocket\r\n"
@@ -798,7 +829,11 @@ def test_store_page_wishlist_check_open_and_thread_links(
     monkeypatch.setattr(server_module, "api_ref", api)
     window = MagicMock()
     monkeypatch.setattr(server_module, "window_ref", window)
-    headers = {"Host": "localhost:8183", "Origin": "chrome-extension://wlib", "X-wLib-Extension": PAIRED_EXTENSION_TOKEN}
+    headers = {
+        "Host": "localhost:8183",
+        "Origin": "chrome-extension://wlib",
+        "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+    }
     page = "https://www.dlsite.com/maniax/work/=/product_id/RJ123.html"
     payload = {"title": "Work", "pageUrl": page, "links": [{"url": page}]}
     connection = HTTPConnection(*extension_server.server_address, timeout=3)
@@ -871,9 +906,7 @@ def test_store_page_wishlist_check_open_and_thread_links(
         connection.close()
 
 
-def test_wishlist_waits_for_startup_database(
-    monkeypatch, extension_server, tmp_path
-):
+def test_wishlist_waits_for_startup_database(monkeypatch, extension_server, tmp_path):
     from core import database
 
     # The app serves this port before Api() has run init_db(). A wishlist call
@@ -894,7 +927,11 @@ def test_wishlist_waits_for_startup_database(
                     "url": "https://f95zone.to/threads/wishlist.555/",
                 }
             ),
-            headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib", "X-wLib-Extension": PAIRED_EXTENSION_TOKEN},
+            headers={
+                "Host": "localhost:8183",
+                "Origin": "chrome-extension://wlib",
+                "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+            },
         )
         response = connection.getresponse()
         assert response.status == 503
@@ -920,7 +957,11 @@ def test_database_endpoints_wait_until_startup_has_run_init_db(
         "_build_check_payload",
         lambda _s, url, _ids: find_calls.append(url) or {"exists": False},
     )
-    headers = {"Host": "localhost:8183", "Origin": "chrome-extension://wlib", "X-wLib-Extension": PAIRED_EXTENSION_TOKEN}
+    headers = {
+        "Host": "localhost:8183",
+        "Origin": "chrome-extension://wlib",
+        "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+    }
     links = json.dumps({"url": "https://f95zone.to/threads/123/", "links": []})
     connection = HTTPConnection(*extension_server.server_address, timeout=3)
     try:
@@ -975,7 +1016,9 @@ def test_cached_cover_route(tmp_path, monkeypatch):
     assert handler.wfile.getvalue() == data
 
 
-@pytest.mark.parametrize("name", ["", "../wlib.db", "%2e%2e/wlib.db", "a" * 64 + ".png", "a" * 32 + ".png"])
+@pytest.mark.parametrize(
+    "name", ["", "../wlib.db", "%2e%2e/wlib.db", "a" * 64 + ".png", "a" * 32 + ".png"]
+)
 def test_cached_cover_route_rejects_invalid_names(name):
     handler = _make_extension_handler("/covers/cache/" + name)
     handler.send_error = MagicMock()
@@ -986,42 +1029,49 @@ def test_cached_cover_route_rejects_invalid_names(name):
 def test_runner_endpoints_require_token_and_notify_window(monkeypatch, tmp_path):
     from core import steam_runner
 
-    monkeypatch.setattr(steam_runner, 'get_data_dir', lambda: str(tmp_path))
+    monkeypatch.setattr(steam_runner, "get_data_dir", lambda: str(tmp_path))
     token = steam_runner.runner_token()
     assert steam_runner.runner_token() == token
-    if os.name != 'nt':  # Windows has no POSIX mode bits; the profile folder guards it.
-        assert (tmp_path / 'runner-token').stat().st_mode & 0o077 == 0
+    if os.name != "nt":  # Windows has no POSIX mode bits; the profile folder guards it.
+        assert (tmp_path / "runner-token").stat().st_mode & 0o077 == 0
     api = MagicMock()
     api.get_running_games.return_value = [12]
-    api.reserve_runner_launch.return_value = 'Busy installing'
-    monkeypatch.setattr(server_module, 'api_ref', api)
+    api.reserve_runner_launch.return_value = "Busy installing"
+    monkeypatch.setattr(server_module, "api_ref", api)
     window = MagicMock()
-    monkeypatch.setattr(server_module, 'window_ref', window)
-    denied = _make_extension_handler('/api/running')
+    monkeypatch.setattr(server_module, "window_ref", window)
+    denied = _make_extension_handler("/api/running")
     denied.do_GET()
     denied.send_response.assert_called_once_with(403)
     # The extension header alone is not enough: a sandboxed game can send it.
-    denied = _make_extension_handler('/api/running', headers={'X-wLib-Extension': '1'})
+    denied = _make_extension_handler("/api/running", headers={"X-wLib-Extension": "1"})
     denied.do_GET()
     denied.send_response.assert_called_once_with(403)
-    runner = {'X-wLib-Extension': '1', 'X-wLib-Runner': token}
-    handler = _make_extension_handler('/api/running', headers=runner)
+    runner = {"X-wLib-Extension": "1", "X-wLib-Runner": token}
+    handler = _make_extension_handler("/api/running", headers=runner)
     handler.do_GET()
-    assert json.loads(handler.wfile.getvalue())['games'] == [12]
+    assert json.loads(handler.wfile.getvalue())["games"] == [12]
     payload = b'{"gameId": 12, "prefix": "/p", "sandboxed": true}'
-    handler = _make_extension_handler('/api/launch-check', headers={**runner, 'Content-Length': str(len(payload))})
-    handler.__dict__['rfile'] = BytesIO(payload)
+    handler = _make_extension_handler(
+        "/api/launch-check", headers={**runner, "Content-Length": str(len(payload))}
+    )
+    handler.__dict__["rfile"] = BytesIO(payload)
     handler.do_POST()
-    assert json.loads(handler.wfile.getvalue()) == {'success': False, 'error': 'Busy installing'}
-    assert api.reserve_runner_launch.call_args.args == (12, '/p')
-    assert api.reserve_runner_launch.call_args.kwargs['sandboxed'] is True
+    assert json.loads(handler.wfile.getvalue()) == {
+        "success": False,
+        "error": "Busy installing",
+    }
+    assert api.reserve_runner_launch.call_args.args == (12, "/p")
+    assert api.reserve_runner_launch.call_args.kwargs["sandboxed"] is True
     payload = b'{"gameId": 12, "state": "ended"}'
-    handler = _make_extension_handler('/api/runner-event', headers={**runner, 'Content-Length': str(len(payload))})
-    handler.__dict__['rfile'] = BytesIO(payload)
+    handler = _make_extension_handler(
+        "/api/runner-event", headers={**runner, "Content-Length": str(len(payload))}
+    )
+    handler.__dict__["rfile"] = BytesIO(payload)
     handler.do_POST()
     handler.send_response.assert_called_once_with(200)
     api.release_runner_launch.assert_called_once_with(12)
-    assert 'wlib-refresh-library' in window.evaluate_js.call_args.args[0]
+    assert "wlib-refresh-library" in window.evaluate_js.call_args.args[0]
 
 
 def test_bare_open_only_shows_the_window(monkeypatch):
@@ -1148,7 +1198,9 @@ def test_unpaired_bridge_is_refused(extension_server):
     assert status == 403
 
 
-def test_extension_lc_check_open_add_wishlist_and_attach(monkeypatch, tmp_path, extension_server):
+def test_extension_lc_check_open_add_wishlist_and_attach(
+    monkeypatch, tmp_path, extension_server
+):
     import base64
     import re
     import sqlite3
@@ -1170,24 +1222,43 @@ def test_extension_lc_check_open_add_wishlist_and_attach(monkeypatch, tmp_path, 
         with sqlite3.connect(tmp_path / "catalog.db") as conn:
             conn.executescript(CATALOG_SCHEMA)
             conn.execute(
-                "INSERT INTO f95_threads(thread_id,title,url,first_seen,last_seen) VALUES (?, 'F95', '', '', '')", (f95,),
+                "INSERT INTO f95_threads(thread_id,title,url,first_seen,last_seen) VALUES (?, 'F95', '', '', '')",
+                (f95,),
             )
             conn.execute(
-                "INSERT INTO lc_threads(thread_id,title,url,first_seen,last_seen) VALUES (?, 'Catalog title', '', '', '')", (f95 - 80,),
+                "INSERT INTO lc_threads(thread_id,title,url,first_seen,last_seen) VALUES (?, 'Catalog title', '', '', '')",
+                (f95 - 80,),
             )
-            conn.execute("INSERT INTO links VALUES ('lc', ?, 'f95', ?, 'title')", (str(f95 - 80), str(f95)))
-    monkeypatch.setattr(api.scraper, "get_thread_metadata", lambda *_args: {"success": False})
+            conn.execute(
+                "INSERT INTO links VALUES ('lc', ?, 'f95', ?, 'title')",
+                (str(f95 - 80), str(f95)),
+            )
+    monkeypatch.setattr(
+        api.scraper, "get_thread_metadata", lambda *_args: {"success": False}
+    )
 
     def send(method, path, body=None):
-        with closing(HTTPConnection(*extension_server.server_address, timeout=3)) as connection:
-            connection.request(method, path, None if body is None else json.dumps(body), headers={
-                "Host": "localhost:8183", "Origin": "chrome-extension://wlib",
-                "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
-            })
+        with closing(
+            HTTPConnection(*extension_server.server_address, timeout=3)
+        ) as connection:
+            connection.request(
+                method,
+                path,
+                None if body is None else json.dumps(body),
+                headers={
+                    "Host": "localhost:8183",
+                    "Origin": "chrome-extension://wlib",
+                    "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+                },
+            )
             reply = connection.getresponse()
             return reply.status, json.loads(reply.read())
 
-    status, _ = send("POST", "/api/add", {"url": lc, "title": "Page title", "prefixes": ["DAZ", "Ren'Py"]})
+    status, _ = send(
+        "POST",
+        "/api/add",
+        {"url": lc, "title": "Page title", "prefixes": ["DAZ", "Ren'Py"]},
+    )
     assert status == 200
     js = window.evaluate_js.call_args.args[0]
     add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", js)[1]))
@@ -1195,52 +1266,107 @@ def test_extension_lc_check_open_add_wishlist_and_attach(monkeypatch, tmp_path, 
     assert add_payload["url"] == "https://f95zone.to/threads/101/"
     assert add_payload["title"] == "F95"
     assert add_payload["engine"] == "Ren'Py"
-    assert (add_payload["thread_onhold"], add_payload["thread_abandoned"]) == (False, False)
+    assert (add_payload["thread_onhold"], add_payload["thread_abandoned"]) == (
+        False,
+        False,
+    )
 
     # Extension 1.2.13 sends the ids beside the names: the render "Other" (29) is no engine.
-    status, _ = send("POST", "/api/add", {
-        "url": lc, "title": "Page title", "prefixes": ["Other", "Abandoned"], "prefix_ids": [29, 17],
-    })
+    status, _ = send(
+        "POST",
+        "/api/add",
+        {
+            "url": lc,
+            "title": "Page title",
+            "prefixes": ["Other", "Abandoned"],
+            "prefix_ids": [29, 17],
+        },
+    )
     assert status == 200
     js = window.evaluate_js.call_args.args[0]
     add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", js)[1]))
     assert add_payload["engine"] == ""
     assert add_payload["thread_abandoned"] is True
-    status, _ = send("POST", "/api/add", {
-        "url": lc, "title": "Page title", "prefixes": ["Other", "On Hold"], "prefix_ids": [22, None],
-    })
+    status, _ = send(
+        "POST",
+        "/api/add",
+        {
+            "url": lc,
+            "title": "Page title",
+            "prefixes": ["Other", "On Hold"],
+            "prefix_ids": [22, None],
+        },
+    )
     js = window.evaluate_js.call_args.args[0]
     add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", js)[1]))
     assert add_payload["engine"] == "Others"
     assert add_payload["thread_onhold"] is True
     # A mismatched id list leaves every id unknown, as from an older extension.
-    status, _ = send("POST", "/api/add", {
-        "url": lc, "title": "Page title", "prefixes": ["Other"], "prefix_ids": [29, 9],
-    })
+    status, _ = send(
+        "POST",
+        "/api/add",
+        {
+            "url": lc,
+            "title": "Page title",
+            "prefixes": ["Other"],
+            "prefix_ids": [29, 9],
+        },
+    )
     js = window.evaluate_js.call_args.args[0]
     add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", js)[1]))
     assert add_payload["engine"] == "Others"
 
     # The states come from one source: the page read, else the catalog with its time.
     from core import game_lookup
-    stale = {"thread_onhold": True, "thread_abandoned": False, "thread_states_seen_at": "2025-01-01T00:00:00Z"}
+
+    stale = {
+        "thread_onhold": True,
+        "thread_abandoned": False,
+        "thread_states_seen_at": "2025-01-01T00:00:00Z",
+    }
     with monkeypatch.context() as patched:
-        patched.setattr(game_lookup, "combined_thread_entry", lambda *_args: dict(stale))
-        _ = send("POST", "/api/add", {"url": lc, "title": "Page title", "prefixes": ["Ren'Py"]})
-        add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", window.evaluate_js.call_args.args[0])[1]))
-        assert (add_payload["thread_onhold"], add_payload["thread_abandoned"]) == (False, False)
+        patched.setattr(
+            game_lookup, "combined_thread_entry", lambda *_args: dict(stale)
+        )
+        _ = send(
+            "POST",
+            "/api/add",
+            {"url": lc, "title": "Page title", "prefixes": ["Ren'Py"]},
+        )
+        add_payload = json.loads(
+            base64.b64decode(
+                re.search(r"atob\('([^']+)'\)", window.evaluate_js.call_args.args[0])[1]
+            )
+        )
+        assert (add_payload["thread_onhold"], add_payload["thread_abandoned"]) == (
+            False,
+            False,
+        )
         assert "thread_states_seen_at" not in add_payload
         _ = send("POST", "/api/add", {"url": lc, "title": "Page title"})
-        add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", window.evaluate_js.call_args.args[0])[1]))
-        assert (add_payload["thread_onhold"], add_payload["thread_abandoned"]) == (True, False)
+        add_payload = json.loads(
+            base64.b64decode(
+                re.search(r"atob\('([^']+)'\)", window.evaluate_js.call_args.args[0])[1]
+            )
+        )
+        assert (add_payload["thread_onhold"], add_payload["thread_abandoned"]) == (
+            True,
+            False,
+        )
         assert add_payload["thread_states_seen_at"] == "2025-01-01T00:00:00Z"
 
-    status, wishlisted = send("POST", "/api/wishlist", {"url": lc, "title": "Page title"})
+    status, wishlisted = send(
+        "POST", "/api/wishlist", {"url": lc, "title": "Page title"}
+    )
     assert status == 200 and wishlisted["success"]
     game_id = wishlisted["id"]
     assert database.get_game(game_id)["lc_url"] == lc
     assert database.get_game(game_id)["f95_url"] == "https://f95zone.to/threads/101/"
-    status, checked = send("GET", "/api/check?" + urlencode({"url": "https://www.lewdcorner.com/threads/example.21/page-2"}))
+    status, checked = send(
+        "GET",
+        "/api/check?"
+        + urlencode({"url": "https://www.lewdcorner.com/threads/example.21/page-2"}),
+    )
     assert status == 200 and checked["gameId"] == game_id and checked["wishlisted"]
     status, opened = send("GET", "/api/open?" + urlencode({"url": lc}))
     assert status == 200 and opened["gameId"] == game_id
@@ -1251,48 +1377,86 @@ def test_extension_lc_check_open_add_wishlist_and_attach(monkeypatch, tmp_path, 
     # A thread the catalog does not list yet keeps the page heading without its bracket groups.
     shots = [f"https://lewdcorner.com/attachments/shot{i}-png.{i}/" for i in range(8)]
     status, uncatalogued = send(
-        "POST", "/api/wishlist", {
-            "url": "https://lewdcorner.com/threads/99/", "title": "New Game [v0.1] [Dev Name]",
+        "POST",
+        "/api/wishlist",
+        {
+            "url": "https://lewdcorner.com/threads/99/",
+            "title": "New Game [v0.1] [Dev Name]",
             "coverImage": "https://lewdcorner.com/attachments/cover-png.9/",
-            "screenshots": [*shots, shots[0], "http://example.com/a.png", "javascript:alert(1)", 5],
+            "screenshots": [
+                *shots,
+                shots[0],
+                "http://example.com/a.png",
+                "javascript:alert(1)",
+                5,
+            ],
         },
     )
     assert status == 200
     stored = database.get_game(uncatalogued["id"])
     assert stored["title"] == "New Game"
-    assert stored["cover_image_path"] == "https://lewdcorner.com/attachments/cover-png.9/"
+    assert (
+        stored["cover_image_path"] == "https://lewdcorner.com/attachments/cover-png.9/"
+    )
     assert json.loads(stored["screenshots"]) == shots
     # F95 adds get screenshots from the thread scrape, not from the page.
     assert json.loads(database.get_game(game_id)["screenshots"] or "[]") == []
 
     # An LC-only wishlist keeps the page's On Hold and Abandoned states.
-    status, on_hold = send("POST", "/api/wishlist", {
-        "url": "https://lewdcorner.com/threads/98/", "title": "Held Game", "prefixes": ["On Hold"],
-    })
+    status, on_hold = send(
+        "POST",
+        "/api/wishlist",
+        {
+            "url": "https://lewdcorner.com/threads/98/",
+            "title": "Held Game",
+            "prefixes": ["On Hold"],
+        },
+    )
     assert status == 200
     held = database.get_game(on_hold["id"])
     assert (held["thread_onhold"], held["thread_abandoned"]) == (1, 0)
     assert held["thread_states_at"]
-    status, dropped = send("POST", "/api/wishlist", {
-        "url": "https://lewdcorner.com/threads/97/", "title": "Dropped Game", "prefixes": ["Abandoned"],
-    })
+    status, dropped = send(
+        "POST",
+        "/api/wishlist",
+        {
+            "url": "https://lewdcorner.com/threads/97/",
+            "title": "Dropped Game",
+            "prefixes": ["Abandoned"],
+        },
+    )
     assert status == 200
     gone = database.get_game(dropped["id"])
     assert (gone["thread_onhold"], gone["thread_abandoned"]) == (0, 1)
 
     partner = database.add_game("Existing game", "", "https://f95zone.to/threads/102/")
     status, available = send("GET", "/api/check?" + urlencode({"url": partner_lc}))
-    assert status == 200 and available["gameId"] == partner and available["attach_lc_available"]
-    status, batch = send("GET", "/api/check?" + urlencode({"batch": "1", "url": [lc, partner_lc]}, doseq=True))
+    assert (
+        status == 200
+        and available["gameId"] == partner
+        and available["attach_lc_available"]
+    )
+    status, batch = send(
+        "GET",
+        "/api/check?" + urlencode({"batch": "1", "url": [lc, partner_lc]}, doseq=True),
+    )
     assert status == 200 and batch["matches"] == {lc: game_id}
     assert database.get_game(partner)["lc_url"] == ""
 
-    status, attached = send("POST", "/api/wishlist", {"url": partner_lc, "action": "attach_lc"})
-    assert status == 200 and attached == {"success": True, "attached": True, "id": partner}
+    status, attached = send(
+        "POST", "/api/wishlist", {"url": partner_lc, "action": "attach_lc"}
+    )
+    assert status == 200 and attached == {
+        "success": True,
+        "attached": True,
+        "id": partner,
+    }
     assert database.get_game(partner)["lc_url"] == partner_lc
 
     other = database.add_game("Other partner", "", "https://f95zone.to/threads/103/")
-    status, auto_attach = send("POST", "/api/wishlist", {"url": other_lc, "title": "LC"})
+    status, auto_attach = send(
+        "POST", "/api/wishlist", {"url": other_lc, "title": "LC"}
+    )
     assert status == 200 and auto_attach["attached"] and auto_attach["id"] == other
 
 
@@ -1328,12 +1492,20 @@ def test_extension_lc_wishlist_uses_catalog_when_page_has_no_prefixes(
             (catalog_seen_at, catalog_seen_at, json.dumps(["Abandoned"])),
         )
 
-    body = json.dumps({
-        "url": "https://lewdcorner.com/threads/98/", "title": "Page title", "prefixes": prefixes,
-    }).encode()
-    handler = _make_extension_handler("/api/wishlist", headers={
-        "Origin": "chrome-extension://wlib", "Content-Length": str(len(body)),
-    })
+    body = json.dumps(
+        {
+            "url": "https://lewdcorner.com/threads/98/",
+            "title": "Page title",
+            "prefixes": prefixes,
+        }
+    ).encode()
+    handler = _make_extension_handler(
+        "/api/wishlist",
+        headers={
+            "Origin": "chrome-extension://wlib",
+            "Content-Length": str(len(body)),
+        },
+    )
     handler.rfile = BytesIO(body)
     handler.do_POST()
 
@@ -1360,13 +1532,21 @@ def test_lc_image_route_serves_only_handed_out_keys(tmp_path, monkeypatch):
     key = game_covers.lc_image_key(url)
     png = b"\x89PNG\r\n\x1a\nimage\x00\x00\x00\x00IEND\xaeB`\x82"
     fetched = []
-    monkeypatch.setattr(game_covers, "fetch_lc_image", lambda u, *, background: fetched.append((u, background)) or png)
+    monkeypatch.setattr(
+        game_covers,
+        "fetch_lc_image",
+        lambda u, *, background: fetched.append((u, background)) or png,
+    )
     api = MagicMock()
     api.lc_image_keys = _ImageKeys({key: url})
     api.cover_cache = game_covers.CoverCacheService()
     monkeypatch.setattr(server_module, "api_ref", api)
 
-    for path in ("/lc-images/" + "f" * 32, "/lc-images/../wlib.db", "/lc-images/" + key.upper()):
+    for path in (
+        "/lc-images/" + "f" * 32,
+        "/lc-images/../wlib.db",
+        "/lc-images/" + key.upper(),
+    ):
         handler = _make_extension_handler(path)
         handler.send_error = MagicMock()
         handler.do_GET()
@@ -1377,7 +1557,10 @@ def test_lc_image_route_serves_only_handed_out_keys(tmp_path, monkeypatch):
     handler.do_GET()
     handler.send_response.assert_called_once_with(200)
     headers = dict(call.args for call in handler.send_header.call_args_list)
-    assert headers["Content-Type"] == "image/png" and "immutable" in headers["Cache-Control"]
+    assert (
+        headers["Content-Type"] == "image/png"
+        and "immutable" in headers["Cache-Control"]
+    )
     assert handler.wfile.getvalue() == png
     assert fetched == [(url, False)]
     assert game_covers.lc_copy_file(key) is not None
@@ -1411,7 +1594,9 @@ def test_lc_image_route_fetch_failure_is_a_404(tmp_path, monkeypatch):
     assert game_covers.lc_copy_file(key) is None
 
 
-def test_extension_lc_developer_falls_back_to_the_title(monkeypatch, tmp_path, extension_server):
+def test_extension_lc_developer_falls_back_to_the_title(
+    monkeypatch, tmp_path, extension_server
+):
     import base64
     import re
     import sqlite3
@@ -1433,11 +1618,19 @@ def test_extension_lc_developer_falls_back_to_the_title(monkeypatch, tmp_path, e
     assert database.DB_PATH == str(tmp_path / "extension.db")
 
     def add(url, **body):
-        with closing(HTTPConnection(*extension_server.server_address, timeout=3)) as connection:
-            connection.request("POST", "/api/add", json.dumps({"url": url, **body}), headers={
-                "Host": "localhost:8183", "Origin": "chrome-extension://wlib",
-                "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
-            })
+        with closing(
+            HTTPConnection(*extension_server.server_address, timeout=3)
+        ) as connection:
+            connection.request(
+                "POST",
+                "/api/add",
+                json.dumps({"url": url, **body}),
+                headers={
+                    "Host": "localhost:8183",
+                    "Origin": "chrome-extension://wlib",
+                    "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+                },
+            )
             assert connection.getresponse().status == 200
         js = window.evaluate_js.call_args.args[0]
         return json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", js)[1]))
@@ -1447,8 +1640,12 @@ def test_extension_lc_developer_falls_back_to_the_title(monkeypatch, tmp_path, e
     assert (payload["title"], payload["developer"]) == ("BreedVille", "Redsky")
     payload = add(outside, title="Game Name [v0.5]")
     assert payload["title"] == "Game Name" and not payload.get("developer")
-    payload = add(outside, title="BreedVille [v0.10.0] [Redsky]", developer="Redsky Games")
+    payload = add(
+        outside, title="BreedVille [v0.10.0] [Redsky]", developer="Redsky Games"
+    )
     assert payload["developer"] == "Redsky Games"
     # The catalog's developer wins over the title.
-    payload = add("https://lewdcorner.com/threads/31/", title="BreedVille [v0.10.0] [Redsky]")
+    payload = add(
+        "https://lewdcorner.com/threads/31/", title="BreedVille [v0.10.0] [Redsky]"
+    )
     assert payload["developer"] == "Catalog Dev"

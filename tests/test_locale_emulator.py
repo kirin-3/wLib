@@ -62,12 +62,18 @@ def test_saved_path_is_used(monkeypatch):
     existing(monkeypatch, r"D:\Tools\LE\LEProc.exe")
     monkeypatch.setattr(le, "get_setting", lambda _key: r"D:\Tools\LE\LEProc.exe")
     result = le.get_status(platform="win32")
-    assert result == {"status": "ready", "path": r"D:\Tools\LE\LEProc.exe", "reason": ""}
+    assert result == {
+        "status": "ready",
+        "path": r"D:\Tools\LE\LEProc.exe",
+        "reason": "",
+    }
 
 
 def test_missing_saved_path_has_no_fallback(monkeypatch):
     seen = existing(monkeypatch, r"C:\Program Files\Locale Emulator\LEProc.exe")
-    monkeypatch.setattr(le, "_load_winreg", lambda: fake_winreg({HKCU: "file:///C:/LE/x.dll"}))
+    monkeypatch.setattr(
+        le, "_load_winreg", lambda: fake_winreg({HKCU: "file:///C:/LE/x.dll"})
+    )
     result = le.get_status(r"D:\Gone\LEProc.exe", platform="win32")
     assert result["status"] == "missing"
     assert result["path"] == r"D:\Gone\LEProc.exe"
@@ -111,7 +117,9 @@ def test_registry_current_user_first(monkeypatch):
 def test_registry_all_users(monkeypatch):
     existing(monkeypatch, r"E:\AllUsers\LEProc.exe")
     monkeypatch.setattr(
-        le, "_load_winreg", lambda: fake_winreg({HKLM: "file:///E:/AllUsers/LEContextMenuHandler.dll"})
+        le,
+        "_load_winreg",
+        lambda: fake_winreg({HKLM: "file:///E:/AllUsers/LEContextMenuHandler.dll"}),
     )
     assert le.get_status(platform="win32")["path"] == r"E:\AllUsers\LEProc.exe"
 
@@ -119,13 +127,17 @@ def test_registry_all_users(monkeypatch):
 def test_registry_folder_without_leproc_falls_back(monkeypatch):
     existing(monkeypatch, r"C:\Program Files (x86)\Locale Emulator\LEProc.exe")
     monkeypatch.setattr(
-        le, "_load_winreg", lambda: fake_winreg({HKCU: "file:///D:/Moved/LEContextMenuHandler.dll"})
+        le,
+        "_load_winreg",
+        lambda: fake_winreg({HKCU: "file:///D:/Moved/LEContextMenuHandler.dll"}),
     )
     result = le.get_status(platform="win32")
     assert result["path"] == r"C:\Program Files (x86)\Locale Emulator\LEProc.exe"
 
 
-@pytest.mark.parametrize("codebase", ["", "C:/LE/x.dll", "http://x/LE/x.dll", "file:///relative/x.dll"])
+@pytest.mark.parametrize(
+    "codebase", ["", "C:/LE/x.dll", "http://x/LE/x.dll", "file:///relative/x.dll"]
+)
 def test_bad_codebase_is_ignored(codebase):
     assert le._codebase_folder(codebase) == ""
 
@@ -191,9 +203,19 @@ def test_non_windows_host(monkeypatch):
 
 def test_wrap_command_keeps_argument_boundaries():
     args = ["a b", "plain", r"C:\Program Files\x y", 'q"t', "", "end\\", "tab\there"]
-    wrapped = le.wrap_command(r"C:\LE\LEProc.exe", [r"C:\Games\My Game\game.exe", *args])
+    wrapped = le.wrap_command(
+        r"C:\LE\LEProc.exe", [r"C:\Games\My Game\game.exe", *args]
+    )
     assert wrapped[:2] == [r"C:\LE\LEProc.exe", r"C:\Games\My Game\game.exe"]
-    assert wrapped[2:] == ['"a b"', "plain", r'"C:\Program Files\x y"', r'q\"t', '""', "end\\", '"tab\there"']
+    assert wrapped[2:] == [
+        '"a b"',
+        "plain",
+        r'"C:\Program Files\x y"',
+        r"q\"t",
+        '""',
+        "end\\",
+        '"tab\there"',
+    ]
     # LEProc.exe joins its .NET argv with spaces; the game parses that line.
     joined = " ".join(wrapped[2:])
     assert _msvcrt_split(joined) == args

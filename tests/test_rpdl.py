@@ -15,7 +15,9 @@ from core.library_backup import (
     build_sync_backup,
 )
 
-TORRENT = b"d4:infod6:lengthi5e4:name1:a12:piece lengthi16384e6:pieces20:" + b"x" * 20 + b"ee"
+TORRENT = (
+    b"d4:infod6:lengthi5e4:name1:a12:piece lengthi16384e6:pieces20:" + b"x" * 20 + b"ee"
+)
 
 
 class Response(io.BytesIO):
@@ -60,7 +62,9 @@ def calls(monkeypatch):
     queue: list[object] = []
 
     def fake(request, timeout=30):
-        seen.append((request.full_url, request.get_method(), dict(request.header_items())))
+        seen.append(
+            (request.full_url, request.get_method(), dict(request.header_items()))
+        )
         item = queue.pop(0)
         if isinstance(item, BaseException):
             raise item
@@ -72,22 +76,56 @@ def calls(monkeypatch):
 
 def test_search_cleans_query_and_reads_numeric_fields(calls):
     seen, queue = calls
-    queue.append(_json({"data": {"results": [
-        {"torrent_id": 7, "title": "Summers-Gone-1.0", "file_size": 2048, "seeders": 3, "leechers": 1, "upload_date": 1700000000},
-    ]}}))
+    queue.append(
+        _json(
+            {
+                "data": {
+                    "results": [
+                        {
+                            "torrent_id": 7,
+                            "title": "Summers-Gone-1.0",
+                            "file_size": 2048,
+                            "seeders": 3,
+                            "leechers": 1,
+                            "upload_date": 1700000000,
+                        },
+                    ]
+                }
+            }
+        )
+    )
     (result,) = rpdl.search("Summer's Gone")
     assert "search=SummersGone" in seen[0][0] and "page_size=50" in seen[0][0]
     # The sort key RPDL understands for newest first.
     assert "sort=uploaded_DESC" in seen[0][0] and "page=0" in seen[0][0]
     assert seen[0][0].startswith("https://dl.rpdl.net/")
-    assert result["size"] == 2048 and result["date"] == 1700000000 and result["seeders"] == 3
+    assert (
+        result["size"] == 2048
+        and result["date"] == 1700000000
+        and result["seeders"] == 3
+    )
 
 
 def test_search_reads_text_fields(calls):
     _, queue = calls
-    queue.append(_json({"data": {"results": [
-        {"torrent_id": "9", "title": "Game", "file_size": "1.5 GB", "seeders": "4", "leechers": "0", "upload_date": "2026-01-02T00:00:00Z"},
-    ]}}))
+    queue.append(
+        _json(
+            {
+                "data": {
+                    "results": [
+                        {
+                            "torrent_id": "9",
+                            "title": "Game",
+                            "file_size": "1.5 GB",
+                            "seeders": "4",
+                            "leechers": "0",
+                            "upload_date": "2026-01-02T00:00:00Z",
+                        },
+                    ]
+                }
+            }
+        )
+    )
     (result,) = rpdl.search("Game")
     assert result["size"] == int(1.5 * 1024**3) and result["id"] == 9
     assert result["date"] == 1767312000
@@ -99,9 +137,17 @@ def test_search_reads_text_fields(calls):
 )
 def test_search_clamps_large_negative_integers(calls, field, normalized):
     _, queue = calls
-    queue.append(_json({"data": {"results": [
-        {"torrent_id": 7, "title": "Game", field: -(10**400)},
-    ]}}))
+    queue.append(
+        _json(
+            {
+                "data": {
+                    "results": [
+                        {"torrent_id": 7, "title": "Game", field: -(10**400)},
+                    ]
+                }
+            }
+        )
+    )
     (result,) = rpdl.search("Game")
     assert result[normalized] == 0
 
@@ -146,7 +192,13 @@ def test_search_cache_expires(calls, monkeypatch):
 
 @pytest.mark.parametrize(
     ("status", "kind"),
-    [(401, "sign_in"), (404, "not_found"), (429, "rate_limit"), (500, "unavailable"), (503, "unavailable")],
+    [
+        (401, "sign_in"),
+        (404, "not_found"),
+        (429, "rate_limit"),
+        (500, "unavailable"),
+        (503, "unavailable"),
+    ],
 )
 def test_failures_are_classified(calls, status, kind):
     _, queue = calls
@@ -214,8 +266,20 @@ def test_fetch_rejects_html_and_json(calls, store):
 
 def test_token_renews_once_on_401(calls, store):
     seen, queue = calls
-    store.update({credentials.RPDL_TOKEN: "old", credentials.RPDL_USERNAME: "kim", credentials.RPDL_PASSWORD: "pw"})
-    queue.extend([_http(401), _json({"data": {"token": "new", "username": "kim"}}), Response(TORRENT)])
+    store.update(
+        {
+            credentials.RPDL_TOKEN: "old",
+            credentials.RPDL_USERNAME: "kim",
+            credentials.RPDL_PASSWORD: "pw",
+        }
+    )
+    queue.extend(
+        [
+            _http(401),
+            _json({"data": {"token": "new", "username": "kim"}}),
+            Response(TORRENT),
+        ]
+    )
     assert rpdl.fetch_torrent(3) == TORRENT
     assert store[credentials.RPDL_TOKEN] == "new"
     assert seen[-1][2]["Authorization"] == "Bearer new"
@@ -224,7 +288,13 @@ def test_token_renews_once_on_401(calls, store):
 
 def test_renewal_failure_asks_for_sign_in(calls, store):
     _, queue = calls
-    store.update({credentials.RPDL_TOKEN: "old", credentials.RPDL_USERNAME: "kim", credentials.RPDL_PASSWORD: "changed"})
+    store.update(
+        {
+            credentials.RPDL_TOKEN: "old",
+            credentials.RPDL_USERNAME: "kim",
+            credentials.RPDL_PASSWORD: "changed",
+        }
+    )
     queue.extend([_http(401), _http(403)])
     with pytest.raises(rpdl.RpdlError) as info:
         rpdl.fetch_torrent(3)
@@ -255,23 +325,42 @@ def test_wrong_password_stores_nothing(calls, store):
 
 
 def test_disconnect_clears_all_three(store):
-    store.update({credentials.RPDL_USERNAME: "kim", credentials.RPDL_PASSWORD: "pw", credentials.RPDL_TOKEN: "t"})
+    store.update(
+        {
+            credentials.RPDL_USERNAME: "kim",
+            credentials.RPDL_PASSWORD: "pw",
+            credentials.RPDL_TOKEN: "t",
+        }
+    )
     accounts.disconnect_rpdl()
-    assert not any(store.get(key) for key in (credentials.RPDL_USERNAME, credentials.RPDL_PASSWORD, credentials.RPDL_TOKEN))
+    assert not any(
+        store.get(key)
+        for key in (
+            credentials.RPDL_USERNAME,
+            credentials.RPDL_PASSWORD,
+            credentials.RPDL_TOKEN,
+        )
+    )
 
 
 def test_backup_and_sync_exclude_rpdl_keys(tmp_path, monkeypatch):
     from core.database import init_db, update_settings
 
     monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path))
-    monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "wlib.db"), raising=False)
+    monkeypatch.setattr(
+        "core.database.DB_PATH", str(tmp_path / "wlib.db"), raising=False
+    )
     init_db()
-    update_settings({
-        credentials.RPDL_USERNAME: "secret-user",
-        credentials.RPDL_PASSWORD: "secret-password",
-        credentials.RPDL_TOKEN: "secret-token",
-    })
-    backup = build_library_backup({"sections": [SECTION_SETTINGS_GENERAL, SECTION_SETTINGS_PATHS]})
+    update_settings(
+        {
+            credentials.RPDL_USERNAME: "secret-user",
+            credentials.RPDL_PASSWORD: "secret-password",
+            credentials.RPDL_TOKEN: "secret-token",
+        }
+    )
+    backup = build_library_backup(
+        {"sections": [SECTION_SETTINGS_GENERAL, SECTION_SETTINGS_PATHS]}
+    )
     text = json.dumps(backup) + json.dumps(build_sync_backup("t", "d"))
     for needle in ("rpdl", "secret-user", "secret-password", "secret-token"):
         assert needle not in text

@@ -55,7 +55,9 @@ def test_list_slots_engines_playtime_and_filtering(tmp_path: Path) -> None:
     # VX Ace save next to Game.exe
     vxace_dir = tmp_path / "vxace"
     vxace_dir.mkdir()
-    shutil.copy(FIXTURES_ROOT / "vxace" / "Save01.rvdata2", vxace_dir / "Save01.rvdata2")
+    shutil.copy(
+        FIXTURES_ROOT / "vxace" / "Save01.rvdata2", vxace_dir / "Save01.rvdata2"
+    )
     slots = list_slots(str(vxace_dir), "")
     assert len(slots) == 1
     assert slots[0]["file"] == "Save01.rvdata2"
@@ -104,7 +106,9 @@ def test_list_slots_engines_playtime_and_filtering(tmp_path: Path) -> None:
     assert list_slots(str(empty_dir), "") == []
 
 
-def test_list_slots_duplicate_priority_dedupe_and_unreadable_playtime(tmp_path: Path) -> None:
+def test_list_slots_duplicate_priority_dedupe_and_unreadable_playtime(
+    tmp_path: Path,
+) -> None:
     exe_dir = tmp_path / "game"
     exe_dir.mkdir()
     eff_dir = tmp_path / "effective"
@@ -117,12 +121,18 @@ def test_list_slots_duplicate_priority_dedupe_and_unreadable_playtime(tmp_path: 
     (eff_dir / "Save1.rvdata").write_bytes(b"corrupt-other")
     # Same file in Save and Saves -> Save wins
     (exe_dir / "Save" / "Save2.rvdata").write_bytes(b"corrupt-save")
-    shutil.copy(FIXTURES_ROOT / "vx" / "Save1.rvdata", exe_dir / "Saves" / "Save2.rvdata")
+    shutil.copy(
+        FIXTURES_ROOT / "vx" / "Save1.rvdata", exe_dir / "Saves" / "Save2.rvdata"
+    )
     # Effective-only slot with unreadable playtime -> still listed with ""
     (eff_dir / "save3.rvdata2").write_bytes(b"not-marshal-at-all")
 
     slots = list_slots(str(exe_dir), str(eff_dir))
-    assert [s["file"] for s in slots] == ["Save1.rvdata", "Save2.rvdata", "save3.rvdata2"]
+    assert [s["file"] for s in slots] == [
+        "Save1.rvdata",
+        "Save2.rvdata",
+        "save3.rvdata2",
+    ]
     assert slots[0]["folder"] == str(exe_dir)
     assert slots[0]["relative"] == ""
     assert slots[0]["playtime"] == "00:01:01"
@@ -244,7 +254,9 @@ def test_load_rgss_names_from_archive_and_unreadable(tmp_path: Path) -> None:
 def test_load_save_all_three_engines() -> None:
     # XP
     xp_folder = FIXTURES_ROOT / "xp"
-    xp = load_save(str(xp_folder / "Save1.rxdata"), load_rgss_names(str(xp_folder), FORMAT_XP))
+    xp = load_save(
+        str(xp_folder / "Save1.rxdata"), load_rgss_names(str(xp_folder), FORMAT_XP)
+    )
     assert xp["format"] == FORMAT_XP
     xp_view = cast(JsonDict, xp["view"])
     assert xp_view["missing"] == []
@@ -270,7 +282,9 @@ def test_load_save_all_three_engines() -> None:
 
     # VX
     vx_folder = FIXTURES_ROOT / "vx"
-    vx = load_save(str(vx_folder / "Save1.rvdata"), load_rgss_names(str(vx_folder), FORMAT_VX))
+    vx = load_save(
+        str(vx_folder / "Save1.rvdata"), load_rgss_names(str(vx_folder), FORMAT_VX)
+    )
     assert vx["format"] == FORMAT_VX
     vx_view = cast(JsonDict, vx["view"])
     assert vx_view["missing"] == []
@@ -329,11 +343,18 @@ def test_load_save_unexpected_layout_and_encrypted(tmp_path: Path) -> None:
     no_party = tmp_path / "Save01.rvdata2"
     no_party.write_bytes(dump_all(dumps))
 
-    payload = load_save(str(no_party), load_rgss_names(str(FIXTURES_ROOT / "vxace"), FORMAT_VXACE))
+    payload = load_save(
+        str(no_party), load_rgss_names(str(FIXTURES_ROOT / "vxace"), FORMAT_VXACE)
+    )
     view = cast(JsonDict, payload["view"])
     assert view["gold"] is None
     assert view["gold_ref"] is None
-    assert set(cast(list[str], view["missing"])) == {"gold", "items", "weapons", "armors"}
+    assert set(cast(list[str], view["missing"])) == {
+        "gold",
+        "items",
+        "weapons",
+        "armors",
+    }
     assert len(cast(list[JsonDict], view["actors"])) == 2
     assert len(cast(list[object], payload["raw"])) == 2
 
@@ -387,7 +408,9 @@ def test_patch_gold_and_inventory() -> None:
         )
 
     # XP: add weapon 2 ("Iron Sword") with count 1
-    xp_dumps, xp_nodes, xp_edit, xp_names = _load_fixture_tree(FORMAT_XP, "Save1.rxdata")
+    xp_dumps, xp_nodes, xp_edit, xp_names = _load_fixture_tree(
+        FORMAT_XP, "Save1.rxdata"
+    )
     apply_patches(
         xp_dumps,
         FORMAT_XP,
@@ -405,23 +428,35 @@ def test_patch_gold_and_inventory() -> None:
 
 def test_patch_actors_levels_and_strings() -> None:
     # XP: set actor 1 SP to 200 and bonus 5 (@int_plus) to -10
-    xp_dumps, xp_nodes, xp_edit, xp_names = _load_fixture_tree(FORMAT_XP, "Save1.rxdata")
+    xp_dumps, xp_nodes, xp_edit, xp_names = _load_fixture_tree(
+        FORMAT_XP, "Save1.rxdata"
+    )
     apply_patches(
         xp_dumps,
         FORMAT_XP,
         [
             {"op": "set_actor", "id": 1, "field": "mp", "value": 200},
-            {"op": "set_actor", "id": 1, "field": "paramPlus", "index": 5, "value": -10},
+            {
+                "op": "set_actor",
+                "id": 1,
+                "field": "paramPlus",
+                "index": 5,
+                "value": -10,
+            },
         ],
         xp_nodes,
         xp_edit,
     )
-    xp_actor = cast(list[JsonDict], build_view(xp_dumps, FORMAT_XP, xp_names, xp_edit)["actors"])[0]
+    xp_actor = cast(
+        list[JsonDict], build_view(xp_dumps, FORMAT_XP, xp_names, xp_edit)["actors"]
+    )[0]
     assert xp_actor["mp"] == 200
     assert cast(list[int], xp_actor["param_plus"])[5] == -10
 
     # VX: raise level to 8 -> exp becomes 1863 from @exp_list; rename without encoding marker
-    vx_dumps, vx_nodes, vx_edit, vx_names = _load_fixture_tree(FORMAT_VX, "Save1.rvdata")
+    vx_dumps, vx_nodes, vx_edit, vx_names = _load_fixture_tree(
+        FORMAT_VX, "Save1.rvdata"
+    )
     apply_patches(
         vx_dumps,
         FORMAT_VX,
@@ -499,7 +534,10 @@ def test_patch_actors_levels_and_strings() -> None:
     assert name_node.data == "Clärís".encode()
     assert name_node.ivars is not None
     assert name_node.ivars[0][0].name == b"E"
-    assert isinstance(name_node.ivars[0][1], BoolNode) and name_node.ivars[0][1].value is True
+    assert (
+        isinstance(name_node.ivars[0][1], BoolNode)
+        and name_node.ivars[0][1].value is True
+    )
 
 
 def test_patch_switches_and_variables() -> None:
@@ -535,7 +573,10 @@ def test_patch_switches_and_variables() -> None:
     assert isinstance(var_arr, ArrayNode)
     assert isinstance(var_arr.items[25], IntNode) and var_arr.items[25].value == 3
     assert all(isinstance(var_arr.items[i], NilNode) for i in range(5, 25))
-    assert isinstance(var_arr.items[2], StringNode) and var_arr.items[2].decode_utf8() == "Alicia"
+    assert (
+        isinstance(var_arr.items[2], StringNode)
+        and var_arr.items[2].decode_utf8() == "Alicia"
+    )
     assert isinstance(var_arr.items[3], FloatNode) and var_arr.items[3].value == 4.75
 
     # Read-only variable (Tone at id 4) rejected
@@ -598,7 +639,9 @@ def test_patch_raw_set_node_and_refusals() -> None:
         if isinstance(n, StringNode) and n.data == b"Welcome to the tower."
     )
     int_id = next(
-        nid for nid, n in ace_nodes.items() if isinstance(n, IntNode) and nid in ace_edit
+        nid
+        for nid, n in ace_nodes.items()
+        if isinstance(n, IntNode) and nid in ace_edit
     )
     link_id = next(nid for nid, n in ace_nodes.items() if isinstance(n, LinkNode))
     udef_id = next(nid for nid, n in ace_nodes.items() if isinstance(n, UserDefNode))
@@ -669,7 +712,9 @@ def test_write_save_unedited_byte_identical_and_gold_only_diff(tmp_path: Path) -
     assert _no_temp_files(tmp_path)
 
     # Gold-only edit -> tree identical except gold
-    loaded = load_save(str(slot), load_rgss_names(str(FIXTURES_ROOT / "vxace"), FORMAT_VXACE))
+    loaded = load_save(
+        str(slot), load_rgss_names(str(FIXTURES_ROOT / "vxace"), FORMAT_VXACE)
+    )
     gold_ref = cast(int, cast(JsonDict, loaded["view"])["gold_ref"])
     st2 = slot.stat()
     _ = write_save(

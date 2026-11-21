@@ -38,7 +38,9 @@ def _dicts(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
     return [
-        cast(dict[str, object], item) for item in cast(list[object], value) if isinstance(item, dict)
+        cast(dict[str, object], item)
+        for item in cast(list[object], value)
+        if isinstance(item, dict)
     ]
 
 
@@ -58,9 +60,13 @@ def parse_vn(item: dict[str, object]) -> dict[str, object]:
     return {
         "vn_id": vn_id,
         "title": str(item.get("title") or ""),
-        "alttitle": item.get("alttitle") if isinstance(item.get("alttitle"), str) else None,
+        "alttitle": item.get("alttitle")
+        if isinstance(item.get("alttitle"), str)
+        else None,
         "developers": [str(dev.get("name")) for dev in _dicts(item.get("developers"))],
-        "released": item.get("released") if isinstance(item.get("released"), str) else None,
+        "released": item.get("released")
+        if isinstance(item.get("released"), str)
+        else None,
         "olang": item.get("olang") if isinstance(item.get("olang"), str) else None,
         "tags": [str(tag.get("name")) for tag in tags],
         "cover_url": cast(dict[str, object], image).get("url")
@@ -76,10 +82,16 @@ def parse_release(item: dict[str, object]) -> dict[str, object]:
     return {
         "release_id": release_id,
         "title": str(item.get("title") or ""),
-        "released": item.get("released") if isinstance(item.get("released"), str) else None,
+        "released": item.get("released")
+        if isinstance(item.get("released"), str)
+        else None,
         "vn_ids": [str(vn.get("id")) for vn in _dicts(item.get("vns"))],
-        "dlsite_ids": [str(link.get("id")) for link in links if link.get("name") == "dlsite"],
-        "steam_ids": [str(link.get("id")) for link in links if link.get("name") == "steam"],
+        "dlsite_ids": [
+            str(link.get("id")) for link in links if link.get("name") == "dlsite"
+        ],
+        "steam_ids": [
+            str(link.get("id")) for link in links if link.get("name") == "steam"
+        ],
         "url": f"https://vndb.org/{release_id}",
     }
 
@@ -95,7 +107,9 @@ class VndbSource:
 
     def sweep_step(self, ctx: SourceContext) -> bool:
         cursor = ctx.state.get(self.name, "sweep_cursor")
-        phase, after = cast(list[str | None], cursor) if isinstance(cursor, list) else ["vn", None]
+        phase, after = (
+            cast(list[str | None], cursor) if isinstance(cursor, list) else ["vn", None]
+        )
         phase = phase if phase in PHASES else "vn"
         response = ctx.pacer.request(
             self.name,
@@ -116,11 +130,15 @@ class VndbSource:
         if body.get("more") is True and not items:
             # The API promised another page but sent none. Treat it as a
             # failed request instead of moving on with a half-read sweep.
-            raise ValueError(f"VNDB returned no results for {phase} while more was promised")
+            raise ValueError(
+                f"VNDB returned no results for {phase} while more was promised"
+            )
         if phase == "vn":
             ctx.upsert("vndb_vns", "vn_id", [parse_vn(item) for item in items])
         else:
-            ctx.upsert("vndb_releases", "release_id", [parse_release(item) for item in items])
+            ctx.upsert(
+                "vndb_releases", "release_id", [parse_release(item) for item in items]
+            )
         if body.get("more") is True and items:
             ctx.state.put(self.name, "sweep_cursor", [phase, str(items[-1]["id"])])
             return False

@@ -20,7 +20,9 @@ def test_launch_env_overrides_match_the_launcher_rules():
         "WINEPREFIX": "/p",
         "A": "1",
     }
-    assert launch_env_overrides("WINEPREFIX=/p game.exe", "custom") == {"WINEPREFIX": "/p"}
+    assert launch_env_overrides("WINEPREFIX=/p game.exe", "custom") == {
+        "WINEPREFIX": "/p"
+    }
     # Without %command% or Custom Command, the words are plain arguments.
     assert launch_env_overrides("WINEPREFIX=/p -x", "auto") == {}
     assert launch_env_overrides('"unclosed', "custom") == {}
@@ -36,15 +38,22 @@ def test_launch_argument_prefix_wins_for_runtime_tools(tmp_path):
     assert game_id is not None
     update_game(
         game_id,
-        {"command_line_args": f"WINEPREFIX={launch_prefix} %command%", "launch_mode": "auto"},
+        {
+            "command_line_args": f"WINEPREFIX={launch_prefix} %command%",
+            "launch_mode": "auto",
+        },
     )
 
-    target = api._resolve_runtime_install_target(str(tmp_path / "custom"), "/usr/bin/wine", game_id)
+    target = api._resolve_runtime_install_target(
+        str(tmp_path / "custom"), "/usr/bin/wine", game_id
+    )
     assert target["base_prefix"] == str(launch_prefix)
     assert target["resolved_prefix"] == str(launch_prefix)
 
     # A game without the override keeps the custom prefix field.
     plain = add_game("Plain", "/games/plain.exe")
     assert plain is not None
-    custom = api._resolve_runtime_install_target(str(tmp_path / "custom"), "/usr/bin/wine", plain)
+    custom = api._resolve_runtime_install_target(
+        str(tmp_path / "custom"), "/usr/bin/wine", plain
+    )
     assert custom["base_prefix"] == os.path.abspath(str(tmp_path / "custom"))

@@ -31,7 +31,10 @@ def test_removing_symlinked_attachment_keeps_its_target(data_dir):
         handle.write("keep me")
     link = os.path.join(folder, "shortcut.txt")
     os.symlink("guide.txt", link)
-    assert [item["name"] for item in list_attachments(1)] == ["guide.txt", "shortcut.txt"]
+    assert [item["name"] for item in list_attachments(1)] == [
+        "guide.txt",
+        "shortcut.txt",
+    ]
 
     remove_attachment(1, "shortcut.txt")
 
@@ -80,4 +83,6 @@ def test_long_attachment_name_is_staged_and_numbered_within_limit(tmp_path, data
     assert len(names) == 3
     assert long_name in names
     assert any(item.endswith(" (2).txt") for item in names)
-    assert not [entry for entry in os.listdir(attachments_dir(4)) if entry.startswith(".")]
+    assert not [
+        entry for entry in os.listdir(attachments_dir(4)) if entry.startswith(".")
+    ]

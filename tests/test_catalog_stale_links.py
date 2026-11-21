@@ -17,30 +17,82 @@ GONE = "2026-10-20T00:00:00Z"
 
 def test_builder_skips_links_of_removed_rows(tmp_path):
     catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
-    catalog.upsert("dlsite_works", "product_id", [
-        {"product_id": "RJ1", "title": "a", "url": "d"},
-        {"product_id": "RJ2", "title": "b", "url": "d"},
-    ], NOW)
-    catalog.upsert("vndb_vns", "vn_id", [
-        {"vn_id": "v1", "title": "a", "url": "v"},
-        {"vn_id": "v2", "title": "b", "url": "v"},
-    ], NOW)
-    catalog.upsert("vndb_releases", "release_id", [
-        {"release_id": "r1", "title": "r", "vn_ids": ["v1"], "dlsite_ids": ["RJ1"],
-         "steam_ids": ["10"], "url": "r"},
-        {"release_id": "r2", "title": "r", "vn_ids": ["v2"], "dlsite_ids": ["RJ2"],
-         "steam_ids": ["20"], "url": "r"},
-    ], NOW)
-    catalog.upsert("ryuu_posts", "post_id", [
-        {"post_id": 1, "title": "x", "raw_title": "x", "rj_codes": ["RJ1"],
-         "steam_ids": ["30"], "vndb_ids": ["v1"], "url": "p1"},
-        {"post_id": 2, "title": "y", "raw_title": "y", "rj_codes": ["RJ2"],
-         "steam_ids": [], "vndb_ids": ["v2"], "url": "p2"},
-    ], NOW)
+    catalog.upsert(
+        "dlsite_works",
+        "product_id",
+        [
+            {"product_id": "RJ1", "title": "a", "url": "d"},
+            {"product_id": "RJ2", "title": "b", "url": "d"},
+        ],
+        NOW,
+    )
+    catalog.upsert(
+        "vndb_vns",
+        "vn_id",
+        [
+            {"vn_id": "v1", "title": "a", "url": "v"},
+            {"vn_id": "v2", "title": "b", "url": "v"},
+        ],
+        NOW,
+    )
+    catalog.upsert(
+        "vndb_releases",
+        "release_id",
+        [
+            {
+                "release_id": "r1",
+                "title": "r",
+                "vn_ids": ["v1"],
+                "dlsite_ids": ["RJ1"],
+                "steam_ids": ["10"],
+                "url": "r",
+            },
+            {
+                "release_id": "r2",
+                "title": "r",
+                "vn_ids": ["v2"],
+                "dlsite_ids": ["RJ2"],
+                "steam_ids": ["20"],
+                "url": "r",
+            },
+        ],
+        NOW,
+    )
+    catalog.upsert(
+        "ryuu_posts",
+        "post_id",
+        [
+            {
+                "post_id": 1,
+                "title": "x",
+                "raw_title": "x",
+                "rj_codes": ["RJ1"],
+                "steam_ids": ["30"],
+                "vndb_ids": ["v1"],
+                "url": "p1",
+            },
+            {
+                "post_id": 2,
+                "title": "y",
+                "raw_title": "y",
+                "rj_codes": ["RJ2"],
+                "steam_ids": [],
+                "vndb_ids": ["v2"],
+                "url": "p2",
+            },
+        ],
+        NOW,
+    )
     with catalog.conn:
-        catalog.conn.execute("UPDATE ryuu_posts SET removed_at = ? WHERE post_id = 1", (GONE,))
-        catalog.conn.execute("UPDATE vndb_releases SET removed_at = ? WHERE release_id = 'r1'", (GONE,))
-        catalog.conn.execute("UPDATE dlsite_works SET removed_at = ? WHERE product_id = 'RJ2'", (GONE,))
+        catalog.conn.execute(
+            "UPDATE ryuu_posts SET removed_at = ? WHERE post_id = 1", (GONE,)
+        )
+        catalog.conn.execute(
+            "UPDATE vndb_releases SET removed_at = ? WHERE release_id = 'r1'", (GONE,)
+        )
+        catalog.conn.execute(
+            "UPDATE dlsite_works SET removed_at = ? WHERE product_id = 'RJ2'", (GONE,)
+        )
     rebuild_links(catalog)
     links = set(catalog.conn.execute("SELECT src_a, id_a, src_b, id_b FROM links"))
     assert links == {
@@ -61,8 +113,24 @@ def catalog(tmp_path, monkeypatch):
     conn.executemany(
         "INSERT INTO ryuu_posts (post_id,title,raw_title,version,rj_codes,url,first_seen,last_seen,removed_at) VALUES (?,?,?,?,?,?,'','',?)",
         [
-            (43, "Old", "Old", "0.1", '["RJ43"]', "https://www.ryuugames.com/reused/", None),
-            (44, "New", "New", "2.0", '["RJ44"]', "https://www.ryuugames.com/new-slug/", None),
+            (
+                43,
+                "Old",
+                "Old",
+                "0.1",
+                '["RJ43"]',
+                "https://www.ryuugames.com/reused/",
+                None,
+            ),
+            (
+                44,
+                "New",
+                "New",
+                "2.0",
+                '["RJ44"]',
+                "https://www.ryuugames.com/new-slug/",
+                None,
+            ),
             (50, "Gone", "Gone", "", "[]", "https://www.ryuugames.com/gone/", GONE),
         ],
     )
@@ -92,6 +160,8 @@ def test_live_post_id_beats_an_old_permalink(catalog):
     result = resolve_page("https://www.ryuugames.com/reused/", ["ryuugames:44"])
     assert result["matches"] == [new]
     assert result["catalog_entry"]["title"] == "New"
-    assert ("ryuugames", "43") not in {(link["source"], link["id"]) for link in result["ids"]}
+    assert ("ryuugames", "43") not in {
+        (link["source"], link["id"]) for link in result["ids"]
+    }
     # Without a live ID the stored permalink is still used.
     assert resolve_page("https://www.ryuugames.com/reused/")["matches"] == [old]

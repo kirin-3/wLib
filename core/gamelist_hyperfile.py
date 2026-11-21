@@ -45,7 +45,9 @@ class GameListTable:
 
 
 def _unsupported() -> BackupValidationError:
-    return BackupValidationError("This Game-List version is not supported.", "unsupported_version")
+    return BackupValidationError(
+        "This Game-List version is not supported.", "unsupported_version"
+    )
 
 
 def _uint32(data: bytes, offset: int) -> int:
@@ -55,7 +57,9 @@ def _uint32(data: bytes, offset: int) -> int:
 def _wide_text(data: bytes) -> str:
     # Split on a UTF-16 code unit boundary before decoding. Bytes after the
     # terminator may be stale, including malformed code units.
-    end = next((i for i in range(0, len(data), 2) if data[i:i + 2] == b"\0\0"), len(data))
+    end = next(
+        (i for i in range(0, len(data), 2) if data[i : i + 2] == b"\0\0"), len(data)
+    )
     value = data[:end].decode("utf-16-le")
     # isprintable() excludes Unicode space separators such as non-breaking spaces.
     if end == len(data) or any(
@@ -79,7 +83,9 @@ def _added_date(row: bytes, max_year: int) -> str:
     if not 2000 <= year <= max_year or milliseconds >= 86_400_000:
         return ""
     try:
-        return (datetime(year, month, day) + timedelta(milliseconds=milliseconds)).isoformat()
+        return (
+            datetime(year, month, day) + timedelta(milliseconds=milliseconds)
+        ).isoformat()
     except ValueError:
         return ""
 
@@ -89,7 +95,7 @@ def _memo_data_end(memo: bytes, pointer: int, kind: int) -> int:
     # that header and may end well before the allocated space.
     if not len(_SIGNATURE) <= pointer <= len(memo) - 21:
         return 0
-    exponent, marker = memo[pointer:pointer + 2]
+    exponent, marker = memo[pointer : pointer + 2]
     if not 7 <= exponent <= 28 or marker != kind:
         return 0
     end = pointer + 21 + _uint32(memo, pointer + 2)
@@ -116,7 +122,9 @@ def _memo_text(memo: bytes, pointer: int) -> str:
     tail_end = tail_start + (text_end - end)
     if tail_end > continuation_end:
         return ""
-    return (memo[text_start:end] + memo[tail_start:tail_end]).decode("cp1252", errors="replace")
+    return (memo[text_start:end] + memo[tail_start:tail_end]).decode(
+        "cp1252", errors="replace"
+    )
 
 
 def _decode_record(row: bytes, memo: bytes, max_year: int) -> GameListRecord | None:
@@ -140,8 +148,14 @@ def _decode_record(row: bytes, memo: bytes, max_year: int) -> GameListRecord | N
     if not name:
         return None
     return GameListRecord(
-        url, guid[0][:-1].decode("ascii").lower(), record_id, name, version,
-        homepage, developer, _added_date(row, max_year),
+        url,
+        guid[0][:-1].decode("ascii").lower(),
+        record_id,
+        name,
+        version,
+        homepage,
+        developer,
+        _added_date(row, max_year),
         _memo_text(memo, _uint32(row, 2253)),
     )
 
@@ -151,12 +165,15 @@ def _first_record(data: bytes, max_year: int) -> int:
         start = guid.start() - _GUID_OFFSET
         if start < len(_SIGNATURE) or start + _RECORD_SIZE > len(data):
             continue
-        if _decode_record(data[start:start + _RECORD_SIZE], b"", max_year) is not None:
+        if (
+            _decode_record(data[start : start + _RECORD_SIZE], b"", max_year)
+            is not None
+        ):
             # Once the alignment is known, include preceding rows whose
             # headers survived even if a damaged field kept them from anchoring.
             while start - _RECORD_SIZE >= len(_SIGNATURE):
                 previous = start - _RECORD_SIZE
-                if not _record_id(data[previous:previous + 16]):
+                if not _record_id(data[previous : previous + 16]):
                     break
                 start = previous
             return start
@@ -175,13 +192,19 @@ def read_gamelist_table(path: Path) -> GameListTable:
     try:
         data = _read_file(path)
     except FileNotFoundError as exc:
-        raise BackupValidationError("Game-List library was not found.", "file_not_found") from exc
+        raise BackupValidationError(
+            "Game-List library was not found.", "file_not_found"
+        ) from exc
     except OSError as exc:
-        raise BackupValidationError(f"Could not read Game-List library: {exc}", "read_failed") from exc
+        raise BackupValidationError(
+            f"Could not read Game-List library: {exc}", "read_failed"
+        ) from exc
     if len(data) > _MAX_FILE_SIZE:
         raise _unsupported()
     if not data.startswith(_SIGNATURE):
-        raise BackupValidationError("The file is not a Game-List library.", "invalid_source")
+        raise BackupValidationError(
+            "The file is not a Game-List library.", "invalid_source"
+        )
 
     max_year = datetime.now().year + 1
     start = _first_record(data, max_year)
@@ -196,7 +219,7 @@ def read_gamelist_table(path: Path) -> GameListTable:
     records: list[GameListRecord] = []
     failed = deleted = 0
     for offset in range(start, start + full * _RECORD_SIZE, _RECORD_SIZE):
-        row = data[offset:offset + _RECORD_SIZE]
+        row = data[offset : offset + _RECORD_SIZE]
         if row.startswith(_DELETED) and _record_id(row):
             deleted += 1
         elif (record := _decode_record(row, memo, max_year)) is None:
@@ -205,4 +228,6 @@ def read_gamelist_table(path: Path) -> GameListTable:
             records.append(record)
     if failed * 10 > full:
         raise _unsupported()
-    return GameListTable(records, full, len(records), failed, int(bool(remainder)), deleted)
+    return GameListTable(
+        records, full, len(records), failed, int(bool(remainder)), deleted
+    )

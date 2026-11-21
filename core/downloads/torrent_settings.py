@@ -5,6 +5,7 @@
 limits, port mapping, watch folder and export-warning flag are device-local:
 never exported or synced.
 """
+
 from __future__ import annotations
 
 import os
@@ -25,7 +26,12 @@ EXPORT_WARNING_KEY = "torrent_export_warning_accepted"
 # download limit is the download queue's shared limit (`queue_settings`);
 # DOWNLOAD_LIMIT_KEY is only read once, to seed it.
 HELPER_KEYS = (UPLOAD_LIMIT_KEY, PORT_MAPPING_KEY)
-DEVICE_LOCAL_KEYS = (*HELPER_KEYS, DOWNLOAD_LIMIT_KEY, WATCH_FOLDER_KEY, EXPORT_WARNING_KEY)
+DEVICE_LOCAL_KEYS = (
+    *HELPER_KEYS,
+    DOWNLOAD_LIMIT_KEY,
+    WATCH_FOLDER_KEY,
+    EXPORT_WARNING_KEY,
+)
 WATCH_FOLDER_ERROR = "Watch folder must be an existing folder"
 
 
@@ -70,7 +76,10 @@ def seed_hours() -> float | None:
 
 def limits_kib() -> tuple[int, int]:
     """(download, upload) limits in KiB/s; 0 means unlimited."""
-    return (int(_number(_get(DOWNLOAD_LIMIT_KEY)) or 0), int(_number(_get(UPLOAD_LIMIT_KEY)) or 0))
+    return (
+        int(_number(_get(DOWNLOAD_LIMIT_KEY)) or 0),
+        int(_number(_get(UPLOAD_LIMIT_KEY)) or 0),
+    )
 
 
 def port_mapping() -> bool:
@@ -87,7 +96,7 @@ def export_warning_accepted() -> bool:
 
 
 def normalize_watch_folder(raw: object) -> str | None:
-    """"" for blank, the path for an absolute existing folder, else None."""
+    """ "" for blank, the path for an absolute existing folder, else None."""
     if raw is None:
         return ""
     if not isinstance(raw, str):

@@ -312,7 +312,9 @@ def test_stop_spares_shared_wineserver_and_ignores_it_for_liveness(tmp_path):
         launcher = Launcher()
         kill_info = ("/usr/bin/wineserver", {"WINEPREFIX": "/prefix"})
         launcher._running[1] = RunningGame(group, kill_info, host_native=False)
-        launcher._running[2] = RunningGame(MagicMock(pid=1), kill_info, host_native=False)
+        launcher._running[2] = RunningGame(
+            MagicMock(pid=1), kill_info, host_native=False
+        )
         with patch("subprocess.run") as run, patch("threading.Thread"):
             assert launcher.stop(1)["success"]
         run.assert_not_called()
@@ -434,7 +436,9 @@ def test_stop_native_missing_and_windows_error(monkeypatch):
 def test_html_game_is_untracked():
     with patch("os.path.exists", return_value=True), patch("subprocess.Popen"):
         launcher = Launcher()
-        assert launcher.launch("/tmp/game.html", game_id=1, html_player="browser")["success"]
+        assert launcher.launch("/tmp/game.html", game_id=1, html_player="browser")[
+            "success"
+        ]
         assert launcher.get_running_games() == []
 
 
@@ -565,7 +569,9 @@ def test_launch_java_archive(mock_get_setting, mock_popen, mock_exists):
     assert kwargs["cwd"] == "/home/user"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts"
+)
 @patch("os.path.exists")
 @patch("subprocess.Popen")
 @patch("core.launcher.get_setting")
@@ -1611,7 +1617,9 @@ def test_launch_html_game(mock_abspath, mock_popen, mock_exists):
 
 def test_launch_html_escapes_url_characters():
     with patch("os.path.exists", return_value=True), patch("subprocess.Popen") as popen:
-        result = Launcher().launch("/games/Chapter#1/100% ? café.html", html_player="browser")
+        result = Launcher().launch(
+            "/games/Chapter#1/100% ? café.html", html_player="browser"
+        )
     assert result["success"] is True
     assert popen.call_args.args[0] == [
         "xdg-open",
@@ -2502,7 +2510,8 @@ def test_sandboxie_launch_tracks_box_after_start_exits(monkeypatch):
         lambda: {"status": "ready", "path": r"C:\Sandboxie\Start.exe"},
     )
     monkeypatch.setattr(
-        "core.launcher.game_sandbox.configure_sandboxie_box", lambda *args, **kwargs: "wLib_12"
+        "core.launcher.game_sandbox.configure_sandboxie_box",
+        lambda *args, **kwargs: "wLib_12",
     )
     launcher = Launcher()
     calls = []
@@ -2544,7 +2553,8 @@ def _run_sandboxie_tracker(monkeypatch, pids, clock):
         lambda: {"status": "ready", "path": r"C:\\Sandboxie\\Start.exe"},
     )
     monkeypatch.setattr(
-        "core.launcher.game_sandbox.configure_sandboxie_box", lambda *args, **kwargs: "wLib_12"
+        "core.launcher.game_sandbox.configure_sandboxie_box",
+        lambda *args, **kwargs: "wLib_12",
     )
     monkeypatch.setattr("core.launcher.game_sandbox.list_box_pids", pids)
     launcher = Launcher()
@@ -3390,7 +3400,9 @@ def test_stop_finds_wineserver_beside_a_symlinked_runner(monkeypatch, tmp_path, 
         killpg.assert_called_with(321, signal.SIGTERM)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts"
+)
 def test_umu_refusals_and_wrapped_command(monkeypatch, tmp_path):
     import core.umu as umu
 
@@ -3420,7 +3432,9 @@ def test_umu_refusals_and_wrapped_command(monkeypatch, tmp_path):
     assert popen.call_args.kwargs["env"]["GAMEID"] == "umu-wlib7"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts"
+)
 def test_umu_refuses_shared_prefix_and_allows_different_prefix(tmp_path):
     exe = tmp_path / "game.exe"
     exe.touch()
@@ -3439,7 +3453,9 @@ def test_umu_refuses_shared_prefix_and_allows_different_prefix(tmp_path):
         )["success"]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts"
+)
 def test_umu_cheat_engine_joins_and_sandbox_skips(tmp_path, monkeypatch):
     game_dir = tmp_path / "game"
     game_dir.mkdir()
@@ -3497,30 +3513,88 @@ def test_umu_cheat_engine_joins_and_sandbox_skips(tmp_path, monkeypatch):
 
 
 def test_network_block_refuses_unavailable_and_windows_without_sandbox(monkeypatch):
-    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "missing", "reason": "missing bwrap", "path": "", "version": ""})
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda **kwargs: {
+            "status": "missing",
+            "reason": "missing bwrap",
+            "path": "",
+            "version": "",
+        },
+    )
     with patch("os.path.exists", return_value=True), patch("subprocess.Popen") as popen:
         result = Launcher().launch("/game/game", block_network=True)
         assert result["code"] == "network_block_unavailable"
         assert "missing bwrap" in result["error"]
         popen.assert_not_called()
         monkeypatch.setattr("core.launcher.is_windows", lambda: True)
-        assert Launcher().launch("C:/game/game.exe", block_network=True)["code"] == "network_block_needs_sandbox"
+        assert (
+            Launcher().launch("C:/game/game.exe", block_network=True)["code"]
+            == "network_block_needs_sandbox"
+        )
 
 
 def test_network_block_wraps_unsandboxed_game(monkeypatch):
-    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "ready", "reason": "", "path": "/usr/bin/bwrap", "version": ""})
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda **kwargs: {
+            "status": "ready",
+            "reason": "",
+            "path": "/usr/bin/bwrap",
+            "version": "",
+        },
+    )
     monkeypatch.setattr("core.launcher.host_x11_sockets", lambda: ("X0",))
-    with patch("os.path.exists", return_value=True), patch("os.access", return_value=True), patch("subprocess.Popen") as popen, patch("threading.Thread"):
-        result = Launcher().launch("/games/game.sh", launch_mode="native", block_network=True)
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=True),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch(
+            "/games/game.sh", launch_mode="native", block_network=True
+        )
     assert result["success"]
-    assert popen.call_args.args[0] == ["/usr/bin/bwrap", "--unshare-user", "--unshare-net", "--dev-bind", "/", "/", "--tmpfs", "/tmp/.X11-unix", "--ro-bind-try", "/tmp/.X11-unix/X0", "/tmp/.X11-unix/X0", "--chdir", "/games", "--", "/games/game.sh"]
+    assert popen.call_args.args[0] == [
+        "/usr/bin/bwrap",
+        "--unshare-user",
+        "--unshare-net",
+        "--dev-bind",
+        "/",
+        "/",
+        "--tmpfs",
+        "/tmp/.X11-unix",
+        "--ro-bind-try",
+        "/tmp/.X11-unix/X0",
+        "/tmp/.X11-unix/X0",
+        "--chdir",
+        "/games",
+        "--",
+        "/games/game.sh",
+    ]
 
 
 def test_offline_proton_requires_local_build(monkeypatch):
-    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "ready", "reason": "", "path": "/usr/bin/bwrap", "version": ""})
-    monkeypatch.setattr("core.umu.resolve_codename", MagicMock(side_effect=ValueError("No build")))
-    with patch("os.path.exists", return_value=True), patch("os.makedirs"), patch("subprocess.Popen") as popen:
-        result = Launcher().launch("/games/game.exe", proton_version="GE-Proton", block_network=True)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda **kwargs: {
+            "status": "ready",
+            "reason": "",
+            "path": "/usr/bin/bwrap",
+            "version": "",
+        },
+    )
+    monkeypatch.setattr(
+        "core.umu.resolve_codename", MagicMock(side_effect=ValueError("No build"))
+    )
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.makedirs"),
+        patch("subprocess.Popen") as popen,
+    ):
+        result = Launcher().launch(
+            "/games/game.exe", proton_version="GE-Proton", block_network=True
+        )
     assert result["code"] == "proton_missing_offline"
     popen.assert_not_called()
 
@@ -3528,26 +3602,57 @@ def test_offline_proton_requires_local_build(monkeypatch):
 def test_browser_ignores_network_preference(monkeypatch):
     probe = MagicMock()
     monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", probe)
-    with patch("os.path.exists", return_value=True), patch("subprocess.Popen"), patch("threading.Thread"):
-        assert Launcher().launch("/tmp/game.html", game_id=1, block_network=True, html_player="browser")["success"]
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("subprocess.Popen"),
+        patch("threading.Thread"),
+    ):
+        assert Launcher().launch(
+            "/tmp/game.html", game_id=1, block_network=True, html_player="browser"
+        )["success"]
     probe.assert_not_called()
 
 
 def test_offline_proton_uses_local_build(monkeypatch, tmp_path):
-    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "ready", "reason": "", "path": "/usr/bin/bwrap", "version": ""})
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda **kwargs: {
+            "status": "ready",
+            "reason": "",
+            "path": "/usr/bin/bwrap",
+            "version": "",
+        },
+    )
     runner = tmp_path / "GE-Proton-11"
     runner.mkdir()
     monkeypatch.setattr("core.umu.resolve_codename", lambda name: str(runner))
-    with patch("os.path.exists", return_value=True), patch("os.makedirs"), patch("subprocess.Popen") as popen, patch("threading.Thread"):
-        result = Launcher().launch("/games/game.exe", proton_version="GE-Proton", block_network=True)
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.makedirs"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch(
+            "/games/game.exe", proton_version="GE-Proton", block_network=True
+        )
     assert result["success"]
     assert popen.call_args.kwargs["env"]["PROTONPATH"] == str(runner)
     assert popen.call_args.kwargs["env"]["UMU_RUNTIME_UPDATE"] == "0"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts"
+)
 def test_offline_wine_preserves_context_and_kill_info(monkeypatch, tmp_path):
-    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "ready", "reason": "", "path": "bwrap", "version": ""})
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda **kwargs: {
+            "status": "ready",
+            "reason": "",
+            "path": "bwrap",
+            "version": "",
+        },
+    )
     wine = tmp_path / "wine"
     wine.write_text("#!/bin/sh\n")
     wine.chmod(0o755)
@@ -3558,7 +3663,14 @@ def test_offline_wine_preserves_context_and_kill_info(monkeypatch, tmp_path):
     exe.write_bytes(b"MZ")
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
         launcher = Launcher()
-        result = launcher.launch(str(exe), proton_version=str(wine), custom_prefix=str(tmp_path / "prefix"), launch_mode="wine_proton", game_id=1, block_network=True)
+        result = launcher.launch(
+            str(exe),
+            proton_version=str(wine),
+            custom_prefix=str(tmp_path / "prefix"),
+            launch_mode="wine_proton",
+            game_id=1,
+            block_network=True,
+        )
     assert result["success"], result
     assert popen.call_args.args[0][:3] == ["bwrap", "--unshare-user", "--unshare-net"]
     assert launcher._running[1].wine_context is not None
@@ -3566,10 +3678,32 @@ def test_offline_wine_preserves_context_and_kill_info(monkeypatch, tmp_path):
 
 
 def test_offline_sandbox_adds_network_namespace(monkeypatch, tmp_path):
-    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "ready", "reason": "", "path": "bwrap", "version": ""})
-    monkeypatch.setattr("core.launcher.game_sandbox.prepare_sandbox_home", lambda _: str(tmp_path / "home"))
-    with patch("os.path.exists", return_value=True), patch("os.access", return_value=True), patch("subprocess.Popen") as popen, patch("threading.Thread"):
-        result = Launcher().launch("/games/game.sh", launch_mode="native", game_id=1, sandbox_enabled=True, block_network=True)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda **kwargs: {
+            "status": "ready",
+            "reason": "",
+            "path": "bwrap",
+            "version": "",
+        },
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.prepare_sandbox_home",
+        lambda _: str(tmp_path / "home"),
+    )
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=True),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch(
+            "/games/game.sh",
+            launch_mode="native",
+            game_id=1,
+            sandbox_enabled=True,
+            block_network=True,
+        )
     assert result["success"], result
     assert "--unshare-net" in popen.call_args.args[0]
     assert "--unshare-pid" in popen.call_args.args[0]
@@ -3578,46 +3712,85 @@ def test_offline_sandbox_adds_network_namespace(monkeypatch, tmp_path):
 def test_performance_tool_wrapping_order_and_existing_user_wrapper():
     from core.launcher import wrap_performance_tools
 
-    assert wrap_performance_tools(["game", "-windowed"], ["/bin/gamemoderun", "/bin/mangohud"], ["%command%", "-windowed"]) == ["/bin/gamemoderun", "/bin/mangohud", "game", "-windowed"]
-    assert wrap_performance_tools(["gamemoderun", "game"], ["/bin/gamemoderun", "/bin/mangohud"], ["gamemoderun", "%command%"]) == ["/bin/mangohud", "gamemoderun", "game"]
+    assert wrap_performance_tools(
+        ["game", "-windowed"],
+        ["/bin/gamemoderun", "/bin/mangohud"],
+        ["%command%", "-windowed"],
+    ) == ["/bin/gamemoderun", "/bin/mangohud", "game", "-windowed"]
+    assert wrap_performance_tools(
+        ["gamemoderun", "game"],
+        ["/bin/gamemoderun", "/bin/mangohud"],
+        ["gamemoderun", "%command%"],
+    ) == ["/bin/mangohud", "gamemoderun", "game"]
 
 
 def test_game_using_prefix_normalizes_compat_pfx(tmp_path):
     from core.launcher import Launcher, RunningGame
 
     launcher = Launcher()
-    launcher._running[1] = RunningGame(None, None, prefix=str(tmp_path), title="Example")
+    launcher._running[1] = RunningGame(
+        None, None, prefix=str(tmp_path), title="Example"
+    )
     assert launcher.game_using_prefix(str(tmp_path / "pfx")) == "Example"
     assert launcher.game_using_prefix(str(tmp_path / "other")) is None
 
 
-@pytest.mark.parametrize("mode,args,expected", [
-    ("native", "", ["/usr/bin/gamemoderun", "/usr/bin/mangohud", "/opt/game/game.sh"]),
-    ("custom", "PROTON_LOG=1 %command% -windowed", ["/usr/bin/gamemoderun", "/usr/bin/mangohud", "/opt/game/game.sh", "-windowed"]),
-])
+@pytest.mark.parametrize(
+    "mode,args,expected",
+    [
+        (
+            "native",
+            "",
+            ["/usr/bin/gamemoderun", "/usr/bin/mangohud", "/opt/game/game.sh"],
+        ),
+        (
+            "custom",
+            "PROTON_LOG=1 %command% -windowed",
+            [
+                "/usr/bin/gamemoderun",
+                "/usr/bin/mangohud",
+                "/opt/game/game.sh",
+                "-windowed",
+            ],
+        ),
+    ],
+)
 def test_performance_tools_wrap_launch(mode, args, expected):
-    with (patch("os.path.exists", return_value=True),
-          patch("os.access", return_value=True),
-          patch("core.launcher.host_which", side_effect=lambda name: f"/usr/bin/{name}"),
-          patch("subprocess.Popen") as popen, patch("threading.Thread")):
-        result = Launcher().launch("/opt/game/game.sh", args, launch_mode=mode, gamemode=True, mangohud=True)
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=True),
+        patch("core.launcher.host_which", side_effect=lambda name: f"/usr/bin/{name}"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch(
+            "/opt/game/game.sh", args, launch_mode=mode, gamemode=True, mangohud=True
+        )
     assert result["success"]
     assert popen.call_args.args[0] == expected
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="GameMode, MangoHud and Wine launches run only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="GameMode, MangoHud and Wine launches run only on Linux hosts",
+)
 def test_missing_performance_tool_logged(tmp_path, monkeypatch):
     game = tmp_path / "game.sh"
     game.write_text("#!/bin/sh\n")
     game.chmod(0o755)
     monkeypatch.setattr("core.launcher.host_which", lambda name: None)
-    monkeypatch.setattr("core.launcher.get_setting", lambda key: "true" if key == "enable_logging" else "")
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: "true" if key == "enable_logging" else "",
+    )
     with patch("subprocess.Popen"), patch("threading.Thread"):
         assert Launcher().launch(str(game), gamemode=True)["success"]
     assert "GameMode skipped: not installed" in (tmp_path / "game_wlib.log").read_text()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="The bwrap sandbox runs only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="The bwrap sandbox runs only on Linux hosts"
+)
 def test_sandboxed_launch_passes_host_x11_sockets(tmp_path, monkeypatch):
     game = tmp_path / "game.sh"
     game.write_text("#!/bin/sh\n")
@@ -3628,36 +3801,59 @@ def test_sandboxed_launch_passes_host_x11_sockets(tmp_path, monkeypatch):
         seen.update(kwargs)
         return ["bwrap", *cmd]
 
-    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda: {"status": "ready", "path": "bwrap"})
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": "bwrap"},
+    )
     monkeypatch.setattr("core.launcher.game_sandbox.build_bwrap_argv", build)
     monkeypatch.setattr("core.launcher._spawn_sandbox_process", lambda start: start())
-    monkeypatch.setattr("core.launcher.game_sandbox.check_writable_mounts", lambda *args: None)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.check_writable_mounts", lambda *args: None
+    )
     monkeypatch.setattr("core.launcher.host_x11_sockets", lambda: ("X0", "X1"))
     with patch("subprocess.Popen"), patch("threading.Thread"):
         assert Launcher().launch(str(game), game_id=1, sandbox_enabled=True)["success"]
     assert seen["x11_sockets"] == ("X0", "X1")
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="GameMode, MangoHud and Wine launches run only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="GameMode, MangoHud and Wine launches run only on Linux hosts",
+)
 def test_sandbox_performance_tools_and_browser(tmp_path, monkeypatch):
     game = tmp_path / "game.sh"
     game.write_text("#!/bin/sh\n")
     game.chmod(0o755)
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda: {"status": "ready", "path": "bwrap"})
-    monkeypatch.setattr("core.launcher.game_sandbox.build_bwrap_argv", lambda cmd, **kwargs: ["bwrap", *cmd])
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": "bwrap"},
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.build_bwrap_argv",
+        lambda cmd, **kwargs: ["bwrap", *cmd],
+    )
     monkeypatch.setattr("core.launcher._spawn_sandbox_process", lambda start: start())
-    monkeypatch.setattr("core.launcher.game_sandbox.check_writable_mounts", lambda *args: None)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.check_writable_mounts", lambda *args: None
+    )
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
-        assert Launcher().launch(str(game), game_id=1, sandbox_enabled=True, gamemode=True, mangohud=True)["success"]
+        assert Launcher().launch(
+            str(game), game_id=1, sandbox_enabled=True, gamemode=True, mangohud=True
+        )["success"]
         assert popen.call_args.args[0] == ["bwrap", "/usr/bin/mangohud", str(game)]
         html = tmp_path / "game.html"
         html.touch()
-        assert Launcher().launch(str(html), gamemode=True, mangohud=True, html_player="browser")["success"]
+        assert Launcher().launch(
+            str(html), gamemode=True, mangohud=True, html_player="browser"
+        )["success"]
         assert popen.call_args.args[0][0] == "xdg-open"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="GameMode, MangoHud and Wine launches run only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="GameMode, MangoHud and Wine launches run only on Linux hosts",
+)
 @pytest.mark.parametrize("runner", ["/usr/bin/wine", "/fake/proton"])
 def test_performance_tools_wrap_wine_and_proton(tmp_path, monkeypatch, runner):
     exe = tmp_path / "game.exe"
@@ -3666,7 +3862,14 @@ def test_performance_tools_wrap_wine_and_proton(tmp_path, monkeypatch, runner):
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
         launcher = Launcher()
-        result = launcher.launch(str(exe), proton_version=runner, custom_prefix=str(tmp_path / "prefix"), game_id=42, gamemode=True, mangohud=True)
+        result = launcher.launch(
+            str(exe),
+            proton_version=runner,
+            custom_prefix=str(tmp_path / "prefix"),
+            game_id=42,
+            gamemode=True,
+            mangohud=True,
+        )
     assert result["success"]
     command = popen.call_args.args[0]
     assert command[:2] == ["/usr/bin/gamemoderun", "/usr/bin/mangohud"]
@@ -3680,7 +3883,10 @@ def test_performance_tools_wrap_wine_and_proton(tmp_path, monkeypatch, runner):
         assert "mangohud" not in entry.kill_info[0]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="GameMode, MangoHud and Wine launches run only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="GameMode, MangoHud and Wine launches run only on Linux hosts",
+)
 def test_performance_tools_wrap_rpgmaker_runner(tmp_path, monkeypatch, capsys):
     exe = tmp_path / "game.exe"
     exe.touch()
@@ -3688,9 +3894,14 @@ def test_performance_tools_wrap_rpgmaker_runner(tmp_path, monkeypatch, capsys):
     runner.touch()
     runner.chmod(0o755)
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr("core.launcher.get_setting", lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "")
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "",
+    )
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
-        result = Launcher().launch(str(exe), launch_mode="rpgmaker_linux", gamemode=True, mangohud=True)
+        result = Launcher().launch(
+            str(exe), launch_mode="rpgmaker_linux", gamemode=True, mangohud=True
+        )
     assert result["success"]
     assert popen.call_args.args[0][:2] == ["/usr/bin/gamemoderun", str(runner)]
     assert "/usr/bin/mangohud" not in popen.call_args.args[0]
@@ -3716,7 +3927,10 @@ def test_sandboxed_runner_symlink_runs_real_path(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr("core.launcher.is_windows", lambda: False)
-    monkeypatch.setattr("core.launcher.get_setting", lambda key: str(link) if key == "rpgmaker_linux_runner_path" else "")
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: str(link) if key == "rpgmaker_linux_runner_path" else "",
+    )
     monkeypatch.setattr(
         game_sandbox,
         "get_sandbox_status",
@@ -3735,7 +3949,9 @@ def test_sandboxed_runner_symlink_runs_real_path(monkeypatch, tmp_path):
     assert ["--ro-bind", folder, folder] in triples
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="RPGMaker Linux runner runs only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="RPGMaker Linux runner runs only on Linux hosts"
+)
 def test_performance_rpgmaker_runner_keeps_user_mangohud(tmp_path, monkeypatch):
     exe = tmp_path / "game.exe"
     exe.touch()
@@ -3743,7 +3959,10 @@ def test_performance_rpgmaker_runner_keeps_user_mangohud(tmp_path, monkeypatch):
     runner.touch()
     runner.chmod(0o755)
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr("core.launcher.get_setting", lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "")
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "",
+    )
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
         result = Launcher().launch(
             str(exe), "mangohud %command%", launch_mode="rpgmaker_linux", mangohud=True
@@ -3810,8 +4029,12 @@ def test_sandboxed_mangohud_binds(monkeypatch, tmp_path, args, setting, expected
     monkeypatch.setattr(game_sandbox, "build_bwrap_argv", capture)
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
         result = Launcher().launch(
-            str(game), args, game_id=31, sandbox_enabled=True,
-            launch_mode="native", mangohud=setting,
+            str(game),
+            args,
+            game_id=31,
+            sandbox_enabled=True,
+            launch_mode="native",
+            mangohud=setting,
         )
     assert result["success"], result
     argv = popen.call_args.args[0]
@@ -3840,24 +4063,42 @@ def test_companion_tool_does_not_inherit_performance_wrappers(tmp_path, monkeypa
     monkeypatch.setattr("core.umu.resolve_runner", lambda _: "/usr/bin/wine")
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
     tool = CompanionTool(
-        id=1, name="Helper", kind="wine", path=str(tool_path), arguments="",
-        show_on_all_games=True, sort_order=0,
+        id=1,
+        name="Helper",
+        kind="wine",
+        path=str(tool_path),
+        arguments="",
+        show_on_all_games=True,
+        sort_order=0,
     )
     launcher = Launcher()
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
         assert launcher.launch(
-            str(game), proton_version="/usr/bin/wine", custom_prefix=str(tmp_path / "prefix"),
-            game_id=42, gamemode=True, mangohud=True,
+            str(game),
+            proton_version="/usr/bin/wine",
+            custom_prefix=str(tmp_path / "prefix"),
+            game_id=42,
+            gamemode=True,
+            mangohud=True,
         )["success"]
-        assert popen.call_args.args[0][:2] == ["/usr/bin/gamemoderun", "/usr/bin/mangohud"]
+        assert popen.call_args.args[0][:2] == [
+            "/usr/bin/gamemoderun",
+            "/usr/bin/mangohud",
+        ]
         assert launcher.launch_companion_tool(42, tool)["success"]
         assert popen.call_args.args[0] == ["/usr/bin/wine", str(tool_path)]
 
 
 def test_windows_launch_skips_performance_tools(monkeypatch):
     monkeypatch.setattr("core.launcher.is_windows", lambda: True)
-    with patch("os.path.exists", return_value=True), patch("subprocess.Popen") as popen, patch("threading.Thread"):
-        assert Launcher().launch(r"C:\games\game.exe", gamemode=True, mangohud=True)["success"]
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        assert Launcher().launch(r"C:\games\game.exe", gamemode=True, mangohud=True)[
+            "success"
+        ]
         assert popen.call_args.args[0] == [r"C:\games\game.exe"]
 
 
@@ -3911,7 +4152,9 @@ def test_sandboxed_wine_game_gets_its_own_prefix(
         patch("os.makedirs"),
         patch(
             "core.launcher.get_setting",
-            side_effect=lambda key: "/global/prefix" if key == "wine_prefix_path" else "",
+            side_effect=lambda key: (
+                "/global/prefix" if key == "wine_prefix_path" else ""
+            ),
         ),
         patch("subprocess.Popen") as popen,
         patch("threading.Thread"),
@@ -3943,14 +4186,22 @@ def test_network_blocked_game_cannot_share_prefix_with_networked_game():
     # Games another wLib process runs are checked too, and released.
     sandboxed = RunningGame(None, None, prefix="/q", sandboxed=True, title="Runner")
     assert launcher.reserve_external(3, sandboxed) is None
-    assert "Runner" in (launcher._prefix_conflict_locked(RunningGame(None, None, prefix="/q"), 4) or "")
+    assert "Runner" in (
+        launcher._prefix_conflict_locked(RunningGame(None, None, prefix="/q"), 4) or ""
+    )
     assert launcher.game_using_prefix("/q") == "Runner"
     launcher.release_external(3)
-    assert launcher._prefix_conflict_locked(RunningGame(None, None, prefix="/q"), 4) is None
+    assert (
+        launcher._prefix_conflict_locked(RunningGame(None, None, prefix="/q"), 4)
+        is None
+    )
     # A runner that died without reporting its end no longer holds the prefix.
     assert launcher.reserve_external(5, sandboxed) is None
     launcher.external_alive = lambda game_id: False
-    assert launcher._prefix_conflict_locked(RunningGame(None, None, prefix="/q"), 4) is None
+    assert (
+        launcher._prefix_conflict_locked(RunningGame(None, None, prefix="/q"), 4)
+        is None
+    )
     assert 5 not in launcher._external
     launcher.shutdown()
 
@@ -4060,7 +4311,9 @@ def test_real_windows_launcher_stub_is_tracked_and_stopped(tmp_path, monkeypatch
         assert launcher.get_running_games() == []
         assert not child_running()
     finally:
-        subprocess.run(["taskkill", "/F", "/IM", "wlibchild.exe"], capture_output=True, check=False)
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "wlibchild.exe"], capture_output=True, check=False
+        )
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows job objects")
@@ -4079,9 +4332,15 @@ def test_real_windows_browser_a_game_opened_is_not_the_game(tmp_path, monkeypatc
 
     def _image_paths(name: str) -> str:
         return subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             f"(Get-Process -Name {name[:-4]} -ErrorAction SilentlyContinue).Path"],
-            capture_output=True, text=True, check=False,
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"(Get-Process -Name {name[:-4]} -ErrorAction SilentlyContinue).Path",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
         ).stdout.lower()
 
     launcher = Launcher()
@@ -4098,9 +4357,14 @@ def test_real_windows_browser_a_game_opened_is_not_the_game(tmp_path, monkeypatc
         assert str(browser).lower() in _image_paths("msedge.exe")
     finally:
         subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             f"Get-Process -Name msedge -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{browser}' }} | Stop-Process -Force"],
-            capture_output=True, check=False,
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"Get-Process -Name msedge -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{browser}' }} | Stop-Process -Force",
+            ],
+            capture_output=True,
+            check=False,
         )
 
 
@@ -4113,12 +4377,26 @@ GAMESCOPE_PIXEL = {
     "fps_limit": "",
     "args": [],
 }
-GAMESCOPE_PREFIX = ["/usr/bin/gamescope", "-f", "-w", "816", "-h", "624", "-S", "integer", "-F", "nearest", "--"]
+GAMESCOPE_PREFIX = [
+    "/usr/bin/gamescope",
+    "-f",
+    "-w",
+    "816",
+    "-h",
+    "624",
+    "-S",
+    "integer",
+    "-F",
+    "nearest",
+    "--",
+]
 
 
 @pytest.fixture
 def _gamescope_host(monkeypatch):
-    monkeypatch.setattr("core.launcher.gamescope_mod.in_gamescope_session", lambda: False)
+    monkeypatch.setattr(
+        "core.launcher.gamescope_mod.in_gamescope_session", lambda: False
+    )
     monkeypatch.setattr("core.launcher.display_info.screen_size", lambda: None)
 
 
@@ -4128,50 +4406,102 @@ def _gamescope_host(monkeypatch):
         ({"windows": True}, "Windows"),
         ({"browser_launch": True}, "browser launch"),
         ({"flatpak_player": True}, "Flatpak web player"),
-        ({"user_args": ["/usr/bin/gamescope", "-f", "--", "%command%"]}, "arguments already start gamescope"),
+        (
+            {"user_args": ["/usr/bin/gamescope", "-f", "--", "%command%"]},
+            "arguments already start gamescope",
+        ),
         ({}, ""),
     ],
 )
 def test_gamescope_skip_reasons(monkeypatch, kwargs, reason):
     from core.launcher import gamescope_skip_reason
 
-    monkeypatch.setattr("core.launcher.gamescope_mod.in_gamescope_session", lambda: False)
-    base = {"windows": False, "browser_launch": False, "flatpak_player": False, "user_args": []}
+    monkeypatch.setattr(
+        "core.launcher.gamescope_mod.in_gamescope_session", lambda: False
+    )
+    base = {
+        "windows": False,
+        "browser_launch": False,
+        "flatpak_player": False,
+        "user_args": [],
+    }
     assert gamescope_skip_reason(**{**base, **kwargs}) == reason
 
 
 def test_gamescope_skip_reason_in_gamescope_session(monkeypatch):
     from core.launcher import gamescope_skip_reason
 
-    monkeypatch.setattr("core.launcher.gamescope_mod.in_gamescope_session", lambda: True)
-    assert gamescope_skip_reason(windows=False, browser_launch=False, flatpak_player=False, user_args=[]) == "already in a gamescope session"
+    monkeypatch.setattr(
+        "core.launcher.gamescope_mod.in_gamescope_session", lambda: True
+    )
+    assert (
+        gamescope_skip_reason(
+            windows=False, browser_launch=False, flatpak_player=False, user_args=[]
+        )
+        == "already in a gamescope session"
+    )
 
 
-@pytest.mark.parametrize("mode,args,expected", [
-    ("native", "", [*GAMESCOPE_PREFIX, "/opt/game/game.sh"]),
-    ("custom", "PROTON_LOG=1 %command% -windowed", [*GAMESCOPE_PREFIX, "/usr/bin/gamemoderun", "/usr/bin/mangohud", "/opt/game/game.sh", "-windowed"]),
-])
-def test_gamescope_wraps_native_and_command_launches(_gamescope_host, mode, args, expected):
+@pytest.mark.parametrize(
+    "mode,args,expected",
+    [
+        ("native", "", [*GAMESCOPE_PREFIX, "/opt/game/game.sh"]),
+        (
+            "custom",
+            "PROTON_LOG=1 %command% -windowed",
+            [
+                *GAMESCOPE_PREFIX,
+                "/usr/bin/gamemoderun",
+                "/usr/bin/mangohud",
+                "/opt/game/game.sh",
+                "-windowed",
+            ],
+        ),
+    ],
+)
+def test_gamescope_wraps_native_and_command_launches(
+    _gamescope_host, mode, args, expected
+):
     tools = mode == "custom"
-    with (patch("os.path.exists", return_value=True),
-          patch("os.access", return_value=True),
-          patch("core.launcher.host_which", side_effect=lambda name: f"/usr/bin/{name}"),
-          patch("subprocess.Popen") as popen, patch("threading.Thread")):
-        result = Launcher().launch("/opt/game/game.sh", args, launch_mode=mode, gamemode=tools, mangohud=tools, gamescope=GAMESCOPE_PIXEL)
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=True),
+        patch("core.launcher.host_which", side_effect=lambda name: f"/usr/bin/{name}"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch(
+            "/opt/game/game.sh",
+            args,
+            launch_mode=mode,
+            gamemode=tools,
+            mangohud=tools,
+            gamescope=GAMESCOPE_PIXEL,
+        )
     assert result["success"]
     assert popen.call_args.args[0] == expected
     if tools:
         assert popen.call_args.kwargs["env"]["PROTON_LOG"] == "1"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Wine launches run only on Linux hosts")
-def test_gamescope_wraps_proton_umu_launch_as_is(tmp_path, monkeypatch, _gamescope_host):
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Wine launches run only on Linux hosts"
+)
+def test_gamescope_wraps_proton_umu_launch_as_is(
+    tmp_path, monkeypatch, _gamescope_host
+):
     exe = tmp_path / "game.exe"
     exe.touch()
     monkeypatch.setattr("core.umu.resolve_runner", lambda _: "/fake/proton")
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
-        result = Launcher().launch(str(exe), proton_version="/fake/proton", custom_prefix=str(tmp_path / "prefix"), game_id=42, gamescope=GAMESCOPE_PIXEL)
+        result = Launcher().launch(
+            str(exe),
+            proton_version="/fake/proton",
+            custom_prefix=str(tmp_path / "prefix"),
+            game_id=42,
+            gamescope=GAMESCOPE_PIXEL,
+        )
     assert result["success"]
     command = popen.call_args.args[0]
     assert command[: len(GAMESCOPE_PREFIX)] == GAMESCOPE_PREFIX
@@ -4179,8 +4509,12 @@ def test_gamescope_wraps_proton_umu_launch_as_is(tmp_path, monkeypatch, _gamesco
     assert "wineserver" not in " ".join(command)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Wine launches run only on Linux hosts")
-def test_gamescope_wine_launch_waits_for_wineserver(tmp_path, monkeypatch, _gamescope_host):
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Wine launches run only on Linux hosts"
+)
+def test_gamescope_wine_launch_waits_for_wineserver(
+    tmp_path, monkeypatch, _gamescope_host
+):
     from core.launcher import GAMESCOPE_WINE_WAIT
 
     exe = tmp_path / "game.exe"
@@ -4188,10 +4522,16 @@ def test_gamescope_wine_launch_waits_for_wineserver(tmp_path, monkeypatch, _game
     monkeypatch.setattr("core.umu.resolve_runner", lambda _: "/usr/bin/wine")
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
-        result = Launcher().launch(str(exe), proton_version="/usr/bin/wine", custom_prefix=str(tmp_path / "prefix"), game_id=43, gamescope=GAMESCOPE_PIXEL)
+        result = Launcher().launch(
+            str(exe),
+            proton_version="/usr/bin/wine",
+            custom_prefix=str(tmp_path / "prefix"),
+            game_id=43,
+            gamescope=GAMESCOPE_PIXEL,
+        )
     assert result["success"]
     command = popen.call_args.args[0]
-    rest = command[len(GAMESCOPE_PREFIX):]
+    rest = command[len(GAMESCOPE_PREFIX) :]
     assert command[: len(GAMESCOPE_PREFIX)] == GAMESCOPE_PREFIX
     assert rest[:5] == ["sh", "-c", GAMESCOPE_WINE_WAIT, "sh", "/usr/bin/wineserver"]
     assert rest[5] == "/usr/bin/wine"
@@ -4204,7 +4544,7 @@ def test_gamescope_wine_wait_script_keeps_exit_status(tmp_path):
 
     marker = tmp_path / "waited"
     ws = tmp_path / "wineserver"
-    ws.write_text(f"#!/bin/sh\n[ \"$1\" = -w ] && touch {marker}\n")
+    ws.write_text(f'#!/bin/sh\n[ "$1" = -w ] && touch {marker}\n')
     ws.chmod(0o755)
     # Its own process group, as under gamescope: the script waits for game
     # processes in its group, not for wineserver -w.
@@ -4218,9 +4558,13 @@ def test_gamescope_wine_wait_script_keeps_exit_status(tmp_path):
     assert marker.exists() is not sys.platform.startswith("linux")
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="The bwrap sandbox runs only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="The bwrap sandbox runs only on Linux hosts"
+)
 @pytest.mark.parametrize("network_only", [False, True])
-def test_gamescope_runs_outside_bwrap(tmp_path, monkeypatch, _gamescope_host, network_only):
+def test_gamescope_runs_outside_bwrap(
+    tmp_path, monkeypatch, _gamescope_host, network_only
+):
     game = tmp_path / "game.sh"
     game.write_text("#!/bin/sh\n")
     game.chmod(0o755)
@@ -4231,11 +4575,16 @@ def test_gamescope_runs_outside_bwrap(tmp_path, monkeypatch, _gamescope_host, ne
         return ["bwrap", *cmd]
 
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda: {"status": "ready", "path": "bwrap"})
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": "bwrap"},
+    )
     monkeypatch.setattr("core.launcher.game_sandbox.build_bwrap_argv", build)
     monkeypatch.setattr("core.launcher.game_sandbox.build_network_bwrap_argv", build)
     monkeypatch.setattr("core.launcher._spawn_sandbox_process", lambda start: start())
-    monkeypatch.setattr("core.launcher.game_sandbox.check_writable_mounts", lambda *args: None)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.check_writable_mounts", lambda *args: None
+    )
     monkeypatch.setattr("core.launcher.host_x11_sockets", lambda: ("X0",))
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
         assert Launcher().launch(
@@ -4256,35 +4605,57 @@ def test_gamescope_not_installed_is_logged(tmp_path, monkeypatch, _gamescope_hos
     game.write_text("#!/bin/sh\n")
     game.chmod(0o755)
     monkeypatch.setattr("core.launcher.host_which", lambda name: None)
-    monkeypatch.setattr("core.launcher.get_setting", lambda key: "true" if key == "enable_logging" else "")
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: "true" if key == "enable_logging" else "",
+    )
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
         assert Launcher().launch(str(game), gamescope=GAMESCOPE_PIXEL)["success"]
     assert popen.call_args.args[0] == [str(game)]
-    assert "Gamescope skipped: not installed" in (tmp_path / "game_wlib.log").read_text()
+    assert (
+        "Gamescope skipped: not installed" in (tmp_path / "game_wlib.log").read_text()
+    )
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
-def test_gamescope_argv_is_logged_and_user_wrapper_skips(tmp_path, monkeypatch, _gamescope_host):
+def test_gamescope_argv_is_logged_and_user_wrapper_skips(
+    tmp_path, monkeypatch, _gamescope_host
+):
     game = tmp_path / "game.sh"
     game.write_text("#!/bin/sh\n")
     game.chmod(0o755)
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr("core.launcher.get_setting", lambda key: "true" if key == "enable_logging" else "")
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: "true" if key == "enable_logging" else "",
+    )
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
         assert Launcher().launch(str(game), gamescope=GAMESCOPE_PIXEL)["success"]
-        assert "Gamescope: /usr/bin/gamescope -f -w 816 -h 624 -S integer -F nearest --" in (tmp_path / "game_wlib.log").read_text()
-        assert Launcher().launch(str(game), "gamescope -f -- %command%", gamescope=GAMESCOPE_PIXEL)["success"]
+        assert (
+            "Gamescope: /usr/bin/gamescope -f -w 816 -h 624 -S integer -F nearest --"
+            in (tmp_path / "game_wlib.log").read_text()
+        )
+        assert Launcher().launch(
+            str(game), "gamescope -f -- %command%", gamescope=GAMESCOPE_PIXEL
+        )["success"]
     assert popen.call_args.args[0] == ["gamescope", "-f", "--", str(game)]
-    assert "Gamescope skipped: arguments already start gamescope" in (tmp_path / "game_wlib.log").read_text()
+    assert (
+        "Gamescope skipped: arguments already start gamescope"
+        in (tmp_path / "game_wlib.log").read_text()
+    )
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
-def test_gamescope_skipped_for_browser_launch(tmp_path, monkeypatch, _gamescope_host, capsys):
+def test_gamescope_skipped_for_browser_launch(
+    tmp_path, monkeypatch, _gamescope_host, capsys
+):
     html = tmp_path / "game.html"
     html.touch()
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
-        assert Launcher().launch(str(html), html_player="browser", gamescope=GAMESCOPE_PIXEL)["success"]
+        assert Launcher().launch(
+            str(html), html_player="browser", gamescope=GAMESCOPE_PIXEL
+        )["success"]
     assert popen.call_args.args[0][0] == "xdg-open"
     assert "Gamescope skipped: browser launch" in capsys.readouterr().out
 
@@ -4311,7 +4682,10 @@ def _rpgm_game(folder, system):
 def _launch_logged(monkeypatch, game, options, screen):
     monkeypatch.setattr("core.launcher.display_info.screen_size", lambda: screen)
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr("core.launcher.get_setting", lambda key: "true" if key == "enable_logging" else "")
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: "true" if key == "enable_logging" else "",
+    )
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
         assert Launcher().launch(str(game), gamescope=options)["success"]
     return popen.call_args.args[0], game.with_name(f"{game.stem}_wlib.log").read_text()
@@ -4319,17 +4693,36 @@ def _launch_logged(monkeypatch, game, options, screen):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
 def test_gamescope_uses_native_mz_size(tmp_path, monkeypatch, _gamescope_host):
-    game = _rpgm_game(tmp_path, {"advanced": {"screenWidth": 1280, "screenHeight": 720}})
+    game = _rpgm_game(
+        tmp_path, {"advanced": {"screenWidth": 1280, "screenHeight": 720}}
+    )
     argv, log = _launch_logged(monkeypatch, game, GAMESCOPE_AUTO, (1920, 1080))
-    assert argv == ["/usr/bin/gamescope", "-f", "-W", "1920", "-H", "1080", "-w", "1280", "-h", "720", "--", str(game)]
+    assert argv == [
+        "/usr/bin/gamescope",
+        "-f",
+        "-W",
+        "1920",
+        "-H",
+        "1080",
+        "-w",
+        "1280",
+        "-h",
+        "720",
+        "--",
+        str(game),
+    ]
     note = "Gamescope game size 1280x720 from data/System.json"
     assert note in log
     assert log.index(note) < log.index("Gamescope: /usr/bin/gamescope")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
-def test_gamescope_set_game_resolution_skips_detection(tmp_path, monkeypatch, _gamescope_host):
-    game = _rpgm_game(tmp_path, {"advanced": {"screenWidth": 1280, "screenHeight": 720}})
+def test_gamescope_set_game_resolution_skips_detection(
+    tmp_path, monkeypatch, _gamescope_host
+):
+    game = _rpgm_game(
+        tmp_path, {"advanced": {"screenWidth": 1280, "screenHeight": 720}}
+    )
 
     def fail(_folder):
         raise AssertionError("detection must not run")
@@ -4341,18 +4734,34 @@ def test_gamescope_set_game_resolution_skips_detection(tmp_path, monkeypatch, _g
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
-def test_gamescope_native_size_not_found_is_logged(tmp_path, monkeypatch, _gamescope_host):
+def test_gamescope_native_size_not_found_is_logged(
+    tmp_path, monkeypatch, _gamescope_host
+):
     game = tmp_path / "game.sh"
     game.write_text("#!/bin/sh\n")
     game.chmod(0o755)
     argv, log = _launch_logged(monkeypatch, game, GAMESCOPE_AUTO, (1920, 1080))
-    assert argv[:9] == ["/usr/bin/gamescope", "-f", "-W", "1920", "-H", "1080", "-w", "1920", "-h"]
+    assert argv[:9] == [
+        "/usr/bin/gamescope",
+        "-f",
+        "-W",
+        "1920",
+        "-H",
+        "1080",
+        "-w",
+        "1920",
+        "-h",
+    ]
     assert "Gamescope game size: no native size found, using the output size" in log
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
-def test_gamescope_native_size_too_large_is_logged(tmp_path, monkeypatch, _gamescope_host):
-    game = _rpgm_game(tmp_path, {"advanced": {"screenWidth": 1920, "screenHeight": 1080}})
+def test_gamescope_native_size_too_large_is_logged(
+    tmp_path, monkeypatch, _gamescope_host
+):
+    game = _rpgm_game(
+        tmp_path, {"advanced": {"screenWidth": 1920, "screenHeight": 1080}}
+    )
     argv, log = _launch_logged(monkeypatch, game, GAMESCOPE_AUTO, (1366, 768))
     assert argv[2:10] == ["-W", "1366", "-H", "768", "-w", "1366", "-h", "768"]
     assert (
@@ -4362,8 +4771,12 @@ def test_gamescope_native_size_too_large_is_logged(tmp_path, monkeypatch, _games
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
-def test_gamescope_detection_error_does_not_stop_launch(tmp_path, monkeypatch, _gamescope_host):
-    game = _rpgm_game(tmp_path, {"advanced": {"screenWidth": 1280, "screenHeight": 720}})
+def test_gamescope_detection_error_does_not_stop_launch(
+    tmp_path, monkeypatch, _gamescope_host
+):
+    game = _rpgm_game(
+        tmp_path, {"advanced": {"screenWidth": 1280, "screenHeight": 720}}
+    )
 
     def boom(_folder):
         raise RuntimeError("boom")
@@ -4492,9 +4905,18 @@ def test_windows_locale_emulator_missing_refuses_launch(
 @pytest.mark.parametrize(
     "target, note",
     [
-        (r"C:\Games\start.bat", "Locale Emulator skipped: .bat targets are not supported"),
-        (r"C:\Games\start.cmd", "Locale Emulator skipped: .cmd targets are not supported"),
-        (r"C:\Games\game.jar", "Locale Emulator skipped: .jar targets are not supported"),
+        (
+            r"C:\Games\start.bat",
+            "Locale Emulator skipped: .bat targets are not supported",
+        ),
+        (
+            r"C:\Games\start.cmd",
+            "Locale Emulator skipped: .cmd targets are not supported",
+        ),
+        (
+            r"C:\Games\game.jar",
+            "Locale Emulator skipped: .jar targets are not supported",
+        ),
     ],
 )
 @patch("os.path.exists", return_value=True)
@@ -4506,9 +4928,12 @@ def test_windows_locale_emulator_skips_non_exe_targets(
     calls = _locale_emulator(monkeypatch, "missing")
     mock_popen.return_value = MagicMock()
     log = tmp_path / "wlib_debug.log"
-    monkeypatch.setattr("core.launcher._open_debug_log", lambda _path: open(log, "w", encoding="utf-8"))
     monkeypatch.setattr(
-        "core.launcher.get_setting", lambda key: "true" if key == "enable_logging" else "false"
+        "core.launcher._open_debug_log", lambda _path: open(log, "w", encoding="utf-8")
+    )
+    monkeypatch.setattr(
+        "core.launcher.get_setting",
+        lambda key: "true" if key == "enable_logging" else "false",
     )
 
     result = Launcher().launch(target, run_japanese_locale=True)
@@ -4539,7 +4964,10 @@ def test_windows_locale_emulator_skips_html(
     mock_open.assert_called_once_with(r"C:\Games\index.html")
     mock_popen.assert_not_called()
     assert calls == []
-    assert "Locale Emulator skipped: HTML targets are not supported" in capsys.readouterr().out
+    assert (
+        "Locale Emulator skipped: HTML targets are not supported"
+        in capsys.readouterr().out
+    )
 
 
 @patch("os.path.exists", return_value=True)
@@ -4560,7 +4988,10 @@ def test_windows_locale_emulator_skips_web_player(
     assert result["success"] is True
     assert LEPROC not in mock_popen.call_args.args[0]
     assert calls == []
-    assert "Locale Emulator skipped: web player targets are not supported" in capsys.readouterr().out
+    assert (
+        "Locale Emulator skipped: web player targets are not supported"
+        in capsys.readouterr().out
+    )
 
 
 def test_sandboxie_wraps_the_locale_emulator_command(monkeypatch):
@@ -4571,7 +5002,8 @@ def test_sandboxie_wraps_the_locale_emulator_command(monkeypatch):
         lambda: {"status": "ready", "path": r"C:\Sandboxie\Start.exe"},
     )
     monkeypatch.setattr(
-        "core.launcher.game_sandbox.configure_sandboxie_box", lambda *args, **kwargs: "wLib_12"
+        "core.launcher.game_sandbox.configure_sandboxie_box",
+        lambda *args, **kwargs: "wLib_12",
     )
     monkeypatch.setattr("core.launcher.game_sandbox.list_box_pids", lambda *args: [])
     with (
@@ -4656,11 +5088,17 @@ def test_windows_alternate_target_uses_locale_emulator(monkeypatch):
         "run_japanese_locale": 1,
         "launch_mode": "auto",
     }
-    target = {"id": 1, "game_id": 3, "label": "Config", "exe_path": r"C:\Games\JP\Config.exe"}
+    target = {
+        "id": 1,
+        "game_id": 3,
+        "label": "Config",
+        "exe_path": r"C:\Games\JP\Config.exe",
+    }
     monkeypatch.setattr("core.database.get_all_games", lambda: [game])
     monkeypatch.setattr("core.database.list_game_launch_targets", lambda _id: [target])
     monkeypatch.setattr(
-        "core.game_run_lock.acquire_launch_lock", lambda _id: _os.open(_os.devnull, _os.O_RDONLY)
+        "core.game_run_lock.acquire_launch_lock",
+        lambda _id: _os.open(_os.devnull, _os.O_RDONLY),
     )
     monkeypatch.setattr("core.database.start_play_session", lambda *_args: 1)
     request = {**request_from_game(game), "exe_path": target["exe_path"]}

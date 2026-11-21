@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The shared download speed limit: interrupted waits and very small limits."""
+
 from __future__ import annotations
 
 from threading import Event
@@ -63,7 +64,9 @@ def _applied_bytes(limit: int, host_n: int, torrent_n: int) -> tuple[float, int]
     """Bytes/s each worker really applies for this split."""
     manager, supervisor = _Manager(), _Supervisor()
     host_worker = HostWorker(cast(DownloadManager, cast(object, manager)))
-    torrent_worker = TorrentWorker(lambda: cast(TorrentSupervisor, cast(object, supervisor)))
+    torrent_worker = TorrentWorker(
+        lambda: cast(TorrentSupervisor, cast(object, supervisor))
+    )
     host, torrent = split_limit(limit, host_n, torrent_n)
     host_worker.set_speed_share(host, True)
     torrent_worker.set_speed_share(torrent, True)
@@ -76,7 +79,9 @@ def _applied_bytes(limit: int, host_n: int, torrent_n: int) -> tuple[float, int]
     ("limit", "host_n", "torrent_n"),
     [(1, 1, 1), (1, 2, 1), (2, 1, 5), (5, 1, 10), (5, 10, 1), (1000, 1, 1)],
 )
-def test_both_workers_together_stay_under_the_limit(limit: int, host_n: int, torrent_n: int) -> None:
+def test_both_workers_together_stay_under_the_limit(
+    limit: int, host_n: int, torrent_n: int
+) -> None:
     host_rate, torrent_rate = _applied_bytes(limit, host_n, torrent_n)
     assert host_rate > 0 and torrent_rate > 0  # 0 would be unlimited
     assert host_rate + torrent_rate <= limit * 1024 + 1

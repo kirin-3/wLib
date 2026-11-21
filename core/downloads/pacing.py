@@ -6,6 +6,7 @@ bucket). Torrents run in the helper process and get their share through the
 helper's `set_limits`. `split_limit` decides the two shares each second tick;
 they always add up to the limit, so the combined speed stays under it.
 """
+
 from __future__ import annotations
 
 import math
@@ -73,7 +74,9 @@ class SpeedLimiter:
         elapsed = max(0.0, now - self._last)
         self._last = now
         if self._rate > 0:
-            self._tokens = min(self._tokens + elapsed * self._rate, self._rate * BURST_SECONDS)
+            self._tokens = min(
+                self._tokens + elapsed * self._rate, self._rate * BURST_SECONDS
+            )
 
     def acquire(self, amount: int, interrupt: Event) -> bool:
         """Take `amount` bytes of allowance, waiting as needed; False when interrupted."""
@@ -96,7 +99,9 @@ class SpeedLimiter:
                 with self._lock:
                     self._refill()
                     if self._rate > 0:
-                        self._tokens = min(self._tokens + amount, self._rate * BURST_SECONDS)
+                        self._tokens = min(
+                            self._tokens + amount, self._rate * BURST_SECONDS
+                        )
                 return False
 
 
@@ -133,7 +138,9 @@ def split_limit(
     torrent = limit_kib - host
     floor = max(1, math.ceil(limit_kib * FLOOR))
     host_under = host_used_kib is not None and host_used_kib < UNDERUSE * host
-    torrent_under = torrent_used_kib is not None and torrent_used_kib < UNDERUSE * torrent
+    torrent_under = (
+        torrent_used_kib is not None and torrent_used_kib < UNDERUSE * torrent
+    )
     if host_under and not torrent_under and host_used_kib is not None:
         host = min(max(floor, math.ceil(host_used_kib)), limit_kib - floor)
         return host, limit_kib - host

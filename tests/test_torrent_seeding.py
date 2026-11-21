@@ -49,11 +49,18 @@ def make(tmp_path):
     clock = [1000.0]
 
     def build(mode="complete"):
-        env = {**os.environ, "FAKE_MODE": mode, "FAKE_LOG": str(tmp_path / "fake.log"), "FAKE_STATE": str(tmp_path / "fake.count")}
+        env = {
+            **os.environ,
+            "FAKE_MODE": mode,
+            "FAKE_LOG": str(tmp_path / "fake.log"),
+            "FAKE_STATE": str(tmp_path / "fake.count"),
+        }
         sup = TorrentSupervisor(
             command=lambda: ([sys.executable, FAKE], env),
-            backoff=(0.05,), free_space_fn=lambda path: 100 * GIB,
-            clock=lambda: clock[0], options=lambda: {},
+            backoff=(0.05,),
+            free_space_fn=lambda path: 100 * GIB,
+            clock=lambda: clock[0],
+            options=lambda: {},
         )
         created.append(sup)
         return sup
@@ -79,11 +86,32 @@ def finish(sup, game=1):
 
 
 def folder_of(data_dir):
-    return data_dir / "downloads" / "torrents" / torrents.parse_torrent(torrent_bytes()).info_hash
+    return (
+        data_dir
+        / "downloads"
+        / "torrents"
+        / torrents.parse_torrent(torrent_bytes()).info_hash
+    )
 
 
 def status_event(sup, job_id, uploaded=0, state="seeding", up=0):
-    sup._on_event({"event": "status", "torrents": [{"id": job_id, "state": state, "size": 100, "downloaded": 100, "down": 0, "up": up, "peers": 1, "uploaded": uploaded}]})  # pyright: ignore[reportPrivateUsage]
+    sup._on_event(
+        {
+            "event": "status",
+            "torrents": [
+                {
+                    "id": job_id,
+                    "state": state,
+                    "size": 100,
+                    "downloaded": 100,
+                    "down": 0,
+                    "up": up,
+                    "peers": 1,
+                    "uploaded": uploaded,
+                }
+            ],
+        }
+    )  # pyright: ignore[reportPrivateUsage]
 
 
 def test_ask_keeps_seeding_while_question_open(make, settings, tmp_path):
@@ -100,7 +128,9 @@ def test_always_seeds_without_asking(make, settings):
     assert snap(sup, job_id)["seed_state"] == "seeding"
 
 
-def test_never_stops_but_keeps_files_until_install_releases_them(make, settings, tmp_path, data_dir):
+def test_never_stops_but_keeps_files_until_install_releases_them(
+    make, settings, tmp_path, data_dir
+):
     settings["mode"] = "never"
     sup = make()
     job_id = finish(sup)
@@ -130,16 +160,23 @@ def test_seed_answer_and_dont_ask_again(make, settings, monkeypatch, tmp_path):
     from core import database
 
     saved: dict[str, str] = {}
-    monkeypatch.setattr(database, "update_setting", lambda key, value: saved.update({key: value}))
+    monkeypatch.setattr(
+        database, "update_setting", lambda key, value: saved.update({key: value})
+    )
     sup = make()
     job_id = finish(sup)
     assert sup.answer_seed(job_id, True, remember=True)
-    assert snap(sup, job_id)["seed_state"] == "seeding" and saved == {"torrent_seed_mode": "always"}
+    assert snap(sup, job_id)["seed_state"] == "seeding" and saved == {
+        "torrent_seed_mode": "always"
+    }
     assert not sup.answer_seed(job_id, True)
     second = make()
     other = finish(second, game=2)
     assert second.answer_seed(other, False, remember=True)
-    assert saved["torrent_seed_mode"] == "never" and snap(second, other)["seed_state"] == "ended"
+    assert (
+        saved["torrent_seed_mode"] == "never"
+        and snap(second, other)["seed_state"] == "ended"
+    )
 
 
 def test_ratio_reached_stops_seeding(make, settings, tmp_path, data_dir):
@@ -174,10 +211,19 @@ def test_restart_mid_seed_resumes_with_saved_ratio(make, settings, tmp_path, dat
     folder = data_dir / "downloads" / "torrents" / ("cd" * 20)
     (folder / "data").mkdir(parents=True)
     (folder / "meta.torrent").write_bytes(torrent_bytes())
-    (folder / "state.json").write_text(json.dumps({
-        "job_id": "seedjob", "game_id": 1, "size": 100, "phase": "seeding", "uploaded": 50,
-        "seeding_seconds": 600, "updated": time.time(),
-    }))
+    (folder / "state.json").write_text(
+        json.dumps(
+            {
+                "job_id": "seedjob",
+                "game_id": 1,
+                "size": 100,
+                "phase": "seeding",
+                "uploaded": 50,
+                "seeding_seconds": 600,
+                "updated": time.time(),
+            }
+        )
+    )
     sup = make("stalled")
     sup.load()
     wait_for(lambda: any(c["cmd"] == "add" for c in log_commands(tmp_path)))
@@ -191,10 +237,15 @@ def test_restart_mid_seed_resumes_with_saved_ratio(make, settings, tmp_path, dat
     assert snap(sup, "seedjob")["ratio"] == 0.6
 
 
-def test_unanswered_question_survives_restart_without_seeding(make, settings, tmp_path, data_dir):
+def test_unanswered_question_survives_restart_without_seeding(
+    make, settings, tmp_path, data_dir
+):
     first = make()
     job_id = finish(first)
-    assert json.loads((folder_of(data_dir) / "state.json").read_text())["phase"] == "awaiting_seed_answer"
+    assert (
+        json.loads((folder_of(data_dir) / "state.json").read_text())["phase"]
+        == "awaiting_seed_answer"
+    )
     first._closing = True  # pyright: ignore[reportPrivateUsage]
     (tmp_path / "fake.log").unlink()
     second = make("stalled")
@@ -202,7 +253,9 @@ def test_unanswered_question_survives_restart_without_seeding(make, settings, tm
     again = snap(second, job_id)
     assert again["seed_state"] == "awaiting_answer"
     wait_for(lambda: any(c["cmd"] == "add" for c in log_commands(tmp_path)))
-    assert next(c for c in log_commands(tmp_path) if c["cmd"] == "add")["paused"] is True
+    assert (
+        next(c for c in log_commands(tmp_path) if c["cmd"] == "add")["paused"] is True
+    )
     assert second.answer_seed(job_id, True)
     wait_for(lambda: any(c["cmd"] == "resume" for c in log_commands(tmp_path)))
 

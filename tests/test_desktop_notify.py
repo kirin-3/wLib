@@ -69,17 +69,31 @@ def test_notify_send_success_and_non_linux(monkeypatch):
         (["Alpha"], [], ["Echo"], ("1 game update, 1 game abandoned", "Alpha, Echo")),
         ([], [], ["Echo"], ("1 game abandoned", "Echo")),
         ([], [], ["Echo", "Fox"], ("2 games abandoned", "Echo, Fox")),
-        (["Alpha", "Beta"], ["Delta"], ["Echo"], (
-            "2 game updates, 1 wishlist game completed, 1 game abandoned", "Alpha, Beta and 2 more",
-        )),
+        (
+            ["Alpha", "Beta"],
+            ["Delta"],
+            ["Echo"],
+            (
+                "2 game updates, 1 wishlist game completed, 1 game abandoned",
+                "Alpha, Beta and 2 more",
+            ),
+        ),
     ],
 )
 def test_summary_counts_abandoned_games(updates, completed, abandoned, expected):
-    assert desktop_notify.build_update_summary(updates, completed, abandoned) == expected
+    assert (
+        desktop_notify.build_update_summary(updates, completed, abandoned) == expected
+    )
 
 
 def test_summary_names_a_game_in_two_lists_once():
     from core.desktop_notify import build_update_summary
 
-    assert build_update_summary(["Foo", "Bar"], [], ["Foo"]) == ("2 game updates, 1 game abandoned", "Foo, Bar")
-    assert build_update_summary(["Foo", "Bar", "Baz"], [], ["Foo"])[1] == "Foo, Bar and 1 more"
+    assert build_update_summary(["Foo", "Bar"], [], ["Foo"]) == (
+        "2 game updates, 1 game abandoned",
+        "Foo, Bar",
+    )
+    assert (
+        build_update_summary(["Foo", "Bar", "Baz"], [], ["Foo"])[1]
+        == "Foo, Bar and 1 more"
+    )

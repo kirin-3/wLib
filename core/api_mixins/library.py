@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Games, folder scan, path checks, covers and collections."""
+
 from __future__ import annotations
 
 import json
@@ -59,7 +60,9 @@ class LibraryMixin(ApiBase):
 
         games = get_all_games()
         lc_ids = [lewdcorner.extract_thread_id(game.get("lc_url")) for game in games]
-        lc_tiers = game_lookup.lc_thread_tiers([thread_id for thread_id in lc_ids if thread_id])
+        lc_tiers = game_lookup.lc_thread_tiers(
+            [thread_id for thread_id in lc_ids if thread_id]
+        )
         with self._metadata_lock:
             pending = set(self._metadata_pending)
         folders = resolve_cover_folders()
@@ -74,7 +77,11 @@ class LibraryMixin(ApiBase):
     def get_game_screenshots(self, game_id: int) -> dict[str, object]:
         from core.database import get_game, get_setting
         from core.game_covers import LC_IMAGE_ADDRESS
-        from core.game_lookup import f95_thread_screenshots, lc_thread_screenshots, screenshot_urls
+        from core.game_lookup import (
+            f95_thread_screenshots,
+            lc_thread_screenshots,
+            screenshot_urls,
+        )
 
         game = get_game(game_id)
         if game is None:
@@ -82,7 +89,13 @@ class LibraryMixin(ApiBase):
         thread_id = extract_thread_id(str(game.get("f95_url") or ""))
         catalog = f95_thread_screenshots(str(thread_id)) if thread_id else None
         lc_id = lewdcorner.extract_thread_id(game.get("lc_url"))
-        if not catalog and lc_id and lewdcorner.lc_active(game, lewdcorner.setting_enabled(get_setting("lc_enabled"))):
+        if (
+            not catalog
+            and lc_id
+            and lewdcorner.lc_active(
+                game, lewdcorner.setting_enabled(get_setting("lc_enabled"))
+            )
+        ):
             lc_catalog = lc_thread_screenshots(lc_id)
             if lc_catalog or catalog is None:
                 catalog = lc_catalog
@@ -90,7 +103,11 @@ class LibraryMixin(ApiBase):
             stored = cast(object, json.loads(str(game.get("screenshots") or "[]")))
         except ValueError:
             stored = []
-        library = [item for item in cast(list[object], stored) if isinstance(item, str)] if isinstance(stored, list) else []
+        library = (
+            [item for item in cast(list[object], stored) if isinstance(item, str)]
+            if isinstance(stored, list)
+            else []
+        )
         screenshots: list[dict[str, str]] = []
         for url in catalog or library:
             if lewdcorner.hosts_url(url):
@@ -102,8 +119,12 @@ class LibraryMixin(ApiBase):
                 screenshots.append({"thumb": local, "full": local})
             else:
                 screenshots.append(screenshot_urls(url))
-        return {"success": True, "screenshots": screenshots,
-                "source": "catalog" if catalog else "library", "in_catalog": catalog is not None}
+        return {
+            "success": True,
+            "screenshots": screenshots,
+            "source": "catalog" if catalog else "library",
+            "in_catalog": catalog is not None,
+        }
 
     def _add_local_cover_url(
         self, game: dict[str, object], folders: CoverFolders | None = None
@@ -123,7 +144,11 @@ class LibraryMixin(ApiBase):
                 game["cover_cache_url"] = (
                     f"http://127.0.0.1:8183/covers/cache/{shown[0].name}"
                 )
-        local = cover_file(game.get("cover_local"), folder=folders.covers) if serving else None
+        local = (
+            cover_file(game.get("cover_local"), folder=folders.covers)
+            if serving
+            else None
+        )
         if local is not None:
             game["cover_local_url"] = f"http://127.0.0.1:8183/covers/{local[0].name}"
             shown = local
@@ -453,7 +478,12 @@ class LibraryMixin(ApiBase):
 
     def lookup_lc_partner(self, url: object = "") -> dict[str, object]:
         from core import lewdcorner
-        from core.game_lookup import combined_thread_entry, f95_thread_entries, lc_thread_entries, lookup_lc_partner
+        from core.game_lookup import (
+            combined_thread_entry,
+            f95_thread_entries,
+            lc_thread_entries,
+            lookup_lc_partner,
+        )
 
         partner = lookup_lc_partner(url)
         lc_id = lewdcorner.extract_thread_id(url)
@@ -508,7 +538,12 @@ class LibraryMixin(ApiBase):
             replace_game_links,
             update_game,
         )
-        from core.game_lookup import combined_thread_entry, f95_for_lc, f95_thread_entries, lc_thread_entries
+        from core.game_lookup import (
+            combined_thread_entry,
+            f95_for_lc,
+            f95_thread_entries,
+            lc_thread_entries,
+        )
         from core.store_links import coerce_store_links
         from core.thread_details import THREAD_DETAIL_FIELDS
 
@@ -519,31 +554,47 @@ class LibraryMixin(ApiBase):
             return {"success": False, "error": str(exc)}
         lc_id = lewdcorner.extract_thread_id(normalized_lc)
         if normalized_lc and find_game_by_lc_url(normalized_lc):
-            return self._integrity_error_response(sqlite3.IntegrityError(
-                f"LewdCorner thread already in the library: {normalized_lc}"
-            ))
+            return self._integrity_error_response(
+                sqlite3.IntegrityError(
+                    f"LewdCorner thread already in the library: {normalized_lc}"
+                )
+            )
         partner_id = f95_for_lc(lc_id) if lc_id else None
         partner_url = f"https://f95zone.to/threads/{partner_id}/" if partner_id else ""
         partner_game = find_game_by_f95_url(partner_url) if partner_url else None
         normalized_url = normalize_thread_url(f95_url)
         attach_lc_id: int | None = None
-        if partner_game and (not normalized_url or thread_urls_match(normalized_url, partner_url)):
+        if partner_game and (
+            not normalized_url or thread_urls_match(normalized_url, partner_url)
+        ):
             candidate_id = int(str(partner_game["id"]))
             candidate = get_game(candidate_id)
             if candidate and not candidate.get("lc_url"):
                 attach_lc_id = candidate_id
             elif candidate:
-                return self._integrity_error_response(sqlite3.IntegrityError(
-                    f"LewdCorner partner is already in the library: {normalized_lc}"
-                ))
+                return self._integrity_error_response(
+                    sqlite3.IntegrityError(
+                        f"LewdCorner partner is already in the library: {normalized_lc}"
+                    )
+                )
 
-        lc_entry = lc_thread_entries([lc_id]).get(lc_id, {}) if attach_lc_id is None else {}
+        lc_entry = (
+            lc_thread_entries([lc_id]).get(lc_id, {}) if attach_lc_id is None else {}
+        )
         f95_id = extract_thread_id(normalized_url)
-        entry = combined_thread_entry(f95_thread_entries([f95_id]).get(f95_id, {}), lc_entry) if lc_entry else {}
+        entry = (
+            combined_thread_entry(
+                f95_thread_entries([f95_id]).get(f95_id, {}), lc_entry
+            )
+            if lc_entry
+            else {}
+        )
         # LC page states apply only to an LC-only game; catalog ones keep the
         # time the catalog builder read the thread.
         caller_states = database.caller_thread_states(
-            thread_onhold, thread_abandoned, thread_states_seen_at,
+            thread_onhold,
+            thread_abandoned,
+            thread_states_seen_at,
             has_f95=bool(normalized_url or partner_url),
         )
         thread_onhold, thread_abandoned, states_at = caller_states or (None, None, None)
@@ -621,11 +672,18 @@ class LibraryMixin(ApiBase):
         try:
             if attach_lc_id is not None:
                 if not attach_lc_thread(attach_lc_id, normalized_lc, partner_url):
-                    return self._integrity_error_response(sqlite3.IntegrityError(
-                        f"LewdCorner thread could not be attached: {normalized_lc}"
-                    ))
+                    return self._integrity_error_response(
+                        sqlite3.IntegrityError(
+                            f"LewdCorner thread could not be attached: {normalized_lc}"
+                        )
+                    )
                 self._refresh_synced_library()
-                return {"success": True, "id": attach_lc_id, "attached": True, "attached_lc": True}
+                return {
+                    "success": True,
+                    "id": attach_lc_id,
+                    "attached": True,
+                    "attached_lc": True,
+                }
             if attach_id is not None:
                 with _THREAD_ATTACH_LOCK:
                     # Read again: another request can have attached a thread
@@ -639,9 +697,11 @@ class LibraryMixin(ApiBase):
                         }
                     if normalized_lc:
                         if linked.get("lc_url"):
-                            return self._integrity_error_response(sqlite3.IntegrityError(
-                                f"LewdCorner thread already in the library: {normalized_lc}"
-                            ))
+                            return self._integrity_error_response(
+                                sqlite3.IntegrityError(
+                                    f"LewdCorner thread already in the library: {normalized_lc}"
+                                )
+                            )
                         attach_fields["lc_url"] = normalized_lc
                     _ = update_game(attach_id, attach_fields)
                 game_id = attach_id
@@ -665,12 +725,20 @@ class LibraryMixin(ApiBase):
                     command_line_args=command_line_args,
                     lc_url=normalized_lc,
                     lc_mode=lc_mode,
-                    lc_dismissed=lc_dismissed if lc_dismissed.isascii() and lc_dismissed.isdigit() else "",
+                    lc_dismissed=lc_dismissed
+                    if lc_dismissed.isascii() and lc_dismissed.isdigit()
+                    else "",
                     # Image URLs read from an LC page; F95 adds get theirs from the thread scrape.
-                    screenshots=lewdcorner.page_screenshots(screenshots) if normalized_lc else [],
+                    screenshots=lewdcorner.page_screenshots(screenshots)
+                    if normalized_lc
+                    else [],
                 )
             if game_id is not None and attach_id is None and normalized_lc:
-                details = {field: entry[field] for field in THREAD_DETAIL_FIELDS if entry.get(field)}
+                details = {
+                    field: entry[field]
+                    for field in THREAD_DETAIL_FIELDS
+                    if entry.get(field)
+                }
                 if thread_completed is not None:
                     details["thread_completed"] = thread_completed
                 # Both states come from one prefix read, so they are set together.
@@ -682,7 +750,9 @@ class LibraryMixin(ApiBase):
                     _ = update_game(game_id, details)
             if game_id is not None and incoming_links:
                 replace_game_links(
-                    game_id, "f95_post" if normalized_url and not normalized_lc else "page", incoming_links
+                    game_id,
+                    "f95_post" if normalized_url and not normalized_lc else "page",
+                    incoming_links,
                 )
         except sqlite3.IntegrityError as exc:
             return self._integrity_error_response(exc)
@@ -821,14 +891,18 @@ class LibraryMixin(ApiBase):
         try:
             self._download_queue.forget_game(coerced_id)
         except Exception as exc:
-            print(f"[wLib] Failed to remove downloads of game {coerced_id}: {type(exc).__name__}")
+            print(
+                f"[wLib] Failed to remove downloads of game {coerced_id}: {type(exc).__name__}"
+            )
         try:
             from core.downloads.torrents import supervisor as torrent_supervisor
 
             # Seeding torrents have no queue row; they go here.
             torrent_supervisor.forget_game(coerced_id)
         except Exception as exc:
-            print(f"[wLib] Failed to remove torrents of game {coerced_id}: {type(exc).__name__}")
+            print(
+                f"[wLib] Failed to remove torrents of game {coerced_id}: {type(exc).__name__}"
+            )
         try:
             from core.game_sandbox import retire_sandbox_folder
 
@@ -840,13 +914,17 @@ class LibraryMixin(ApiBase):
 
             _ = retire_web_player_folder(coerced_id)
         except Exception as exc:
-            print(f"[wLib] Failed to move the web player storage of game {coerced_id}: {exc}")
+            print(
+                f"[wLib] Failed to move the web player storage of game {coerced_id}: {exc}"
+            )
         try:
             from core.web_video import delete_scan_cache
 
             _ = delete_scan_cache(coerced_id)
         except Exception as exc:
-            print(f"[wLib] Failed to delete the video check of game {coerced_id}: {exc}")
+            print(
+                f"[wLib] Failed to delete the video check of game {coerced_id}: {exc}"
+            )
         with self._metadata_lock:
             self._metadata_pending.discard(coerced_id)
         self._schedule_steam_sync()
@@ -877,9 +955,14 @@ class LibraryMixin(ApiBase):
         if ids is None:
             return {"success": False, "error": "Choose the games to uninstall."}
         try:
-            games = plan_uninstall(ids, coerce_overrides(root_overrides), self._game_file_hooks())
+            games = plan_uninstall(
+                ids, coerce_overrides(root_overrides), self._game_file_hooks()
+            )
         except Exception as exc:
-            return {"success": False, "error": str(exc) or "Could not plan the uninstall."}
+            return {
+                "success": False,
+                "error": str(exc) or "Could not plan the uninstall.",
+            }
         return {"success": True, "games": games}
 
     def _reserve_uninstall(self, game_id: int) -> str | None:
@@ -908,7 +991,10 @@ class LibraryMixin(ApiBase):
         try:
             with self._save_operation(game_id):
                 _ = backup_saves(
-                    effective, self._save_backups_root(), game_id, get_save_backup_keep()
+                    effective,
+                    self._save_backups_root(),
+                    game_id,
+                    get_save_backup_keep(),
                 )
         except NothingToBackUpError:
             return None
@@ -989,7 +1075,10 @@ class LibraryMixin(ApiBase):
         return response
 
     def plan_game_move(
-        self, game_ids: object = None, dest_parent: object = "", root_overrides: object = None
+        self,
+        game_ids: object = None,
+        dest_parent: object = "",
+        root_overrides: object = None,
     ) -> dict[str, object]:
         """The uninstall checks plus the move checks and each game's size."""
         from core.game_files import coerce_overrides, plan_move
@@ -997,7 +1086,11 @@ class LibraryMixin(ApiBase):
         ids = self._coerce_id_list(game_ids)
         if ids is None:
             return {"success": False, "error": "Choose the games to move."}
-        dest = self._normalize_selected_path(dest_parent) if isinstance(dest_parent, str) else ""
+        dest = (
+            self._normalize_selected_path(dest_parent)
+            if isinstance(dest_parent, str)
+            else ""
+        )
         try:
             games = plan_move(
                 ids, dest, coerce_overrides(root_overrides), self._game_file_hooks()
@@ -1007,7 +1100,10 @@ class LibraryMixin(ApiBase):
         return {"success": True, "games": games}
 
     def start_game_move(
-        self, game_ids: object = None, dest_parent: object = "", root_overrides: object = None
+        self,
+        game_ids: object = None,
+        dest_parent: object = "",
+        root_overrides: object = None,
     ) -> dict[str, object]:
         """Add games to the end of the move queue. Each job checks its plan again."""
         from core.game_files import MoveJob, coerce_overrides
@@ -1015,13 +1111,21 @@ class LibraryMixin(ApiBase):
         ids = self._coerce_id_list(game_ids)
         if not ids:
             return {"success": False, "error": "Choose the games to move."}
-        dest = self._normalize_selected_path(dest_parent) if isinstance(dest_parent, str) else ""
+        dest = (
+            self._normalize_selected_path(dest_parent)
+            if isinstance(dest_parent, str)
+            else ""
+        )
         if not dest or not os.path.isdir(dest):
             return {"success": False, "error": "The destination folder does not exist."}
         overrides = coerce_overrides(root_overrides)
         queued = self._game_moves.enqueue(
             [
-                MoveJob(game_id=game_id, dest_parent=dest, root_override=overrides.get(game_id, ""))
+                MoveJob(
+                    game_id=game_id,
+                    dest_parent=dest,
+                    root_override=overrides.get(game_id, ""),
+                )
                 for game_id in ids
             ]
         )

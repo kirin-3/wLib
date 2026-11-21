@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M06: a pause given while the `.torrent` is fetched must hold once the torrent is added."""
+
 import threading
 import time
 
@@ -34,8 +35,14 @@ def test_supervisor_pause_during_fetch_adds_the_torrent_paused(make, tmp_path): 
     assert sup.pause(job_id)
     gate.set()
     wait_for(lambda: stage(sup, job_id) == "paused")
-    assert wait_for(lambda: any(c["cmd"] == "add" and c["id"] == job_id for c in log_commands(tmp_path)))
-    adds = [c for c in log_commands(tmp_path) if c["cmd"] == "add" and c["id"] == job_id]
+    assert wait_for(
+        lambda: any(
+            c["cmd"] == "add" and c["id"] == job_id for c in log_commands(tmp_path)
+        )
+    )
+    adds = [
+        c for c in log_commands(tmp_path) if c["cmd"] == "add" and c["id"] == job_id
+    ]
     assert adds[0]["paused"] is True
     time.sleep(0.2)
     assert stage(sup, job_id) == "paused"
@@ -70,7 +77,9 @@ def test_queue_pause_of_a_refetching_retry_keeps_the_torrent_paused(make, tmp_pa
     assert isinstance(worker, TorrentWorker)
     worker._fetch_for = lambda _rpdl_id: fetch  # pyright: ignore[reportPrivateUsage]
     job = queue.add("torrent", 1, "Game", "1", {"rpdl_id": 7}, None)
-    assert _ticked(queue, lambda: queue.get(job.id).state in ("attention", "retry_wait"))
+    assert _ticked(
+        queue, lambda: queue.get(job.id).state in ("attention", "retry_wait")
+    )
     # The retry fetches the `.torrent` again, started unpaused (it has the slot).
     assert queue.retry(job.id)
     assert _ticked(queue, lambda: queue.get(job.id).state == "running")
@@ -80,12 +89,20 @@ def test_queue_pause_of_a_refetching_retry_keeps_the_torrent_paused(make, tmp_pa
     gate.set()
     wait_for(lambda: stage(sup, job.id) == "paused")
     # The stage changes before the helper starts; its `ready` event sends `add`.
-    assert wait_for(lambda: any(c["cmd"] == "add" and c["id"] == job.id for c in log_commands(tmp_path)))
+    assert wait_for(
+        lambda: any(
+            c["cmd"] == "add" and c["id"] == job.id for c in log_commands(tmp_path)
+        )
+    )
     queue.tick()
     assert queue.get(job.id).state == "paused" and stage(sup, job.id) == "paused"
-    adds = [c for c in log_commands(tmp_path) if c["cmd"] == "add" and c["id"] == job.id]
+    adds = [
+        c for c in log_commands(tmp_path) if c["cmd"] == "add" and c["id"] == job.id
+    ]
     assert adds[0]["paused"] is True
-    assert not any(c["cmd"] == "resume" and c["id"] == job.id for c in log_commands(tmp_path))
+    assert not any(
+        c["cmd"] == "resume" and c["id"] == job.id for c in log_commands(tmp_path)
+    )
     # Resume gives it the slot again: now it moves data.
     assert queue.resume(job.id)
     assert _ticked(queue, lambda: stage(sup, job.id) == "downloading")

@@ -32,20 +32,28 @@ def folder(tmp_path):
 @pytest.mark.parametrize(
     ("upper", "lower", "chosen"),
     [
-        (["Game.part1.rar", "Game.part2.rar"], ["game.part1.rar", "game.part2.rar"], "Game.part2.rar"),
+        (
+            ["Game.part1.rar", "Game.part2.rar"],
+            ["game.part1.rar", "game.part2.rar"],
+            "Game.part2.rar",
+        ),
         (["Game.7z.001", "Game.7z.002"], ["game.7z.001", "game.7z.002"], "Game.7z.001"),
         (["Game.rar", "Game.r00"], ["game.rar", "game.r00"], "Game.r00"),
         (["Game.zip", "Game.z01"], ["game.zip", "game.z01"], "Game.zip"),
     ],
 )
-def test_chosen_case_variant_set_is_kept(folder, monkeypatch, upper, lower, chosen, lower_last):
+def test_chosen_case_variant_set_is_kept(
+    folder, monkeypatch, upper, lower, chosen, lower_last
+):
     _write(folder, upper + lower)
     order = upper + lower if lower_last else lower + upper
     real_listdir = os.listdir
     monkeypatch.setattr(
         archive_volumes.os,
         "listdir",
-        lambda path: order if os.path.abspath(path) == str(folder) else real_listdir(path),
+        lambda path: (
+            order if os.path.abspath(path) == str(folder) else real_listdir(path)
+        ),
     )
 
     volumes = volume_set(str(folder / chosen))
@@ -64,7 +72,9 @@ def test_parts_that_only_differ_in_suffix_case_are_ambiguous(folder):
 
     assert volumes is not None
     assert not volumes.complete
-    assert sorted(volumes.ambiguous) == sorted(str(folder / n) for n in ("Game.part2.rar", "Game.PART2.RAR"))
+    assert sorted(volumes.ambiguous) == sorted(
+        str(folder / n) for n in ("Game.part2.rar", "Game.PART2.RAR")
+    )
     assert volumes.parts == (str(folder / "Game.part1.rar"),)
     with pytest.raises(ArchiveInstallError, match="letter case"):
         check_volume_set(volumes)
@@ -78,7 +88,10 @@ def test_chosen_file_wins_its_own_part_number(folder):
     assert volumes is not None
     assert volumes.complete
     assert volumes.first == str(folder / "Game.PART1.RAR")
-    assert volumes.parts == (str(folder / "Game.PART1.RAR"), str(folder / "Game.part2.rar"))
+    assert volumes.parts == (
+        str(folder / "Game.PART1.RAR"),
+        str(folder / "Game.part2.rar"),
+    )
 
 
 def test_mixed_case_parts_without_a_collision_still_form_one_set(folder):

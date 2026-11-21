@@ -19,7 +19,14 @@ __all__ = ["STEPS", "Source", "SourceContext", "get_sources"]
 # proxy; lc_threads follows lc_plus so it reads the Plus threads found in the
 # same run, and the browser switches once from the LC login to the guest view.
 STEPS: tuple[str, ...] = (
-    "f95", "f95_threads", "lc", "lc_plus", "lc_threads", "dlsite", "ryuugames", "vndb"
+    "f95",
+    "f95_threads",
+    "lc",
+    "lc_plus",
+    "lc_threads",
+    "dlsite",
+    "ryuugames",
+    "vndb",
 )
 
 

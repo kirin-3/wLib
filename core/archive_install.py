@@ -177,7 +177,9 @@ class _ExtractMeter:
 
     def __enter__(self) -> _ExtractMeter:
         if self._report is not None:
-            self._thread = threading.Thread(target=self._run, name="extract-meter", daemon=True)
+            self._thread = threading.Thread(
+                target=self._run, name="extract-meter", daemon=True
+            )
             self._thread.start()
         return self
 
@@ -197,7 +199,9 @@ class _ExtractMeter:
             if self._report is not None:
                 try:
                     # Never claim done before the extractor exits.
-                    self._report(min(done, self._total - 1) if self._total else done, self._total)
+                    self._report(
+                        min(done, self._total - 1) if self._total else done, self._total
+                    )
                 except Exception:
                     pass
 
@@ -291,7 +295,7 @@ def suggest_library_folder(
         while True:
             parts = [p for p in re.split(r"[/\\]+", current) if p]
             if len(parts) > len(segments) and [
-                p.casefold() for p in parts[-len(segments):]
+                p.casefold() for p in parts[-len(segments) :]
             ] == [seg.casefold() for seg in segments]:
                 suggestion = current
                 for _ in segments:
@@ -345,7 +349,9 @@ def archive_format(archive_path: str) -> str:
     if split:
         return "rar" if split.group("base").endswith(".rar") else "7z"
     family = _archive_family(lower)
-    if family == "zip" or (not family and (_ZIP_SPAN_RE.match(name) or _RAR_OLD_RE.match(name))):
+    if family == "zip" or (
+        not family and (_ZIP_SPAN_RE.match(name) or _RAR_OLD_RE.match(name))
+    ):
         volumes = volume_set(archive_path)
         if volumes is not None and volumes.kind == "zip_span":
             return "7z"
@@ -595,7 +601,8 @@ def filesystem_type(path: str, *, mountinfo: str = "/proc/self/mountinfo") -> st
                     continue
                 mount_point = _unescape_mountinfo(fields[4])
                 if mount_point != "/" and not (
-                    probe == mount_point or probe.startswith(mount_point.rstrip("/") + "/")
+                    probe == mount_point
+                    or probe.startswith(mount_point.rstrip("/") + "/")
                 ):
                     continue
                 # Later lines are mounted over earlier ones at the same point.
@@ -997,7 +1004,9 @@ def _extract_tool_via_local_scratch(
         except ArchiveInstallError:
             _check_cancel(cancel)
             free = _scratch_free_bytes(parent)
-            if not low_space.is_set() and (free is None or free >= SCRATCH_RESERVE_BYTES):
+            if not low_space.is_set() and (
+                free is None or free >= SCRATCH_RESERVE_BYTES
+            ):
                 raise
             _log.warning(
                 "Local install scratch ran low on space; extracting %s on the library drive instead",
@@ -1306,9 +1315,7 @@ def _disk_full(exc: BaseException) -> bool:
     )
 
 
-_DISK_FULL_MESSAGE = (
-    "Not enough free space: the library drive filled up while the archive was extracted."
-)
+_DISK_FULL_MESSAGE = "Not enough free space: the library drive filled up while the archive was extracted."
 
 
 def extract_tar(
@@ -1367,7 +1374,9 @@ def extract_tar(
                     # `tar -C dir .` stores the root itself as "./"; it names
                     # staging, so there is nothing to write for it.
                     if member.isdir() and not [
-                        p for p in name.replace("\\", "/").split("/") if p not in ("", ".")
+                        p
+                        for p in name.replace("\\", "/").split("/")
+                        if p not in ("", ".")
                     ]:
                         continue
                     check_archive_entry_safe(name)
@@ -1381,7 +1390,9 @@ def extract_tar(
                             f"Archive has duplicate or colliding entry: {name!r}"
                         )
                     seen[key] = is_dir
-                    if not (is_dir or member.isreg() or member.issym() or member.islnk()):
+                    if not (
+                        is_dir or member.isreg() or member.issym() or member.islnk()
+                    ):
                         raise ArchiveSafetyError(
                             f"Archive entry is a device or special file: {name!r}"
                         )
@@ -1443,7 +1454,9 @@ def _extract_windows_symlink(
     checked = tarfile.data_filter(member, staging_dir)
     target = os.path.join(staging_dir, *checked.name.replace("\\", "/").split("/"))
     if os.path.lexists(target):
-        raise ArchiveSafetyError(f"Archive has duplicate or colliding entry: {member.name!r}")
+        raise ArchiveSafetyError(
+            f"Archive has duplicate or colliding entry: {member.name!r}"
+        )
     os.makedirs(os.path.dirname(target), exist_ok=True)
     link = checked.linkname.replace("/", os.sep)
     source = os.path.normpath(os.path.join(os.path.dirname(target), link))
@@ -1467,28 +1480,40 @@ def _copy_refused_symlinks(copies: list[tuple[str, str]], staging_dir: str) -> N
         for target, source in pending:
             source_real = os.path.realpath(source)
             if not is_within_real(source_real, staging_real):
-                raise ArchiveSafetyError(f"Archive link points outside the archive: {target!r}")
+                raise ArchiveSafetyError(
+                    f"Archive link points outside the archive: {target!r}"
+                )
             target_real = os.path.realpath(target)
             if os.path.isfile(source_real):
                 if os.path.lexists(target):
-                    raise ArchiveSafetyError(f"Archive has duplicate or colliding entry: {target!r}")
+                    raise ArchiveSafetyError(
+                        f"Archive has duplicate or colliding entry: {target!r}"
+                    )
                 _ = shutil.copy2(source_real, target)
             elif os.path.isdir(source_real):
                 if is_within_real(target_real, source_real) or is_within_real(
                     source_real, target_real
                 ):
-                    raise ArchiveSafetyError(f"Archive link points into itself: {target!r}")
+                    raise ArchiveSafetyError(
+                        f"Archive link points into itself: {target!r}"
+                    )
                 # Later members may have gone "through" the link name into a
                 # real folder; both names then get every file, as with a link.
                 written_through = os.path.isdir(target)
-                _ = shutil.copytree(source_real, target, symlinks=True, dirs_exist_ok=True)
+                _ = shutil.copytree(
+                    source_real, target, symlinks=True, dirs_exist_ok=True
+                )
                 if written_through:
-                    _ = shutil.copytree(target, source_real, symlinks=True, dirs_exist_ok=True)
+                    _ = shutil.copytree(
+                        target, source_real, symlinks=True, dirs_exist_ok=True
+                    )
             else:
                 waiting.append((target, source))
         if len(waiting) == len(pending):
             for target, _source in waiting:
-                _log.warning("Archive link %s points to no file; it was left out", target)
+                _log.warning(
+                    "Archive link %s points to no file; it was left out", target
+                )
             return
         pending = waiting
 
@@ -1569,7 +1594,9 @@ def _run_tool(
         )
 
     completed = run()
-    if completed.returncode == _SEVEN_ZIP_COMMAND_LINE_ERROR and _windows_seven_zip(tool):
+    if completed.returncode == _SEVEN_ZIP_COMMAND_LINE_ERROR and _windows_seven_zip(
+        tool
+    ):
         # A 7-Zip too old to know -scc rejects the whole command line.
         _NO_UTF8_SWITCH.add(tool)
         completed = run()
@@ -2189,7 +2216,9 @@ def cleanup_stale_staging(library_folder: str) -> int:
                 if record is not None:
                     if restore_moved_staging(candidate, record):
                         remove_moved_record(candidate)
-                        _log.info("Put the moved download %s back", record.get("source"))
+                        _log.info(
+                            "Put the moved download %s back", record.get("source")
+                        )
                     else:
                         _log.warning(
                             "Kept %s: it holds a moved download that could not be put back",
@@ -2607,11 +2636,7 @@ def _point_missing_at_backup(
     if not repointed:
         return updated, unmoved
     moved_ids = {t.get("id") for t in repointed if t.get("id") is not None}
-    kept = [
-        t
-        for t in unmoved
-        if t.get("id") is None or t.get("id") not in moved_ids
-    ]
+    kept = [t for t in unmoved if t.get("id") is None or t.get("id") not in moved_ids]
     # The default target has no id; match it on its old path instead.
     repointed_default = any(t.get("id") is None for t in repointed)
     if repointed_default:
@@ -2977,7 +3002,9 @@ class _SaveCarryUndo:
             return
         for current, dirnames, filenames in os.walk(source, followlinks=False):
             dirnames[:] = [
-                name for name in dirnames if not os.path.islink(os.path.join(current, name))
+                name
+                for name in dirnames
+                if not os.path.islink(os.path.join(current, name))
             ]
             rel_dir = os.path.relpath(current, source)
             for name in filenames:
@@ -3138,9 +3165,7 @@ def install_archive(
             try:
                 if int(str(game.get("id"))) == int(game_id):
                     old_exe = _absolute_game_path(game.get("exe_path"))
-                    old_override = _absolute_game_path(
-                        game.get("save_path_override")
-                    )
+                    old_override = _absolute_game_path(game.get("save_path_override"))
                     # Updates keep the stored engine unless the caller sent one.
                     if not engine.strip():
                         engine = str(game.get("engine") or "")
@@ -3262,7 +3287,9 @@ def install_archive(
         required_bytes: int | None = _tree_bytes(archive_path)
         seeding = _torrent_seeding(archive_path)
     else:
-        tool, tool_error = detect_archive_tool(archive_path, library_folder=library_folder)
+        tool, tool_error = detect_archive_tool(
+            archive_path, library_folder=library_folder
+        )
         if tool_error:
             raise ArchiveInstallError(tool_error)
         required_bytes = uncompressed_size(archive_path, library_folder=library_folder)
@@ -3277,7 +3304,9 @@ def install_archive(
     # A download that is not seeding and sits on the library's drive is only
     # renamed into place, which takes no room; _place_folder checks the room
     # itself if that rename fails and it copies after all.
-    if not (folder_source and not seeding and _same_drive(archive_path, library_folder)):
+    if not (
+        folder_source and not seeding and _same_drive(archive_path, library_folder)
+    ):
         ensure_free_space(library_folder, min_free)
     network = is_network_filesystem(library_folder)
     workers = NETWORK_IO_WORKERS if network else 1
@@ -3323,7 +3352,9 @@ def install_archive(
                 except ZipMethodUnsupportedError as exc:
                     # Deflate64 (Windows Explorer's choice for large files) and
                     # other methods zipfile lacks: 7-Zip reads them.
-                    fallback = find_7zip_tool(archive_path, library_folder=library_folder)
+                    fallback = find_7zip_tool(
+                        archive_path, library_folder=library_folder
+                    )
                     if fallback is None:
                         raise ArchiveInstallError(
                             f"{exc}. Install 7-Zip (7z) to extract this archive."
@@ -3335,15 +3366,19 @@ def install_archive(
                         _ = apply_execute_bits(staging)
                     except OSError:
                         pass
-            elif fmt == "tar" and network and _extract_tool_via_local_scratch(
-                lambda folder, stop: extract_tar(
-                    archive_path, folder, progress=bytes_cb, cancel=stop
-                ),
-                archive_path,
-                staging,
-                workers,
-                required_bytes,
-                cancel,
+            elif (
+                fmt == "tar"
+                and network
+                and _extract_tool_via_local_scratch(
+                    lambda folder, stop: extract_tar(
+                        archive_path, folder, progress=bytes_cb, cancel=stop
+                    ),
+                    archive_path,
+                    staging,
+                    workers,
+                    required_bytes,
+                    cancel,
+                )
             ):
                 # tarfile writes one file at a time, like 7-Zip and unrar below.
                 pass
@@ -3433,7 +3468,10 @@ def install_archive(
                 else "",
             }
             rel_to_root_posix = rel_to_root.replace(os.sep, "/")
-            if rel_to_root_posix not in archive_rels and picked_rel_now == rel_to_exedir:
+            if (
+                rel_to_root_posix not in archive_rels
+                and picked_rel_now == rel_to_exedir
+            ):
                 # The new version has the executable where the target's own
                 # folder had it, so only that folder is the previous install.
                 old_install = old_root
@@ -3486,7 +3524,9 @@ def install_archive(
                 override_rel = override_relpath(old_override, old_install)
                 override_from_install = override_rel is not None
             if override_rel is not None:
-                override_into = staging if override_from_install else staging_install_dir
+                override_into = (
+                    staging if override_from_install else staging_install_dir
+                )
                 if save_undo is not None and override_rel != ".":
                     try:
                         save_undo.before_tree(
@@ -3700,7 +3740,9 @@ def install_archive(
                     target_dicts.append(
                         {
                             "id": None,
-                            "label": str(old_game.get("default_target_label") or "").strip()
+                            "label": str(
+                                old_game.get("default_target_label") or ""
+                            ).strip()
                             or "Default",
                             "exe_path": default_exe,
                         }
@@ -3739,6 +3781,7 @@ def install_archive(
                     if old_backup
                     else updated_targets + unmoved
                 )
+
                 def _target_inside(t: dict[str, object], root: str) -> bool:
                     exe = str(t.get("exe_path") or "")
                     return bool(exe) and _is_within(_real(exe), _real(root))
@@ -4045,7 +4088,9 @@ def find_download_offers(*, now: float | None = None) -> list[dict[str, object]]
             # here and none is still downloading.
             if os.path.normcase(volumes.first) != os.path.normcase(path):
                 continue
-            if not volumes.complete or not _volume_set_finished(volumes, in_progress, current):
+            if not volumes.complete or not _volume_set_finished(
+                volumes, in_progress, current
+            ):
                 continue
         try:
             if not os.path.isfile(path) or os.path.islink(path):

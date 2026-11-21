@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Parse ephemeral download mirrors from a signed-in forum thread."""
+
 from __future__ import annotations
 
 import re
@@ -22,7 +23,14 @@ HOST_DOMAINS: dict[str, tuple[str, ...]] = {
     "buzzheavier": ("buzzheavier.com", "bzzhr.to"),
     "gofile": ("gofile.io",),
     "datanodes": ("datanodes.to",),
-    "mixdrop": ("mixdrop.ag", "mixdrop.co", "mixdrop.to", "mixdrop.ps", "mixdrop.sx", "mxdrop.sx"),
+    "mixdrop": (
+        "mixdrop.ag",
+        "mixdrop.co",
+        "mixdrop.to",
+        "mixdrop.ps",
+        "mixdrop.sx",
+        "mxdrop.sx",
+    ),
     "workupload": ("workupload.com",),
     "mediafire": ("mediafire.com",),
     "vikingfile": ("vikingfile.com",),
@@ -31,12 +39,36 @@ HOST_DOMAINS: dict[str, tuple[str, ...]] = {
 # Words a poster uses as link text for a host ("MEGA", "BZZHR").
 HOST_WORDS = {name: name for name in HOST_DOMAINS} | {"bzzhr": "buzzheavier"}
 DENIED_HOSTS = (
-    "f95zone.com", "patreon.com", "subscribestar.com", "subscribestar.adult", "boosty.to",
-    "ko-fi.com", "buymeacoffee.com", "itch.io", "steampowered.com", "steamcommunity.com",
-    "gog.com", "discord.com", "discord.gg", "discordapp.com", "twitter.com", "x.com",
-    "bsky.app", "facebook.com", "instagram.com", "reddit.com", "youtube.com", "youtu.be",
-    "twitch.tv", "tumblr.com", "pixiv.net", "deviantart.com", "imgur.com", "postimg.cc",
-    "ibb.co", "wikipedia.org",
+    "f95zone.com",
+    "patreon.com",
+    "subscribestar.com",
+    "subscribestar.adult",
+    "boosty.to",
+    "ko-fi.com",
+    "buymeacoffee.com",
+    "itch.io",
+    "steampowered.com",
+    "steamcommunity.com",
+    "gog.com",
+    "discord.com",
+    "discord.gg",
+    "discordapp.com",
+    "twitter.com",
+    "x.com",
+    "bsky.app",
+    "facebook.com",
+    "instagram.com",
+    "reddit.com",
+    "youtube.com",
+    "youtu.be",
+    "twitch.tv",
+    "tumblr.com",
+    "pixiv.net",
+    "deviantart.com",
+    "imgur.com",
+    "postimg.cc",
+    "ibb.co",
+    "wikipedia.org",
 )
 _DOWNLOAD_HEADING = re.compile(r"downloads?\b(?:\s*links?\b)?[\s:]*(.*)", re.I)
 _DIVIDER = re.compile(r"(?:extras?|bonus(?:es)?|translations?|mods?)", re.I)
@@ -44,14 +76,20 @@ _PART = re.compile(r"part\s*(\d{1,2})\b", re.I)
 _SPOILER_PREFIX = re.compile(r"^\s*spoiler\s*:?\s*", re.I)
 # A file size ("Win (1.5 GB)") is not a version.
 _VERSION_IN_TEXT = re.compile(
-    r"\bv(?:er(?:sion)?)?\.?\s*(\d+(?:\.\d+)*[a-z]?)\b|\b(\d+(?:\.\d+)+[a-z]?)\b(?!\s*[KMGT]i?B\b)", re.I
+    r"\bv(?:er(?:sion)?)?\.?\s*(\d+(?:\.\d+)*[a-z]?)\b|\b(\d+(?:\.\d+)+[a-z]?)\b(?!\s*[KMGT]i?B\b)",
+    re.I,
 )
-_DATE_IN_TEXT = re.compile(r"\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[/.-]\d{1,2}[/.-]\d{4}\b")
+_DATE_IN_TEXT = re.compile(
+    r"\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[/.-]\d{1,2}[/.-]\d{4}\b"
+)
 _OLD_WORDS = re.compile(r"\b(?:old|older|previous|prior|legacy|archived?|past)\b", re.I)
 
 
 def _versions_in(text: str) -> set[str]:
-    return {normalize_version(m.group(1) or m.group(2)) for m in _VERSION_IN_TEXT.finditer(text)}
+    return {
+        normalize_version(m.group(1) or m.group(2))
+        for m in _VERSION_IN_TEXT.finditer(text)
+    }
 
 
 def spoiler_title_kind(title: str, thread_version: str) -> str:
@@ -80,8 +118,10 @@ def spoiler_title_kind(title: str, thread_version: str) -> str:
 def classify_build(label: str) -> tuple[str, str]:
     """Return the platform and kind described by a build heading."""
     text = label.lower()
+
     def has(pattern: str) -> bool:
         return bool(re.search(pattern, text))
+
     win = has(r"\b(win(?:dows)?|pc)\b")
     linux = has(r"\b(linux|lin)\b")
     if has(r"\bandroid\b"):
@@ -133,11 +173,20 @@ def _host_of_lc_favicon(style: str) -> str:
 
 
 def _title_version(html: str) -> str:
-    title = re.search(r"""<h1\b[^>]*class=["'][^"']*p-title-value[^"']*["'][^>]*>(.*?)</h1>""", html, re.I | re.S)
-    version = re.search(
-        r"\[((?:v(?:ersion)?\s*)?\d[^\]]*|(?:chapter|ch\.|episode|ep\.|part)\s*\d[^\]]*)\]",
-        re.sub(r"<[^>]*>", "", title.group(1)), re.I,
-    ) if title else None
+    title = re.search(
+        r"""<h1\b[^>]*class=["'][^"']*p-title-value[^"']*["'][^>]*>(.*?)</h1>""",
+        html,
+        re.I | re.S,
+    )
+    version = (
+        re.search(
+            r"\[((?:v(?:ersion)?\s*)?\d[^\]]*|(?:chapter|ch\.|episode|ep\.|part)\s*\d[^\]]*)\]",
+            re.sub(r"<[^>]*>", "", title.group(1)),
+            re.I,
+        )
+        if title
+        else None
+    )
     return version.group(1) if version else "Unknown"
 
 
@@ -163,18 +212,27 @@ def _f95_masked(url: SplitResult) -> bool:
 
 def _lc_masked(url: SplitResult) -> bool:
     return (
-        url.scheme == "https" and url.netloc == "lewdcorner.com"
-        and url.path == "/masked/out" and bool(url.query) and not url.fragment
+        url.scheme == "https"
+        and url.netloc == "lewdcorner.com"
+        and url.path == "/masked/out"
+        and bool(url.query)
+        and not url.fragment
     )
 
 
 def _f95_attachment(url: SplitResult) -> bool:
-    return url.hostname == "attachments.f95zone.to" or url.path.startswith("/attachments/")
+    return url.hostname == "attachments.f95zone.to" or url.path.startswith(
+        "/attachments/"
+    )
 
 
 _PROFILES = {
-    "f95": _SiteProfile("f95zone.to", _f95_masked, _f95_attachment, _host_of_f95_favicon, _title_version),
-    "lc": _SiteProfile("lewdcorner.com", _lc_masked, lambda _: False, _host_of_lc_favicon, _lc_version),
+    "f95": _SiteProfile(
+        "f95zone.to", _f95_masked, _f95_attachment, _host_of_f95_favicon, _title_version
+    ),
+    "lc": _SiteProfile(
+        "lewdcorner.com", _lc_masked, lambda _: False, _host_of_lc_favicon, _lc_version
+    ),
 }
 
 
@@ -250,7 +308,11 @@ class _Elements(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         a = {k: v or "" for k, v in attrs if k in ("class", "href", "style")}
         classes = a.get("class", "").split()
-        if tag == "article" and not self.seen and ("message-threadStarterPost" in classes or "message--post" in classes):
+        if (
+            tag == "article"
+            and not self.seen
+            and ("message-threadStarterPost" in classes or "message--post" in classes)
+        ):
             self.article = 1
             self.seen = True
         elif self.article and tag == "article":
@@ -265,7 +327,9 @@ class _Elements(HTMLParser):
                 self.wrapper = 1
         if not self.wrapper:
             return
-        if tag == "button" and (self.button or ("bbCodeSpoiler-button" in classes and not self.hidden)):
+        if tag == "button" and (
+            self.button or ("bbCodeSpoiler-button" in classes and not self.hidden)
+        ):
             # The button's own text ("Spoiler: <title>") is not post text.
             if not self.button:
                 self.button_parts = []
@@ -303,7 +367,9 @@ class _Elements(HTMLParser):
             if tag == "button":
                 self.button -= 1
                 if not self.button:
-                    title = _SPOILER_PREFIX.sub("", " ".join("".join(self.button_parts).split()))
+                    title = _SPOILER_PREFIX.sub(
+                        "", " ".join("".join(self.button_parts).split())
+                    )
                     self.events.append(("spoiler_open", title, {}))
             return
         if self.wrapper:
@@ -311,7 +377,9 @@ class _Elements(HTMLParser):
                 if tag == "span":
                     self.hidden -= 1
             elif tag == "a" and self.anchor is not None:
-                self.events.append(("a", "".join(self.anchor_parts).strip(), self.anchor))
+                self.events.append(
+                    ("a", "".join(self.anchor_parts).strip(), self.anchor)
+                )
                 self.anchor = None
             elif tag in ("b", "strong") and self.bold and self.anchor is None:
                 self.bold -= 1
@@ -348,7 +416,10 @@ def _heading_lines(value: str) -> list[str]:
 
 
 def parse_download_links(
-    html: str, site: lewdcorner.Site = "f95", *, page_version: str | None = None,
+    html: str,
+    site: lewdcorner.Site = "f95",
+    *,
+    page_version: str | None = None,
 ) -> ThreadDownloads:
     """Return first-post builds and ephemeral URLs; callers must not persist them.
 
@@ -361,14 +432,24 @@ def parse_download_links(
     events = parser.events
     signed = re.search(r'\bdata-logged-in=["\'](true|false)["\']', html[:4096], re.I)
     signed_in = bool(signed and signed.group(1).lower() == "true")
-    version = profile.version(html) if page_version is None else page_version or _title_version(html)
+    version = (
+        profile.version(html)
+        if page_version is None
+        else page_version or _title_version(html)
+    )
     spoiler_kinds = {
-        i: spoiler_title_kind(s, version) for i, (t, s, _) in enumerate(events) if t == "spoiler_open"
+        i: spoiler_title_kind(s, version)
+        for i, (t, s, _) in enumerate(events)
+        if t == "spoiler_open"
     }
-    heading_present = any(
-        t == "b" and any(_DOWNLOAD_HEADING.fullmatch(line) for line in _heading_lines(s))
-        for t, s, _ in events
-    ) or "download" in spoiler_kinds.values()
+    heading_present = (
+        any(
+            t == "b"
+            and any(_DOWNLOAD_HEADING.fullmatch(line) for line in _heading_lines(s))
+            for t, s, _ in events
+        )
+        or "download" in spoiler_kinds.values()
+    )
     active = not heading_present
     started = False
     section = ""
@@ -401,7 +482,13 @@ def parse_download_links(
             elif spoiler_kind == "part":
                 hold_part(value.strip().rstrip(" :"))
             elif spoiler_kind == "old":
-                section, label, divider, pending_part, old = value.strip().rstrip(" :"), "", False, "", True
+                section, label, divider, pending_part, old = (
+                    value.strip().rstrip(" :"),
+                    "",
+                    False,
+                    "",
+                    True,
+                )
         elif typ == "spoiler_close":
             if saved:
                 # In a headingless post, a known mirror can start the fallback
@@ -413,7 +500,11 @@ def parse_download_links(
             line = value.rstrip(" :")
             if _PART.fullmatch(line):
                 hold_part(line)
-            elif value.endswith(":") and len(value) <= 60 and classify_build(line)[0] != "unknown":
+            elif (
+                value.endswith(":")
+                and len(value) <= 60
+                and classify_build(line)[0] != "unknown"
+            ):
                 # A plain "Win:" row label works like a bold platform heading.
                 label, pending_part, glue = line, "", False
             else:
@@ -428,7 +519,13 @@ def parse_download_links(
                     if not line:
                         continue
                 if _DIVIDER.fullmatch(line):
-                    divider, section, label, pending_part, glue = True, line, "", "", False
+                    divider, section, label, pending_part, glue = (
+                        True,
+                        line,
+                        "",
+                        "",
+                        False,
+                    )
                     continue
                 if _PART.fullmatch(line):
                     hold_part(line)
@@ -453,7 +550,11 @@ def parse_download_links(
                 domain = (parsed.hostname or "").lower()
             except ValueError:
                 continue
-            if parsed.scheme not in ("http", "https") or not domain or attrs.get("_image"):
+            if (
+                parsed.scheme not in ("http", "https")
+                or not domain
+                or attrs.get("_image")
+            ):
                 continue
             own = domain == profile.domain or domain.endswith("." + profile.domain)
             masked = own and profile.masked(parsed)
@@ -467,7 +568,11 @@ def parse_download_links(
                     continue
                 started = True
             if masked:
-                host = profile.favicon_host(attrs.get("style", "")) or _host_of_label(value) or "unknown"
+                host = (
+                    profile.favicon_host(attrs.get("style", ""))
+                    or _host_of_label(value)
+                    or "unknown"
+                )
             else:
                 host = known or domain.removeprefix("www.")
             platform, kind = classify_build(label)
@@ -487,10 +592,31 @@ def parse_download_links(
                 part = ""
             build_label = label or section or "Unknown"
             key = (build_label, section, platform, kind)
-            build = next((b for b in builds if (b["label"], b["section"], b["platform"], b["kind"]) == key), None)
+            build = next(
+                (
+                    b
+                    for b in builds
+                    if (b["label"], b["section"], b["platform"], b["kind"]) == key
+                ),
+                None,
+            )
             if build is None:
-                build = Build(label=build_label, section=section, platform=platform, kind=kind, mirrors=[])
+                build = Build(
+                    label=build_label,
+                    section=section,
+                    platform=platform,
+                    kind=kind,
+                    mirrors=[],
+                )
                 builds.append(build)
-            build["mirrors"].append({"url": url, "host": host, "label": value, "part": part, "split": bool(part)})
+            build["mirrors"].append(
+                {
+                    "url": url,
+                    "host": host,
+                    "label": value,
+                    "part": part,
+                    "split": bool(part),
+                }
+            )
             glue = False
     return {"version": version, "signed_in": signed_in, "builds": builds}

@@ -4,6 +4,7 @@
 Every request goes to `https://dl.rpdl.net` only, one at a time and at least a
 second apart. Nothing here prints the token, the password or a torrent URL.
 """
+
 from __future__ import annotations
 
 import json
@@ -223,8 +224,17 @@ def _save_renewed_token(username: str, password: str, token: str) -> bool:
 
 # --- field normalisation ---------------------------------------------------
 
-_UNITS = {"b": 1, "kb": 1024, "mb": 1024**2, "gb": 1024**3, "tb": 1024**4,
-          "kib": 1024, "mib": 1024**2, "gib": 1024**3, "tib": 1024**4}
+_UNITS = {
+    "b": 1,
+    "kb": 1024,
+    "mb": 1024**2,
+    "gb": 1024**3,
+    "tb": 1024**4,
+    "kib": 1024,
+    "mib": 1024**2,
+    "gib": 1024**3,
+    "tib": 1024**4,
+}
 
 
 def parse_size(value: object) -> int:
@@ -236,7 +246,9 @@ def parse_size(value: object) -> int:
         match = re.fullmatch(r"([0-9]*\.?[0-9]+)\s*([a-zA-Z]*)", text)
         if match:
             unit = match.group(2).lower() or "b"
-            number = float(match.group(1)) * _UNITS[unit] if unit in _UNITS else math.nan
+            number = (
+                float(match.group(1)) * _UNITS[unit] if unit in _UNITS else math.nan
+            )
             if math.isfinite(number):
                 return int(number)
     return 0
@@ -334,15 +346,24 @@ def search(title: str, *, refresh: bool = False) -> list[dict[str, object]]:
         stamp = entry.get("at")
         results = entry.get("results")
         if (
-            (isinstance(stamp, int) or (isinstance(stamp, float) and math.isfinite(stamp)))
+            (
+                isinstance(stamp, int)
+                or (isinstance(stamp, float) and math.isfinite(stamp))
+            )
             and now - stamp < CACHE_TTL
             and isinstance(results, list)
         ):
             return cast(list[dict[str, object]], results)
     # The parameter set RPDL's own site and other clients send; `uploaded_DESC` is newest first.
-    params = urlencode({
-        "page_size": SEARCH_LIMIT, "page": 0, "sort": "uploaded_DESC", "categories": "", "search": query,
-    })
+    params = urlencode(
+        {
+            "page_size": SEARCH_LIMIT,
+            "page": 0,
+            "sort": "uploaded_DESC",
+            "categories": "",
+            "search": query,
+        }
+    )
     payload, content_type = _request("/api/torrents?" + params)
     data = _data(_json_body(payload, content_type))
     rows = data.get("results")
@@ -362,7 +383,11 @@ def search(title: str, *, refresh: bool = False) -> list[dict[str, object]]:
 
 
 def _num(value: object) -> float:
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    ):
         return float(value)
     return 0.0
 
@@ -376,7 +401,11 @@ def details(torrent_id: int) -> dict[str, object]:
     data = _data(_json_body(payload, content_type))
     result = normalize_result(data) or {}
     trackers = data.get("trackers")
-    result["trackers"] = [t for t in cast(list[object], trackers) if isinstance(t, str)] if isinstance(trackers, list) else []
+    result["trackers"] = (
+        [t for t in cast(list[object], trackers) if isinstance(t, str)]
+        if isinstance(trackers, list)
+        else []
+    )
     return result
 
 

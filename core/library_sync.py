@@ -136,11 +136,7 @@ class SyncLocation(Protocol):
 
 
 def utc_now() -> str:
-    return (
-        datetime.now(UTC)
-        .isoformat(timespec="milliseconds")
-        .replace("+00:00", "Z")
-    )
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def timestamp(value: str) -> float:
@@ -184,9 +180,7 @@ def _folder_write_lock(folder: Path) -> threading.Lock:
 
 FOLDER_UNAVAILABLE = "The sync folder is unavailable. wLib will try again."
 # EDQUOT is missing on Windows.
-_FOLDER_FULL_ERRNOS = frozenset(
-    {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
-)
+_FOLDER_FULL_ERRNOS = frozenset({errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)})
 _FOLDER_NOT_WRITABLE_ERRNOS = frozenset({errno.EACCES, errno.EPERM, errno.EROFS})
 
 
@@ -810,7 +804,9 @@ class GoogleDriveLocation(_OAuthLocation):
                 )
             )
             revisions = page.get("revisions")
-            for entry in cast(list[object], revisions) if isinstance(revisions, list) else []:
+            for entry in (
+                cast(list[object], revisions) if isinstance(revisions, list) else []
+            ):
                 item = cast(dict[str, object], entry) if isinstance(entry, dict) else {}
                 found.append(
                     (str(item.get("id") or ""), str(item.get("md5Checksum") or ""))
@@ -871,7 +867,10 @@ class GoogleDriveLocation(_OAuthLocation):
         head = _json_object(
             self._request(
                 "GET",
-                GDRIVE_API + "files/" + urllib.parse.quote(file_id) + "?fields=headRevisionId",
+                GDRIVE_API
+                + "files/"
+                + urllib.parse.quote(file_id)
+                + "?fields=headRevisionId",
                 file_request=True,
             )
         )
@@ -1364,10 +1363,7 @@ class SyncManager:
             and remote_changed
             and seen is not None
             and seen[0] == revision
-            and (
-                not local_changed
-                or timestamp(seen[1]) >= timestamp(local_modified)
-            )
+            and (not local_changed or timestamp(seen[1]) >= timestamp(local_modified))
         ):
             # Same newer remote the last push-only run read: it still wins and
             # still waits for a full sync, so don't download it every minute.
@@ -1387,8 +1383,9 @@ class SyncManager:
                 location, cast(dict[str, object], backup["sync"]), revision
             ):
                 return
-            local_games, remote_games = database.get_all_games(), cast(
-                list[object], backup["games"]
+            local_games, remote_games = (
+                database.get_all_games(),
+                cast(list[object], backup["games"]),
             )
             if push_only and remote_games and choice is None:
                 if local_games:
@@ -1492,12 +1489,9 @@ class SyncManager:
         if not isinstance(pending, dict):
             return False
         marker = cast(dict[str, object], pending)
-        return (
-            str(marker.get("modified_at") or "")
-            == str(remote_sync.get("modified_at") or "")
-            and str(marker.get("device") or "")
-            == str(remote_sync.get("device") or "")
-        )
+        return str(marker.get("modified_at") or "") == str(
+            remote_sync.get("modified_at") or ""
+        ) and str(marker.get("device") or "") == str(remote_sync.get("device") or "")
 
     def _ask_choice(self, revision: str, reason: str, *, stale: bool = False) -> None:
         self._state = "needs_choice"
@@ -1886,9 +1880,17 @@ class SyncManager:
                     snapshot_empty=True,
                 )
             except BackupValidationError as error:
-                return {"success": False, "error": str(error), "error_code": error.error_code}
+                return {
+                    "success": False,
+                    "error": str(error),
+                    "error_code": error.error_code,
+                }
             except OSError as error:
-                return {"success": False, "error": str(error), "error_code": "write_failed"}
+                return {
+                    "success": False,
+                    "error": str(error),
+                    "error_code": "write_failed",
+                }
         if self._on_pull is not None:
             self._on_pull()
         return {
@@ -1972,7 +1974,9 @@ class SyncManager:
             while not self._stop.wait(60):
                 try:
                     self._watch_tick()
-                except Exception:  # Keep auto-sync alive through transient DB/OS errors.
+                except (
+                    Exception
+                ):  # Keep auto-sync alive through transient DB/OS errors.
                     pass
 
         self._timer = threading.Thread(target=watch, daemon=True)

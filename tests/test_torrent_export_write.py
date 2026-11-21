@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Exported `.torrent` files: each write has its own temporary file and keeps the umask mode."""
+
 import os
 import sys
 import threading
@@ -10,14 +11,20 @@ from core.downloads import torrent_export
 from core.downloads.torrent_export import write_torrent
 
 
-def test_overlapping_exports_of_one_name_do_not_share_a_part_file(tmp_path, monkeypatch):
+def test_overlapping_exports_of_one_name_do_not_share_a_part_file(
+    tmp_path, monkeypatch
+):
     real_fsync = os.fsync
     both_open = threading.Barrier(2, timeout=5)
     parts: set[str] = set()
 
     def fsync(fd: int) -> None:
-        parts.add(os.readlink(f"/proc/self/fd/{fd}") if sys.platform == "linux" else str(fd))
-        _ = both_open.wait()  # Both writers hold their temporary file before either renames it.
+        parts.add(
+            os.readlink(f"/proc/self/fd/{fd}") if sys.platform == "linux" else str(fd)
+        )
+        _ = (
+            both_open.wait()
+        )  # Both writers hold their temporary file before either renames it.
         real_fsync(fd)
 
     monkeypatch.setattr(torrent_export.os, "fsync", fsync)
@@ -29,7 +36,10 @@ def test_overlapping_exports_of_one_name_do_not_share_a_part_file(tmp_path, monk
         except BaseException as exc:
             errors.append(exc)
 
-    threads = [threading.Thread(target=run, args=(b"A" * 1000,)), threading.Thread(target=run, args=(b"B" * 1000,))]
+    threads = [
+        threading.Thread(target=run, args=(b"A" * 1000,)),
+        threading.Thread(target=run, args=(b"B" * 1000,)),
+    ]
     for thread in threads:
         thread.start()
     for thread in threads:

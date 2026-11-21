@@ -163,7 +163,9 @@ def test_first_connection_choice(choice):
     assert titles == (
         {"Remote"}
         if choice == "use-remote"
-        else {"Local", "Remote"} if choice == "merge-once" else {"Local"}
+        else {"Local", "Remote"}
+        if choice == "merge-once"
+        else {"Local"}
     )
     assert location.writes == (0 if choice == "use-remote" else 1)
 
@@ -193,7 +195,9 @@ def test_both_changed_asks_instead_of_newest_wins(remote_newer, choice, rating, 
     database.update_setting("sync_local_modified_at", "2026-10-09T12:00:00Z")
     location.change(
         remote_backup(
-            modified=("2026-10-09T13:00:00Z" if remote_newer else "2026-10-09T11:00:00Z")
+            modified=(
+                "2026-10-09T13:00:00Z" if remote_newer else "2026-10-09T11:00:00Z"
+            )
         )
     )
     status = sync.run()
@@ -355,8 +359,6 @@ def test_folder_backup_copy_delete_race_is_conflict(tmp_path, monkeypatch):
     assert (tmp_path / "wlib-library.json").read_bytes() == b"three"
 
 
-
-
 def response(payload, headers=None):
     result = MagicMock()
     result.__enter__.return_value = result
@@ -515,7 +517,14 @@ def test_gdrive_refresh_lookup_download_and_upload(monkeypatch, capsys):
         [
             response({"access_token": "access", "expires_in": 300}),
             response({"files": []}),
-            response({"files": [{"id": "early", "md5Checksum": "5"}, {"id": "late", "md5Checksum": "9"}]}),
+            response(
+                {
+                    "files": [
+                        {"id": "early", "md5Checksum": "5"},
+                        {"id": "late", "md5Checksum": "9"},
+                    ]
+                }
+            ),
             response({"files": [{"id": "early", "md5Checksum": "5"}]}),
             response(b"file"),
             response({"files": []}),
@@ -592,7 +601,9 @@ def test_gdrive_account_name_and_revoke(monkeypatch):
         monkeypatch,
         [
             response({"access_token": "a"}),
-            response({"user": {"displayName": "Name", "emailAddress": "me@example.com"}}),
+            response(
+                {"user": {"displayName": "Name", "emailAddress": "me@example.com"}}
+            ),
             response({"user": {"displayName": "Name"}}),
             response({}),
             response(b""),
@@ -652,7 +663,9 @@ def test_gdrive_signin_state_exchange_and_disconnect(monkeypatch):
         "core.library_sync._token_request",
         lambda *args: {"refresh_token": "secret", "access_token": "access"},
     )
-    monkeypatch.setattr(GoogleDriveLocation, "account_name", lambda self: "me@example.com")
+    monkeypatch.setattr(
+        GoogleDriveLocation, "account_name", lambda self: "me@example.com"
+    )
     assert sync.complete_gdrive("code", query["state"][0])["success"]
     assert database.get_setting("sync_gdrive_refresh_token") == "secret"
     status = sync.status()
@@ -686,7 +699,6 @@ def test_exit_push_only_changes_and_off():
     assert location.writes == 1
 
 
-
 def test_exit_push_waits_for_a_run_holding_the_lock():
     import threading
 
@@ -711,6 +723,7 @@ def test_exit_push_waits_for_a_run_holding_the_lock():
     sync.local_changed = local_changed
     sync.finish()
     assert location.writes == 1
+
 
 def test_push_only_never_pulls_first_or_remote_changes():
     location = MemoryLocation(remote_backup())
@@ -883,7 +896,12 @@ def test_collections_and_presets_sync_between_data_directories(tmp_path, monkeyp
     database.create_collection("Backlog", alpha)
     database.create_collection("Best of")
     database.set_game_collections(beta, ["Backlog", "Best of"])
-    preset = {"name": "Unity", "filterEngines": ["Unity"], "sortBy": "rating", "sortDir": "desc"}
+    preset = {
+        "name": "Unity",
+        "filterEngines": ["Unity"],
+        "sortBy": "rating",
+        "sortDir": "desc",
+    }
     assert Api().save_library_filter_presets([preset])["success"]
     assert Api().set_tag_color(" Sandbox ", "green")["success"]
     a = SyncManager()
@@ -956,10 +974,27 @@ else:
 print(json.dumps({'success': True}))
 """
     for home, action in (("a", "seed"), ("b", "join"), ("a", "edit"), ("b", "verify")):
-        environment = {**os.environ, "HOME": str(tmp_path / home), "LOCALAPPDATA": str(tmp_path / home)}
+        environment = {
+            **os.environ,
+            "HOME": str(tmp_path / home),
+            "LOCALAPPDATA": str(tmp_path / home),
+        }
         environment.pop("WLIB_DATA_DIR", None)
         environment.pop("XDG_DATA_HOME", None)
-        result = subprocess.run([sys.executable, "-c", worker, action, str(folder), "yes" if encrypted else "no"], env=environment, text=True, capture_output=True, check=True)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                worker,
+                action,
+                str(folder),
+                "yes" if encrypted else "no",
+            ],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
         assert json.loads(result.stdout)["success"]
 
 
@@ -1042,7 +1077,11 @@ def test_folder_write_survives_unsupported_flock(tmp_path, monkeypatch):
     def no_flock(*_args):
         raise OSError(95, "Operation not supported")
 
-    monkeypatch.setattr(library_sync, "_fcntl_module", types.SimpleNamespace(flock=no_flock, LOCK_EX=2, LOCK_UN=8))
+    monkeypatch.setattr(
+        library_sync,
+        "_fcntl_module",
+        types.SimpleNamespace(flock=no_flock, LOCK_EX=2, LOCK_UN=8),
+    )
     location = FolderLocation(str(tmp_path))
     assert location.write(b"data", None) == location.revision()
     assert (tmp_path / "wlib-library.json").read_bytes() == b"data"
@@ -1122,12 +1161,13 @@ def test_start_run_status_not_stuck_at_syncing_when_lock_held():
 def test_open_signin_clears_pending_on_browser_failure():
     api = Api()
     api.library_sync.server_available = True
-    api.open_in_browser = MagicMock(return_value={"success": False, "error": "No browser"})
+    api.open_in_browser = MagicMock(
+        return_value={"success": False, "error": "No browser"}
+    )
     result = api.connect_dropbox()
     assert not result["success"]
     assert result["error_code"] == "browser_failed"
     assert api.library_sync.status()["connecting"] is False
-
 
 
 def test_folder_read_missing_is_conflict(tmp_path):
@@ -1572,11 +1612,17 @@ def test_rejected_folder_pick_keeps_the_working_connection(tmp_path):
 
 def test_cached_covers_never_export_or_import():
     from core import database
-    from core.library_backup import build_library_backup, build_sync_backup, apply_library_backup
+    from core.library_backup import (
+        build_library_backup,
+        build_sync_backup,
+        apply_library_backup,
+    )
 
     database.init_db()
     url = "https://attachments.f95zone.to/cache.png"
-    game_id = database.add_game("Device cache", "", "https://f95zone.to/threads/987654/", cover_image=url)
+    game_id = database.add_game(
+        "Device cache", "", "https://f95zone.to/threads/987654/", cover_image=url
+    )
     name = "b" * 32 + ".png"
     assert database.set_game_cover_cache(game_id, url, name)
     before = database.get_setting("sync_local_modified_at")
@@ -1754,7 +1800,9 @@ def test_faults_the_user_must_fix_stay_errors(code):
 def started(sync, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        sync, "start_run", lambda choice=None, *, push_only=False: calls.append(push_only)
+        sync,
+        "start_run",
+        lambda choice=None, *, push_only=False: calls.append(push_only),
     )
     return calls
 
@@ -1924,8 +1972,13 @@ def test_download_queue_is_not_synced():
     assert sync.run()["state"] == "idle"
     writes = location.writes
     database.insert_download_job(
-        {"id": "QUEUEDJOB", "kind": "torrent", "game_id": game_id, "state": "queued",
-         "source": '{"rpdl_id": 7, "info_hash": "QUEUEDHASH"}'}
+        {
+            "id": "QUEUEDJOB",
+            "kind": "torrent",
+            "game_id": game_id,
+            "state": "queued",
+            "source": '{"rpdl_id": 7, "info_hash": "QUEUEDHASH"}',
+        }
     )
     database.update_setting(queue_settings.LIMIT_KEY, "1234")
     database.update_setting(queue_settings.MAX_ACTIVE_KEY, "3")
@@ -2092,7 +2145,10 @@ def test_folder_sync_matches_lc_thread_between_devices(tmp_path, monkeypatch):
 
 
 def test_synced_lc_dismissal_prevents_automatic_fill(tmp_path, monkeypatch):
-    f95_url, lc = "https://f95zone.to/threads/101/", "https://lewdcorner.com/threads/21/"
+    f95_url, lc = (
+        "https://f95zone.to/threads/101/",
+        "https://lewdcorner.com/threads/21/",
+    )
     local_db = database.DB_PATH
     local_id = database.add_game("Existing", "", f95_url, lc_url=lc)
     snapshot = build_sync_backup(utc_now(), "original")
@@ -2111,7 +2167,6 @@ def test_synced_lc_dismissal_prevents_automatic_fill(tmp_path, monkeypatch):
     assert database.fill_lc_threads({"101": ("21", "Free")}) == 0
 
 
-
 def test_thread_states_sync_between_data_directories(tmp_path, monkeypatch):
     folder = tmp_path / "shared-states"
     folder.mkdir()
@@ -2120,7 +2175,9 @@ def test_thread_states_sync_between_data_directories(tmp_path, monkeypatch):
     db_b.parent.mkdir()
     monkeypatch.setattr(database, "DB_PATH", str(db_a))
     database.init_db()
-    alpha = database.add_game("Alpha", "", f95_url="https://f95zone.to/threads/alpha.61/")
+    alpha = database.add_game(
+        "Alpha", "", f95_url="https://f95zone.to/threads/alpha.61/"
+    )
     database.add_game("Beta", "", f95_url="https://f95zone.to/threads/beta.62/")
     database.update_game(alpha, {"thread_onhold": 0, "thread_abandoned": 1})
     a = SyncManager()
@@ -2133,7 +2190,8 @@ def test_thread_states_sync_between_data_directories(tmp_path, monkeypatch):
     b.set_folder(str(folder))
     b.run()
     states = {
-        g["title"]: (g["thread_onhold"], g["thread_abandoned"]) for g in database.get_all_games()
+        g["title"]: (g["thread_onhold"], g["thread_abandoned"])
+        for g in database.get_all_games()
     }
     assert states == {"Alpha": (0, 1), "Beta": (None, None)}
 
@@ -2156,16 +2214,25 @@ def _old_sync_payload(lc_plus):
     return payload
 
 
-@pytest.mark.parametrize(("local", "old", "expected"), [
-    ("no", "0", "no"), ("yes", "0", "yes"), ("auto", "0", "auto"), ("no", "1", "yes"), ("auto", "1", "yes"),
-])
+@pytest.mark.parametrize(
+    ("local", "old", "expected"),
+    [
+        ("no", "0", "no"),
+        ("yes", "0", "yes"),
+        ("auto", "0", "auto"),
+        ("no", "1", "yes"),
+        ("auto", "1", "yes"),
+    ],
+)
 def test_sync_from_an_older_device_applies_only_lc_plus_on(local, old, expected):
     from core.library_backup import apply_library_backup
 
     database.update_setting("lc_plus_mode", local)
     database.update_setting("lc_plus", "1" if local == "yes" else "0")
     payload = _old_sync_payload(old)
-    apply_library_backup(payload, {"sections": ["settings_general"]}, mirror=True, sync=True)
+    apply_library_backup(
+        payload, {"sections": ["settings_general"]}, mirror=True, sync=True
+    )
     assert database.get_setting("lc_plus_mode") == expected
     assert database.get_setting("lc_plus") == ("1" if expected == "yes" else "0")
 
@@ -2177,7 +2244,9 @@ def test_sync_keeps_the_detected_tier_on_this_device():
     payload = build_sync_backup("2026-11-19T10:00:00Z", "device-a")
     assert "lc_plus_detected" not in json.dumps(payload)
     database.update_setting("lc_plus_detected", "")
-    apply_library_backup(payload, {"sections": ["settings_general"]}, mirror=True, sync=True)
+    apply_library_backup(
+        payload, {"sections": ["settings_general"]}, mirror=True, sync=True
+    )
     assert database.get_setting("lc_plus_detected") == ""
     assert database.get_setting("lc_plus_mode") == "auto"
     assert database.lc_plus_effective() is False

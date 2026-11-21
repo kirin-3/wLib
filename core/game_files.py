@@ -119,12 +119,18 @@ def _read_jobs() -> _Jobs:
         items = data.get(kind)
         if isinstance(items, list):
             result.lists[kind] = [
-                str(item) for item in cast(list[object], items) if isinstance(item, str) and item
+                str(item)
+                for item in cast(list[object], items)
+                if isinstance(item, str) and item
             ]
     devices = data.get("devices")
     if isinstance(devices, dict):
         for key, value in cast(dict[object, object], devices).items():
-            if isinstance(key, str) and isinstance(value, int) and not isinstance(value, bool):
+            if (
+                isinstance(key, str)
+                and isinstance(value, int)
+                and not isinstance(value, bool)
+            ):
                 result.devices[key] = value
     renames = data.get("renames")
     if isinstance(renames, list):
@@ -132,7 +138,11 @@ def _read_jobs() -> _Jobs:
             if not isinstance(item, dict):
                 continue
             record = cast(dict[str, object], item)
-            game_id, src, dst = record.get("game_id"), record.get("src"), record.get("dst")
+            game_id, src, dst = (
+                record.get("game_id"),
+                record.get("src"),
+                record.get("dst"),
+            )
             device = record.get("device")
             if (
                 isinstance(game_id, int)
@@ -147,7 +157,9 @@ def _read_jobs() -> _Jobs:
                         game_id,
                         src,
                         dst,
-                        device if isinstance(device, int) and not isinstance(device, bool) else None,
+                        device
+                        if isinstance(device, int) and not isinstance(device, bool)
+                        else None,
                     )
                 )
     return result
@@ -274,7 +286,9 @@ def load_context() -> FilesContext:
     return FilesContext(
         library_folders=[folder for folder in folders if folder],
         downloads_folder=str(get_setting("downloads_folder") or ""),
-        pattern=str(get_setting("library_folder_pattern") or DEFAULT_LIBRARY_FOLDER_PATTERN),
+        pattern=str(
+            get_setting("library_folder_pattern") or DEFAULT_LIBRARY_FOLDER_PATTERN
+        ),
     )
 
 
@@ -322,7 +336,9 @@ def folder_in_use(root: str, proc_dir: str = "/proc") -> bool:
             except OSError:
                 continue
             target = target.removesuffix(" (deleted)")
-            if target.startswith("/") and is_within_real(os.path.normpath(target), root_real):
+            if target.startswith("/") and is_within_real(
+                os.path.normpath(target), root_real
+            ):
                 return True
         try:
             with open(os.path.join(base, "cmdline"), "rb") as handle:
@@ -451,7 +467,9 @@ def _plan_entry(
         loose = loose_save_files(exe_dir)
         if loose:
             entry["saves_folder"] = exe_dir
-            entry["saves_inside_root"] = is_within_real(real_path(exe_dir), real_path(root))
+            entry["saves_inside_root"] = is_within_real(
+                real_path(exe_dir), real_path(root)
+            )
             entry["save_files"] = [os.path.basename(path) for path in loose]
     if hooks.running(game_id):
         entry["blocked_reason"] = running_reason
@@ -482,7 +500,9 @@ def plan_uninstall(
 ) -> list[dict[str, object]]:
     context = ctx or load_context()
     return [
-        _plan_entry(game_id, context, hooks, root_overrides.get(game_id, ""), UNINSTALL_RUNNING)
+        _plan_entry(
+            game_id, context, hooks, root_overrides.get(game_id, ""), UNINSTALL_RUNNING
+        )
         for game_id in ids
     ]
 
@@ -538,17 +558,27 @@ def plan_move(
     context = ctx or load_context()
     dest = os.path.abspath(os.path.expanduser(dest_parent)) if dest_parent else ""
     entries = [
-        _plan_entry(game_id, context, hooks, root_overrides.get(game_id, ""), MOVE_RUNNING)
+        _plan_entry(
+            game_id, context, hooks, root_overrides.get(game_id, ""), MOVE_RUNNING
+        )
         for game_id in ids
     ]
     for entry in entries:
         root = str(entry["root"])
-        entry["target"] = os.path.join(dest, os.path.basename(real_path(root))) if root and dest else ""
+        entry["target"] = (
+            os.path.join(dest, os.path.basename(real_path(root)))
+            if root and dest
+            else ""
+        )
         entry["same_device"] = bool(root) and _same_device(root, dest)
         entry["move_reason"] = move_problem(root, dest) if root else ""
         entry["size_bytes"] = None
     if with_sizes:
-        sized = [entry for entry in entries if entry["root"] and os.path.isdir(str(entry["root"]))]
+        sized = [
+            entry
+            for entry in entries
+            if entry["root"] and os.path.isdir(str(entry["root"]))
+        ]
         if sized:
             with ThreadPoolExecutor(max_workers=min(4, len(sized))) as pool:
                 sizes = list(pool.map(tree_bytes, [str(e["root"]) for e in sized]))
@@ -765,12 +795,16 @@ def finish_interrupted_renames() -> int:
                 continue
             except Exception:
                 _log.exception(
-                    "Could not finish the move of game %s to %s", record.game_id, record.dst
+                    "Could not finish the move of game %s to %s",
+                    record.game_id,
+                    record.dst,
                 )
                 continue
             if result.get("game") or result.get("targets"):
                 repointed += 1
-                _log.info("Finished the move of game %s to %s", record.game_id, record.dst)
+                _log.info(
+                    "Finished the move of game %s to %s", record.game_id, record.dst
+                )
             remove_rename(record)
         elif src_there and not dst_there:
             remove_rename(record)
@@ -825,7 +859,11 @@ def run_uninstall(
         reserved = False
         try:
             entry = _plan_entry(
-                game_id, context, hooks, root_overrides.get(game_id, ""), UNINSTALL_RUNNING
+                game_id,
+                context,
+                hooks,
+                root_overrides.get(game_id, ""),
+                UNINSTALL_RUNNING,
             )
             problem = entry_problem(entry)
             if problem:
@@ -845,7 +883,9 @@ def run_uninstall(
                 else:
                     error = hooks.backup_saves(game_id)
                 if error:
-                    result["error"] = f"Save backup failed, so nothing was deleted: {error}"
+                    result["error"] = (
+                        f"Save backup failed, so nothing was deleted: {error}"
+                    )
                     continue
             # Nothing is deleted until the library change is saved: a failed
             # save puts the folder back.
@@ -864,7 +904,9 @@ def run_uninstall(
                 else:
                     clear_game_install(game_id)
             except Exception as exc:
-                _log.exception("Uninstall of game %s could not update the library", game_id)
+                _log.exception(
+                    "Uninstall of game %s could not update the library", game_id
+                )
                 error = str(exc) or type(exc).__name__
                 kept = undo_removal(staged)
                 result["error"] = (
@@ -973,10 +1015,14 @@ def run_move_job(
                 except OSError as back_exc:
                     # The record stays: the next start points the game at
                     # the folder where it is now.
-                    _log.error("Could not move %s back to %s: %s", final, root, back_exc)
+                    _log.error(
+                        "Could not move %s back to %s: %s", final, root, back_exc
+                    )
                 else:
                     remove_rename(record)
-                return MoveOutcome("failed", f"Could not update the game's paths: {exc}")
+                return MoveOutcome(
+                    "failed", f"Could not update the game's paths: {exc}"
+                )
             remove_rename(record)
         finally:
             with _record_lock:
@@ -1028,7 +1074,9 @@ def run_move_job(
     how = trash_root(root, context.library_folders)
     warning = ""
     if how == "in_place":
-        warning = "The old folder could not be moved to the trash, so it is deleted in place."
+        warning = (
+            "The old folder could not be moved to the trash, so it is deleted in place."
+        )
     elif how == "kept":
         warning = (
             f"The old folder {root} could not be moved to the trash, so it was kept. "
@@ -1040,7 +1088,8 @@ def run_move_job(
 _SPEED_WINDOW_SECONDS = 3.0
 
 MoveRunner = Callable[
-    [MoveJob, threading.Event, Callable[[int], None], Callable[[int], None]], MoveOutcome
+    [MoveJob, threading.Event, Callable[[int], None], Callable[[int], None]],
+    MoveOutcome,
 ]
 
 
@@ -1122,7 +1171,7 @@ class MoveQueue:
         return added
 
     def state(self, game_id: int) -> str:
-        """"moving", "waiting" or ""."""
+        """ "moving", "waiting" or ""."""
         with self._lock:
             if self._current is not None and self._current.game_id == game_id:
                 return "moving"
@@ -1154,7 +1203,10 @@ class MoveQueue:
             progress = self._progress
             progress.bytes_done += count
             progress.samples.append((now, progress.bytes_done))
-            while progress.samples and now - progress.samples[0][0] > _SPEED_WINDOW_SECONDS:
+            while (
+                progress.samples
+                and now - progress.samples[0][0] > _SPEED_WINDOW_SECONDS
+            ):
                 _ = progress.samples.popleft()
 
     def _set_total(self, total: int) -> None:
@@ -1179,7 +1231,9 @@ class MoveQueue:
                     earlier = unread.get(key)
                     if isinstance(earlier, int):
                         summary[key] = cast(int, summary[key]) + earlier
-                summary["first_reason"] = str(unread.get("first_reason") or "") or totals.first_reason
+                summary["first_reason"] = (
+                    str(unread.get("first_reason") or "") or totals.first_reason
+                )
             self._summary = summary
         self._totals = _Totals()
 
@@ -1228,7 +1282,9 @@ class MoveQueue:
                 "current": None,
                 "waiting": waiting,
                 "position": self._totals.done + (1 if current is not None else 0),
-                "total": self._totals.done + (1 if current is not None else 0) + len(waiting),
+                "total": self._totals.done
+                + (1 if current is not None else 0)
+                + len(waiting),
             }
             if current is not None:
                 result["current"] = {

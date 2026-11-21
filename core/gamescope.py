@@ -4,6 +4,7 @@
 Pure functions only (no database access), so the settings API, the database
 normalizers and the launcher all use the same rules.
 """
+
 from __future__ import annotations
 
 import re
@@ -159,7 +160,10 @@ def settings_error(key: str, value: object) -> str:
         return fps_limit_error(value)
     if key == "gamescope_args":
         return args_error(value)
-    if key == "gamescope_window_mode" and str(value or "").strip().lower() not in WINDOW_MODES:
+    if (
+        key == "gamescope_window_mode"
+        and str(value or "").strip().lower() not in WINDOW_MODES
+    ):
         return "Choose Fullscreen, Borderless or Window."
     if key == "gamescope_scaler" and str(value or "").strip().lower() not in SCALERS:
         return "Choose a scaler from the list."
@@ -171,7 +175,11 @@ def settings_error(key: str, value: object) -> str:
 def normalize_setting(key: str, value: object) -> str:
     """Stored form of a global gamescope setting; invalid values get the default."""
     if key == "gamescope_enabled":
-        return "true" if str(value).strip().lower() in ("1", "true", "on", "yes") else "false"
+        return (
+            "true"
+            if str(value).strip().lower() in ("1", "true", "on", "yes")
+            else "false"
+        )
     if key == "gamescope_window_mode":
         return normalize_window_mode(value)
     if key in ("gamescope_output_resolution", "gamescope_game_resolution"):
@@ -234,7 +242,9 @@ GAME_SIZE_NOT_FOUND = "not found"  # No native size; the output size is used.
 GAME_SIZE_TOO_LARGE = "larger than the output"  # Native size does not fit.
 
 
-def output_size(options: GamescopeOptions, screen_size: Size | None = None) -> Size | None:
+def output_size(
+    options: GamescopeOptions, screen_size: Size | None = None
+) -> Size | None:
     """`-W/-H`: the set output, else the screen size when the game is also Auto."""
     output = parse_resolution(options.get("output_resolution"))
     if output is None and parse_resolution(options.get("game_resolution")) is None:

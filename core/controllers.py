@@ -54,7 +54,10 @@ def _capabilities_joystick(entry: Path) -> bool:
         bitmap = (bitmap << word_bits) | int(word, 16)
     # Gaming mice and headset receivers often advertise joystick buttons too;
     # a left mouse button marks them as pointers, as udev does.
-    return bool((bitmap >> _BTN_JOYSTICK_FIRST) & 0xFFFFFFFF) and not (bitmap >> _BTN_LEFT) & 1
+    return (
+        bool((bitmap >> _BTN_JOYSTICK_FIRST) & 0xFFFFFFFF)
+        and not (bitmap >> _BTN_LEFT) & 1
+    )
 
 
 def linux_controllers_present(
@@ -116,7 +119,11 @@ class _RawDeviceInfo(ctypes.Structure):
 
 def _raw_input_present(user32: ctypes.CDLL) -> bool | None:
     get_list = user32.GetRawInputDeviceList
-    get_list.argtypes = [ctypes.POINTER(_RawDevice), ctypes.POINTER(ctypes.c_uint), ctypes.c_uint]
+    get_list.argtypes = [
+        ctypes.POINTER(_RawDevice),
+        ctypes.POINTER(ctypes.c_uint),
+        ctypes.c_uint,
+    ]
     get_list.restype = ctypes.c_int
     count = ctypes.c_uint()
     entry_size = ctypes.sizeof(_RawDevice)
@@ -130,7 +137,12 @@ def _raw_input_present(user32: ctypes.CDLL) -> bool | None:
         return None
 
     get_info = user32.GetRawInputDeviceInfoW
-    get_info.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+    get_info.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint),
+    ]
     get_info.restype = ctypes.c_int
     uncertain = False
     for index in range(listed):
@@ -140,7 +152,18 @@ def _raw_input_present(user32: ctypes.CDLL) -> bool | None:
         info = _RawDeviceInfo()
         size = ctypes.c_uint(ctypes.sizeof(info))
         info.size = size.value
-        if cast(int, get_info(cast(int | None, device.handle), 0x2000000b, ctypes.byref(info), ctypes.byref(size))) < 0:
+        if (
+            cast(
+                int,
+                get_info(
+                    cast(int | None, device.handle),
+                    0x2000000B,
+                    ctypes.byref(info),
+                    ctypes.byref(size),
+                ),
+            )
+            < 0
+        ):
             # A device removed mid-scan must not hide a controller listed after it.
             uncertain = True
             continue
@@ -206,7 +229,9 @@ def _open_input_watch(path: Path) -> int:
 def _input_watch_lost(events: bytes) -> bool:
     offset = 0
     while offset < len(events):
-        _, mask, _, name_length = cast(tuple[int, int, int, int], _INOTIFY_EVENT.unpack_from(events, offset))
+        _, mask, _, name_length = cast(
+            tuple[int, int, int, int], _INOTIFY_EVENT.unpack_from(events, offset)
+        )
         if mask & _IN_WATCH_LOST:
             return True
         offset += _INOTIFY_EVENT.size + name_length
@@ -244,7 +269,9 @@ class ControllerWatcher:
         with self._condition:
             if self._thread is not None or self._stopped:
                 return
-            self._thread = threading.Thread(target=self._run, name="Controller presence", daemon=True)
+            self._thread = threading.Thread(
+                target=self._run, name="Controller presence", daemon=True
+            )
             self._thread.start()
 
     def stop(self) -> None:
@@ -307,7 +334,9 @@ class ControllerWatcher:
                             return True
                         if _input_watch_lost(os.read(fd, 65536)):
                             return False
-                        ready, _, _ = select.select([stop_read], [], [], _DEVICE_SETTLE_SECONDS)
+                        ready, _, _ = select.select(
+                            [stop_read], [], [], _DEVICE_SETTLE_SECONDS
+                        )
                         if ready:
                             return True
                         self._refresh()
@@ -326,7 +355,10 @@ class ControllerWatcher:
             with self._condition:
                 while not self._stopped:
                     if self._focused:
-                        if generation != self._focus_generation or not self._condition.wait(interval):
+                        if (
+                            generation != self._focus_generation
+                            or not self._condition.wait(interval)
+                        ):
                             generation = self._focus_generation
                             break
                     else:

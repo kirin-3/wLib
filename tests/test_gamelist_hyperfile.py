@@ -27,14 +27,21 @@ def gamelist_record(
     row = bytearray(2456)
     row[:3] = bytes((0x10, state, 0))
     pack_into("<I", row, 12, record_id)
-    for offset, value in [(16, name), (218, version), (320, homepage), (1463, developer)]:
+    for offset, value in [
+        (16, name),
+        (218, version),
+        (320, homepage),
+        (1463, developer),
+    ]:
         encoded = value.encode("utf-16-le")
-        row[offset:offset + len(encoded)] = encoded
+        row[offset : offset + len(encoded)] = encoded
     url_bytes = url.encode("ascii")
-    row[1975:1975 + len(url_bytes)] = url_bytes
+    row[1975 : 1975 + len(url_bytes)] = url_bytes
     pack_into("<BBHI", row, 2237, *added)
     pack_into("<I", row, 2253, memo_pointer)
-    row[2372:2408] = (guid or f"00000000-0000-0000-0000-{record_id:012x}").encode("ascii")
+    row[2372:2408] = (guid or f"00000000-0000-0000-0000-{record_id:012x}").encode(
+        "ascii"
+    )
     return bytes(row)
 
 
@@ -57,7 +64,7 @@ def gamelist_memo(text: bytes, stale: bytes = b"") -> bytes:
     memo[8:10] = b"\x07\xf4"
     pack_into("<I", memo, 10, 19 + len(text))
     pack_into("<I", memo, 8 + 36, len(text))
-    memo[48:48 + len(text + stale)] = text + stale
+    memo[48 : 48 + len(text + stale)] = text + stale
     return bytes(memo)
 
 
@@ -71,9 +78,18 @@ def test_reads_records_with_variable_header(tmp_path, header_size):
     )
     result = read_gamelist_table(path)
     first, second = result.records
-    assert (result.full, result.passed, result.failed, result.partial, result.deleted) == (2, 2, 0, 0, 0)
+    assert (
+        result.full,
+        result.passed,
+        result.failed,
+        result.partial,
+        result.deleted,
+    ) == (2, 2, 0, 0, 0)
     assert (first.name, first.guid, first.added, first.developer) == (
-        "Sakura 桜", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "2018-01-08T13:20:01", "Sample Studio",
+        "Sakura 桜",
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "2018-01-08T13:20:01",
+        "Sample Studio",
     )
     assert second.url == ""
 
@@ -88,7 +104,9 @@ def test_rejects_missing_signature(tmp_path):
 def test_rejects_shifted_layout(tmp_path):
     row = gamelist_record()
     path = write_gamelist(tmp_path, row[1975:] + row[:1975])
-    with pytest.raises(BackupValidationError, match="version is not supported") as error:
+    with pytest.raises(
+        BackupValidationError, match="version is not supported"
+    ) as error:
         _ = read_gamelist_table(path)
     assert error.value.error_code == "unsupported_version"
 
@@ -104,12 +122,20 @@ def test_counts_damaged_partial_and_deleted_rows(tmp_path):
     damaged = bytearray(gamelist_record(1))
     damaged[2372] = ord("X")
     path = write_gamelist(
-        tmp_path, bytes(damaged),
+        tmp_path,
+        bytes(damaged),
         *(gamelist_record(i) for i in range(2, 41)),
-        gamelist_record(41, state=2), gamelist_record(42)[:600],
+        gamelist_record(41, state=2),
+        gamelist_record(42)[:600],
     )
     result = read_gamelist_table(path)
-    assert (result.full, result.passed, result.failed, result.partial, result.deleted) == (41, 39, 1, 1, 1)
+    assert (
+        result.full,
+        result.passed,
+        result.failed,
+        result.partial,
+        result.deleted,
+    ) == (41, 39, 1, 1, 1)
     assert [record.record_id for record in result.records] == list(range(2, 41))
 
 
@@ -121,7 +147,13 @@ def test_rejects_mostly_unreadable_rows(tmp_path):
 
 def test_deleted_row_has_no_game_even_when_it_is_the_only_row(tmp_path):
     result = read_gamelist_table(write_gamelist(tmp_path, gamelist_record(state=2)))
-    assert (result.full, result.passed, result.failed, result.partial, result.deleted) == (1, 0, 0, 0, 1)
+    assert (
+        result.full,
+        result.passed,
+        result.failed,
+        result.partial,
+        result.deleted,
+    ) == (1, 0, 0, 0, 1)
     assert result.records == []
 
 

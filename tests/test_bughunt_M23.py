@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M23: a short marker word after the version (DLC, OST) must still count as a marker."""
+
 import pytest
 
 from core.downloads import rpdl_match as m
@@ -14,7 +15,9 @@ def test_short_marker_after_version_is_a_marker(title):
 
 
 def test_dlc_after_version_is_not_preselected():
-    out = m.rank([{"id": 1, "title": "Game-2.0-DLC", "seeders": 5, "date": 1}], "Game", "2.0")
+    out = m.rank(
+        [{"id": 1, "title": "Game-2.0-DLC", "seeders": 5, "date": 1}], "Game", "2.0"
+    )
     assert out["preselected_id"] is None
 
 

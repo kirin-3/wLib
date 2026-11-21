@@ -33,7 +33,9 @@ def test_sync_retries_unsigned_firefox_update_after_chromium_swap(
     ):
         assert api.sync_extension_files()["success"] is False
 
-    chromium_version = json.loads(chromium_manifest.read_text(encoding="utf-8"))["version"]
+    chromium_version = json.loads(chromium_manifest.read_text(encoding="utf-8"))[
+        "version"
+    ]
     assert chromium_version == "2.0.0"
     with ZipFile(firefox_xpi) as xpi:
         assert json.loads(xpi.read("manifest.json")) == {"version": "1.0.0"}

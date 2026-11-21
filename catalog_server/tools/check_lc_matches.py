@@ -40,7 +40,9 @@ EXAMPLES = 20
 class MatchReport:
     matched: int = 0
     agreed: int = 0
-    disagreed: list[tuple[int, int, int]] = field(default_factory=list[tuple[int, int, int]])
+    disagreed: list[tuple[int, int, int]] = field(
+        default_factory=list[tuple[int, int, int]]
+    )
     unknown: int = 0
     atlas_only: int = 0
 
@@ -51,7 +53,9 @@ def _read_only(path: str) -> sqlite3.Connection:
 
 def atlas_pairs(atlas: sqlite3.Connection) -> dict[int, set[int]]:
     pairs: dict[int, set[int]] = {}
-    for lc_id, f95_id in cast(list[tuple[object, object]], atlas.execute(_ATLAS_PAIRS).fetchall()):
+    for lc_id, f95_id in cast(
+        list[tuple[object, object]], atlas.execute(_ATLAS_PAIRS).fetchall()
+    ):
         lc, f95 = _int(lc_id), _int(f95_id)
         if lc is not None and f95 is not None:
             pairs.setdefault(lc, set()).add(f95)
@@ -68,7 +72,9 @@ def _int(value: object) -> int | None:
 def _current(catalog: sqlite3.Connection, table: str) -> set[int]:
     rows = cast(
         list[tuple[int]],
-        catalog.execute(f"SELECT thread_id FROM {table} WHERE removed_at IS NULL").fetchall(),
+        catalog.execute(
+            f"SELECT thread_id FROM {table} WHERE removed_at IS NULL"
+        ).fetchall(),
     )
     return {row[0] for row in rows}
 
@@ -114,7 +120,9 @@ class Args(argparse.Namespace):
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
+    parser = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0] if __doc__ else None
+    )
     _ = parser.add_argument("catalog", help="built catalog (catalog.sqlite)")
     _ = parser.add_argument("atlas", help="Atlas database (atlas-latest.db)")
     args = parser.parse_args(argv, namespace=Args())

@@ -26,7 +26,9 @@ LISTING_URL = (
     + "order%5B0%5D/{order}/work_type_category%5B0%5D/game/"
     + "per_page/100/page/{page}/show_type/1"
 )
-INFO_URL = "https://www.dlsite.com/{site}/product/info/ajax?product_id={ids}&cdn_cache_min=1"
+INFO_URL = (
+    "https://www.dlsite.com/{site}/product/info/ajax?product_id={ids}&cdn_cache_min=1"
+)
 WORK_URL = "https://www.dlsite.com/{site}/work/=/product_id/{product_id}.html"
 # Incremental runs stop at the first page with nothing new; this caps a runaway.
 MAX_INCREMENTAL_PAGES = 30
@@ -100,7 +102,9 @@ def merge_details(
                 "age_category": ADULT_AGE_CATEGORY,
                 "genres": item["genres"],
                 "released_at": info.get("regist_date"),
-                "cover_url": f"https:{image}" if image.startswith("//") else image or None,
+                "cover_url": f"https:{image}"
+                if image.startswith("//")
+                else image or None,
                 "url": WORK_URL.format(site=site, product_id=product_id),
             }
         )
@@ -117,7 +121,9 @@ class DlsiteSource:
         site, filter_path = LISTINGS[listing]
         response = ctx.pacer.request(
             self.name,
-            LISTING_URL.format(site=site, filter=filter_path, order="release_d", page=page),
+            LISTING_URL.format(
+                site=site, filter=filter_path, order="release_d", page=page
+            ),
         )
         items, total = parse_listing(response.json())
         if not items and total > (page - 1) * PER_PAGE:

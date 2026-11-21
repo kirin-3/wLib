@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Connect and disconnect the file-host accounts used for in-app downloads."""
+
 from __future__ import annotations
 
 from core.downloads import credentials
@@ -31,15 +32,19 @@ def rpdl_connected() -> bool:
 def connect_pixeldrain(api_key: str) -> str:
     api_key = api_key.strip()
     username = pixeldrain.verify_key(api_key)
-    credentials.put({
-        credentials.PIXELDRAIN_API_KEY: api_key,
-        credentials.PIXELDRAIN_USERNAME: username,
-    })
+    credentials.put(
+        {
+            credentials.PIXELDRAIN_API_KEY: api_key,
+            credentials.PIXELDRAIN_USERNAME: username,
+        }
+    )
     return username
 
 
 def disconnect_pixeldrain() -> None:
-    credentials.put({credentials.PIXELDRAIN_API_KEY: "", credentials.PIXELDRAIN_USERNAME: ""})
+    credentials.put(
+        {credentials.PIXELDRAIN_API_KEY: "", credentials.PIXELDRAIN_USERNAME: ""}
+    )
 
 
 def connect_mega(email: str, password: str, code: str = "") -> str:
@@ -61,14 +66,22 @@ def disconnect_mega() -> None:
 def connect_rpdl(username: str, password: str) -> str:
     token, name = rpdl.login(username, password)
     with rpdl.account_lock:
-        credentials.put({
-            credentials.RPDL_USERNAME: name,
-            credentials.RPDL_PASSWORD: password,
-            credentials.RPDL_TOKEN: token,
-        })
+        credentials.put(
+            {
+                credentials.RPDL_USERNAME: name,
+                credentials.RPDL_PASSWORD: password,
+                credentials.RPDL_TOKEN: token,
+            }
+        )
     return name
 
 
 def disconnect_rpdl() -> None:
     with rpdl.account_lock:
-        credentials.put({credentials.RPDL_USERNAME: "", credentials.RPDL_PASSWORD: "", credentials.RPDL_TOKEN: ""})
+        credentials.put(
+            {
+                credentials.RPDL_USERNAME: "",
+                credentials.RPDL_PASSWORD: "",
+                credentials.RPDL_TOKEN: "",
+            }
+        )

@@ -3,6 +3,7 @@
 
 Update the fixture on purpose with ``WLIB_UPDATE_SNAPSHOT=1 pytest tests/test_js_api_surface.py``.
 """
+
 import inspect
 import json
 import os
@@ -50,7 +51,9 @@ def walk(obj: object) -> dict[str, list[str]]:
                 if inspect.ismethod(attr) or inspect.isfunction(attr):
                     functions[full_name] = list(inspect.getfullargspec(attr).args)[1:]
                 elif inspect.isclass(attr) or (
-                    isinstance(attr, object) and not callable(attr) and hasattr(attr, "__module__")
+                    isinstance(attr, object)
+                    and not callable(attr)
+                    and hasattr(attr, "__module__")
                 ):
                     get_functions(attr, full_name)
             except Exception:
@@ -113,7 +116,9 @@ PYTHON_ONLY_METHODS = (
 )
 
 API_TS = Path(__file__).resolve().parent.parent / "ui" / "src" / "services" / "api.ts"
-INVOKE_RE = re.compile(r'\binvoke(?:LibraryChange)?\s*(?:<[^()"]*?>)?\s*\(\s*"([a-z0-9_]+)"')
+INVOKE_RE = re.compile(
+    r'\binvoke(?:LibraryChange)?\s*(?:<[^()"]*?>)?\s*\(\s*"([a-z0-9_]+)"'
+)
 
 
 def test_bridge_lists_no_nested_names():
@@ -152,17 +157,19 @@ def test_runtime_helpers_are_not_listed(monkeypatch):
     assert isinstance(api.steam_sync, _StubSteamSync)
 
     listed = walk(api)
-    leaked = sorted(
-        name for name in listed if name.split(".", 1)[0] in HELPER_ATTRS
-    )
+    leaked = sorted(name for name in listed if name.split(".", 1)[0] in HELPER_ATTRS)
     assert leaked == []
 
 
 def test_bridge_listing_equals_ui_calls():
     called = set(INVOKE_RE.findall(API_TS.read_text(encoding="utf-8")))
     listed = set(walk(Api()))
-    assert sorted(called - listed) == [], "api.ts calls names that the bridge does not list"
-    assert sorted(listed - called) == [], "the bridge lists names that api.ts does not call"
+    assert sorted(called - listed) == [], (
+        "api.ts calls names that the bridge does not list"
+    )
+    assert sorted(listed - called) == [], (
+        "the bridge lists names that api.ts does not call"
+    )
 
 
 def test_python_only_methods_stay_callable():
@@ -183,7 +190,11 @@ def duplicate_class_names(cls: type) -> list[str]:
             if name.startswith("__") and name.endswith("__"):
                 continue
             owners.setdefault(name, []).append(klass.__qualname__)
-    return sorted(f"{name}: {', '.join(classes)}" for name, classes in owners.items() if len(classes) > 1)
+    return sorted(
+        f"{name}: {', '.join(classes)}"
+        for name, classes in owners.items()
+        if len(classes) > 1
+    )
 
 
 def test_each_api_name_is_defined_in_one_class():

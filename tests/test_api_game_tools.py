@@ -361,9 +361,7 @@ def test_rpgm_api_survives_malformed_system_json(tmp_path):
     folder = tmp_path / "Deep"
     data = folder / "www" / "data"
     data.mkdir(parents=True)
-    (data / "System.json").write_text(
-        "[" * 100_000 + "]" * 100_000, encoding="utf-8"
-    )
+    (data / "System.json").write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
     (folder / "Game.exe").touch()
     game_id = add_game("Deep", str(folder / "Game.exe"))
 
@@ -429,13 +427,27 @@ def test_unity_api_guards_and_catalog(tmp_path, monkeypatch):
     assert api.install_bepinex(game_id, {"build_id": "x"})["success"] is False
     monkeypatch.setattr(unity_tools, "_pe_arch", lambda _: "x64")
     calls = []
-    builds = [{"id": "6.0.0-be.1", "major": 6, "backend": "il2cpp", "channel": "be", "url": "https://example.test/a", "file_name": "a.zip", "sha256": ""}]
+    builds = [
+        {
+            "id": "6.0.0-be.1",
+            "major": 6,
+            "backend": "il2cpp",
+            "channel": "be",
+            "url": "https://example.test/a",
+            "file_name": "a.zip",
+            "sha256": "",
+        }
+    ]
+
     def fetch(*args):
         calls.append(args)
         return builds, ["warning"]
+
     monkeypatch.setattr(unity_tools, "list_versions", fetch)
     response = api.list_bepinex_versions(game_id)
-    assert response["recommended"]["id"] == "6.0.0-be.1" and response["warnings"] == ["warning"]
+    assert response["recommended"]["id"] == "6.0.0-be.1" and response["warnings"] == [
+        "warning"
+    ]
     api.list_bepinex_versions(game_id)
     assert len(calls) == 1
     assert api.install_bepinex(game_id, {"build_id": "missing"})["success"] is False
@@ -474,8 +486,26 @@ def test_unity_install_api_result_and_mismatch(tmp_path, monkeypatch):
         z.writestr("BepInEx/core/BepInEx.Core.dll", "x")
         z.writestr("BepInEx/core/BepInEx.Unity.IL2CPP.dll", "x")
         z.writestr("winhttp.dll", "x")
-    builds = [{"id": "bad", "major": 5, "backend": "mono", "channel": "stable", "url": "https://example.test/a", "file_name": "a.zip", "sha256": ""},
-              {"id": "good", "major": 6, "backend": "il2cpp", "channel": "be", "url": "https://example.test/a", "file_name": "a.zip", "sha256": ""}]
+    builds = [
+        {
+            "id": "bad",
+            "major": 5,
+            "backend": "mono",
+            "channel": "stable",
+            "url": "https://example.test/a",
+            "file_name": "a.zip",
+            "sha256": "",
+        },
+        {
+            "id": "good",
+            "major": 6,
+            "backend": "il2cpp",
+            "channel": "be",
+            "url": "https://example.test/a",
+            "file_name": "a.zip",
+            "sha256": "",
+        },
+    ]
     monkeypatch.setattr(unity_tools, "list_versions", lambda *args: (builds, []))
     monkeypatch.setattr(unity_tools, "download_cached", lambda *args, **kwargs: archive)
     api = Api()
@@ -483,7 +513,9 @@ def test_unity_install_api_result_and_mismatch(tmp_path, monkeypatch):
     result = api.install_bepinex(game_id, {"build_id": "good"})
     assert result["success"] is True and "internet" in result["warning"]
     assert (folder / "winhttp.dll").exists()
-    assert api.uninstall_bepinex(game_id, {"remove_user_data": False})["success"] is True
+    assert (
+        api.uninstall_bepinex(game_id, {"remove_user_data": False})["success"] is True
+    )
     assert api.restore_bepinex(game_id)["success"] is True
 
 

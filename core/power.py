@@ -4,6 +4,7 @@
 `on_battery()` returns True, False, or None when the state cannot be read.
 The download queue treats None as mains power.
 """
+
 from __future__ import annotations
 
 import os

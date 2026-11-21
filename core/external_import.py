@@ -202,7 +202,9 @@ def _recognized_store_links(urls: list[object]) -> list[StoreLink]:
     return [link for link in links if link["source"] != "other"]
 
 
-def _apply_thread_prefixes(metadata: dict[str, object], prefixes: Iterable[str]) -> None:
+def _apply_thread_prefixes(
+    metadata: dict[str, object], prefixes: Iterable[str]
+) -> None:
     for prefix in prefixes:
         normalized = normalize_prefix_label(prefix)
         if normalized == "completed":
@@ -1106,16 +1108,19 @@ def read_atlas_library(path: str) -> tuple[dict[str, object], dict[str, object]]
             ):
                 try:
                     candidates: dict[int, set[int]] = {}
-                    for row in _fetch_rows(conn,
+                    for row in _fetch_rows(
+                        conn,
                         "SELECT a.record_id, l.lc_id FROM atlas_mappings a "
-                        + "JOIN lewdcorner_data l ON l.atlas_id = a.atlas_id"):
+                        + "JOIN lewdcorner_data l ON l.atlas_id = a.atlas_id",
+                    ):
                         record_id = _safe_int(cast(object, row[0]))
                         lc_id = _safe_int(cast(object, row[1]))
                         if record_id > 0 and lc_id > 0:
                             candidates.setdefault(record_id, set()).add(lc_id)
                     lc_mappings = {
                         record_id: str(next(iter(thread_ids)))
-                        for record_id, thread_ids in candidates.items() if len(thread_ids) == 1
+                        for record_id, thread_ids in candidates.items()
+                        if len(thread_ids) == 1
                     }
                 except sqlite3.Error:
                     pass
@@ -1522,7 +1527,10 @@ def _translate_playnite_game(
     dropped = 0
     for raw in _as_list(record.get("GameActions")):
         action = _as_dict(raw)
-        if not _is_playnite_file_action(action) or action.get("IsPlayAction") is not True:
+        if (
+            not _is_playnite_file_action(action)
+            or action.get("IsPlayAction") is not True
+        ):
             continue
         raw_path = expand(action.get("Path"))
         working = resolve_relative_path(expand(action.get("WorkingDir")), install)
@@ -1674,7 +1682,9 @@ def _playnite_data_path_allowed(path: Path) -> bool:
     )
 
 
-def _unique_gamelist_records(records: list[GameListRecord]) -> list[tuple[GameListRecord, str]]:
+def _unique_gamelist_records(
+    records: list[GameListRecord],
+) -> list[tuple[GameListRecord, str]]:
     """Keep the highest record ID in each group linked by GUID or F95 thread."""
     ordered = [
         (record, coerce_thread_url(record.url))
@@ -1706,7 +1716,8 @@ def read_gamelist_library(path: str) -> tuple[dict[str, object], dict[str, objec
     skipped = 0
     for record, url in _unique_gamelist_records(table.records):
         links = [
-            link for link in _recognized_store_links([record.homepage])
+            link
+            for link in _recognized_store_links([record.homepage])
             if link["source"] != "patreon"
         ]
         if not _has_import_identity(url, links, ""):
@@ -1714,7 +1725,9 @@ def read_gamelist_library(path: str) -> tuple[dict[str, object], dict[str, objec
             continue
         metadata = _title_metadata(record.name, url)
         for key, value in (
-            ("f95_url", url), ("version", record.version), ("developer", record.developer)
+            ("f95_url", url),
+            ("version", record.version),
+            ("developer", record.developer),
         ):
             if value:
                 metadata[key] = value
@@ -1819,7 +1832,9 @@ def locate_external_library(source: object) -> dict[str, object]:
                 config_path = os.path.join(playnite_dir, "config.json")
                 try:
                     if not _playnite_data_path_allowed(Path(config_path)):
-                        raise ValueError("Private add-on settings are not library configuration")
+                        raise ValueError(
+                            "Private add-on settings are not library configuration"
+                        )
                     with open(config_path, encoding="utf-8-sig") as handle:
                         config = _as_dict(cast(object, json.load(handle)))
                     custom = _as_str(config.get("DatabasePath"))

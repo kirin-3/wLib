@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A cancelled update install leaves the game and a moved download as they were."""
+
 import json
 import threading
 import time
@@ -19,7 +20,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "db.sqlite"))
     database.init_db()
-    sup = TorrentSupervisor(command=lambda: (["true"], {}), free_space_fn=lambda p: 10**12, options=dict)
+    sup = TorrentSupervisor(
+        command=lambda: (["true"], {}), free_space_fn=lambda p: 10**12, options=dict
+    )
     monkeypatch.setattr(torrents, "supervisor", sup)
     return sup
 
@@ -41,17 +44,31 @@ def _download(tmp_path):
     game.mkdir(parents=True)
     (game / "Game.exe").write_text("new exe")
     (game / "slot1.sav").write_text("download save")
-    (folder / "state.json").write_text(json.dumps({
-        "job_id": "j1", "game_id": 1, "size": 10, "phase": "ended", "updated": time.time(),
-    }))
+    (folder / "state.json").write_text(
+        json.dumps(
+            {
+                "job_id": "j1",
+                "game_id": 1,
+                "size": 10,
+                "phase": "ended",
+                "updated": time.time(),
+            }
+        )
+    )
     return folder, game
 
 
 def _files(root):
-    return {str(p.relative_to(root)): p.read_text() for p in sorted(root.rglob("*")) if p.is_file()}
+    return {
+        str(p.relative_to(root)): p.read_text()
+        for p in sorted(root.rglob("*"))
+        if p.is_file()
+    }
 
 
-def test_cancel_after_carrying_saves_restores_the_moved_download(tmp_path, env, monkeypatch):
+def test_cancel_after_carrying_saves_restores_the_moved_download(
+    tmp_path, env, monkeypatch
+):
     old, game_id = _old_game(tmp_path)
     folder, game = _download(tmp_path)
     env.load()
@@ -67,8 +84,14 @@ def test_cancel_after_carrying_saves_restores_the_moved_download(tmp_path, env, 
     monkeypatch.setattr(ai, "copy_infolder_saves", copy_then_cancel)
     with pytest.raises(InstallCancelled):
         install_archive(
-            str(folder / "data"), library_folder=str(tmp_path / "lib"), pattern="{title}/{version}",
-            title="Game", version="2.0", game_id=game_id, source_kind="folder", cancel=cancel,
+            str(folder / "data"),
+            library_folder=str(tmp_path / "lib"),
+            pattern="{title}/{version}",
+            title="Game",
+            version="2.0",
+            game_id=game_id,
+            source_kind="folder",
+            cancel=cancel,
         )
     # The download is back in its own layout with its own files only.
     assert _files(game) == before
@@ -95,9 +118,15 @@ def test_cancel_accepted_before_moving_stage_is_published_stops_the_install(tmp_
 
     with pytest.raises(InstallCancelled):
         install_archive(
-            str(archive), library_folder=str(tmp_path / "lib"), pattern="{title}/{version}",
-            title="Game", version="2.0", game_id=game_id, remove_old=True,
-            progress_cb=on_stage, cancel=cancel,
+            str(archive),
+            library_folder=str(tmp_path / "lib"),
+            pattern="{title}/{version}",
+            title="Game",
+            version="2.0",
+            game_id=game_id,
+            remove_old=True,
+            progress_cb=on_stage,
+            cancel=cancel,
         )
     assert not (tmp_path / "lib" / "Game" / "2.0").exists()
     assert (old / "Game.exe").read_text() == "old exe"
@@ -109,8 +138,14 @@ def test_successful_moved_update_carries_saves_and_drops_the_undo_folder(tmp_pat
     folder, _game = _download(tmp_path)
     env.load()
     result = install_archive(
-        str(folder / "data"), library_folder=str(tmp_path / "lib"), pattern="{title}/{version}",
-        title="Game", version="2.0", game_id=game_id, source_kind="folder", remove_old=False,
+        str(folder / "data"),
+        library_folder=str(tmp_path / "lib"),
+        pattern="{title}/{version}",
+        title="Game",
+        version="2.0",
+        game_id=game_id,
+        source_kind="folder",
+        remove_old=False,
     )
     dest = tmp_path / "lib" / "Game" / "2.0"
     assert result["success"] is True

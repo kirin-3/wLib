@@ -11,15 +11,31 @@ NOW = "2026-11-18T00:00:00Z"
 
 def _catalog(path):
     catalog = CatalogStore(str(path))
-    lc = [(1, "Alpha", "Dev"), (2, "Beta", "Dev"), (3, "Gamma", "Dev"), (4, "Delta", "Dev")]
-    f95 = [(11, "Alpha", "Dev"), (12, "Beta", "Dev"), (13, "Gamma", "Dev"), (14, "Delta", "Other"),
-           (15, "Beta Remastered", "Dev")]
-    catalog.upsert("lc_threads", "thread_id", [
-        {"thread_id": i, "title": t, "creator": c, "url": "u"} for i, t, c in lc
-    ], NOW)
-    catalog.upsert("f95_threads", "thread_id", [
-        {"thread_id": i, "title": t, "creator": c, "url": "u"} for i, t, c in f95
-    ], NOW)
+    lc = [
+        (1, "Alpha", "Dev"),
+        (2, "Beta", "Dev"),
+        (3, "Gamma", "Dev"),
+        (4, "Delta", "Dev"),
+    ]
+    f95 = [
+        (11, "Alpha", "Dev"),
+        (12, "Beta", "Dev"),
+        (13, "Gamma", "Dev"),
+        (14, "Delta", "Other"),
+        (15, "Beta Remastered", "Dev"),
+    ]
+    catalog.upsert(
+        "lc_threads",
+        "thread_id",
+        [{"thread_id": i, "title": t, "creator": c, "url": "u"} for i, t, c in lc],
+        NOW,
+    )
+    catalog.upsert(
+        "f95_threads",
+        "thread_id",
+        [{"thread_id": i, "title": t, "creator": c, "url": "u"} for i, t, c in f95],
+        NOW,
+    )
     catalog.close()
     return str(path)
 

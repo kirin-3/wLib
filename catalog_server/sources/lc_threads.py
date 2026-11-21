@@ -43,12 +43,13 @@ _FIRST_POST_RE = re.compile(r"<article\b[^>]*\bmessage--post\b[^>]*>", re.S)
 _FIELD_RE = re.compile(r'<dl\b[^>]*\bdata-field="([^"]+)"[^>]*>(.*?)</dl>', re.S)
 _DD_RE = re.compile(r"<dd\b[^>]*>(.*)</dd>", re.S)
 _LI_RE = re.compile(r"<li\b[^>]*>(.*?)</li>", re.S)
-_BODY_RE = re.compile(r'<article\b[^>]*\bmessage-body\b[^>]*>', re.S)
+_BODY_RE = re.compile(r"<article\b[^>]*\bmessage-body\b[^>]*>", re.S)
 _HREF_RE = re.compile(r'<a\b[^>]*\shref="([^"]+)"', re.S)
 
 _SKIP_TAGS = frozenset({"noscript", "script", "style", "button", "iframe", "template"})
-_BLOCK_TAGS = frozenset({"div", "p", "li", "ul", "ol", "blockquote", "table", "tr", "h1",
-                         "h2", "h3", "h4"})
+_BLOCK_TAGS = frozenset(
+    {"div", "p", "li", "ul", "ol", "blockquote", "table", "tr", "h1", "h2", "h3", "h4"}
+)
 
 
 class _Text(HTMLParser):
@@ -115,7 +116,7 @@ def first_post_html(page: str) -> str:
     match = _FIRST_POST_RE.search(page)
     if match is None:
         raise ValueError("LC thread page has no post")
-    return page[match.end():]
+    return page[match.end() :]
 
 
 def _fields(post: str) -> dict[str, str]:
@@ -151,7 +152,7 @@ def _overview(post: str) -> str | None:
     if body is None:
         return None
     end = post.find("</article>", body.end())
-    lines = _lines(post[body.end(): end if end >= 0 else len(post)])
+    lines = _lines(post[body.end() : end if end >= 0 else len(post)])
     # Text after an "Overview:" label, or the whole text when there is none.
     start = 0
     for index, line in enumerate(lines):
@@ -161,7 +162,11 @@ def _overview(post: str) -> str | None:
             break
     kept: list[str] = []
     for line in lines[start:]:
-        label = _section_label(line.split(":", 1)[0]) if ":" in line else _section_label(line)
+        label = (
+            _section_label(line.split(":", 1)[0])
+            if ":" in line
+            else _section_label(line)
+        )
         if label in SECTION_LABELS:
             break
         kept.append(line)
@@ -192,9 +197,13 @@ def page_version(post: str) -> str | None:
 def parse_first_post(post: str) -> dict[str, object]:
     fields = _fields(post)
     developer = _text(fields["Developer"]) if "Developer" in fields else ""
-    release_text = _text(fields["dategamerelease"]) if "dategamerelease" in fields else ""
+    release_text = (
+        _text(fields["dategamerelease"]) if "dategamerelease" in fields else ""
+    )
     language = _text(fields["Language"]) if "Language" in fields else ""
-    os_list = [_text(item) for item in cast(list[str], _LI_RE.findall(fields.get("OS", "")))]
+    os_list = [
+        _text(item) for item in cast(list[str], _LI_RE.findall(fields.get("OS", "")))
+    ]
     links = [
         href.replace("&amp;", "&")
         for href in cast(list[str], _HREF_RE.findall(fields.get("donations", "")))
@@ -230,9 +239,13 @@ class LcThreadsSource:
         ctx.pacer.paused[self.name] = reason
         return ValueError(reason)
 
-    def _read(self, ctx: SourceContext, thread_id: int, thread_ts: int, premium: bool) -> None:
+    def _read(
+        self, ctx: SourceContext, thread_id: int, thread_ts: int, premium: bool
+    ) -> None:
         response = ctx.pacer.request(
-            self.name, THREAD_URL.format(thread_id=thread_id), ok_statuses=MISSING_STATUSES
+            self.name,
+            THREAD_URL.format(thread_id=thread_id),
+            ok_statuses=MISSING_STATUSES,
         )
         html = response.text()
         post: str | None = None
@@ -240,7 +253,9 @@ class LcThreadsSource:
             details: dict[str, object] = {"status": "missing"}
         elif _LC_PAGE_RE.search(html) is None:
             # Not an LC page, e.g. a Cloudflare challenge: stop, store nothing.
-            raise self._stop(ctx, f"LC answered HTTP {response.status} without its own page")
+            raise self._stop(
+                ctx, f"LC answered HTTP {response.status} without its own page"
+            )
         elif _GUEST_PAGE_RE.search(html) is None:
             # A login on a guest request means a cookie was sent; store nothing.
             raise self._stop(ctx, "LC answered a guest request with a logged-in page")
@@ -257,10 +272,17 @@ class LcThreadsSource:
                 details = {"status": "unreadable"}
         if premium and post is not None:
             ctx.rows += ctx.catalog.upsert_lc_premium_details(
-                thread_id, thread_ts, ctx.now(), details, page_version(post), page_tags(html)
+                thread_id,
+                thread_ts,
+                ctx.now(),
+                details,
+                page_version(post),
+                page_tags(html),
             )
         else:
-            ctx.rows += ctx.catalog.upsert_lc_details(thread_id, thread_ts, ctx.now(), details)
+            ctx.rows += ctx.catalog.upsert_lc_details(
+                thread_id, thread_ts, ctx.now(), details
+            )
 
     def incremental(self, ctx: SourceContext) -> None:
         if (paused := lc_pause(ctx.pacer)) is not None:

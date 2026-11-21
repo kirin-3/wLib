@@ -8,6 +8,7 @@ folder layout and the helper's lifecycle. It never loads libtorrent.
 Layout: `<staging>/torrents/<info-hash>/` holds `meta.torrent`, `resume.dat`,
 `state.json` and `data/`. Tracker secrets live only in those files.
 """
+
 from __future__ import annotations
 
 import json
@@ -42,10 +43,22 @@ REMOVE_WAIT_SECONDS = 3.0
 ARCHIVE_SUFFIXES = _ARCHIVE_SUFFIXES
 # Names that can be an archive or one part of a multi-part archive.
 _VOLUME_NAME = re.compile(
-    "(?:" + "|".join(re.escape(s) for s in ARCHIVE_SUFFIXES) + r"|\.r\d{2,3}|\.z\d{2,3}|\.\d{3})$"
+    "(?:"
+    + "|".join(re.escape(s) for s in ARCHIVE_SUFFIXES)
+    + r"|\.r\d{2,3}|\.z\d{2,3}|\.\d{3})$"
 )
 # Files a release may carry next to its archive without being part of the game.
-EXTRA_SUFFIXES = (".txt", ".nfo", ".url", ".md", ".sfv", ".jpg", ".jpeg", ".png", ".webp")
+EXTRA_SUFFIXES = (
+    ".txt",
+    ".nfo",
+    ".url",
+    ".md",
+    ".sfv",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+)
 
 MSG_UNAVAILABLE = "Torrent downloads are unavailable in this build"
 MSG_KEEPS_STOPPING = "Torrent engine keeps stopping"
@@ -119,7 +132,9 @@ def find_payload(data_dir: Path) -> tuple[str, str]:
             if _VOLUME_NAME.search(lower):
                 volumes = volume_set(path)
                 if volumes is not None and volumes.first:
-                    _ = first_volumes.setdefault(os.path.normcase(volumes.first), volumes.first)
+                    _ = first_volumes.setdefault(
+                        os.path.normcase(volumes.first), volumes.first
+                    )
                     continue
                 if lower.endswith(ARCHIVE_SUFFIXES):
                     _ = first_volumes.setdefault(os.path.normcase(path), path)
@@ -198,9 +213,17 @@ class _Job:
             return "Fetching the torrent"
         if self.stage != "downloading" or self.bytes >= self.total > 0:
             return ""
-        if self.peers == 0 and self.peerless_since is not None and now - self.peerless_since >= PEER_HINT_SECONDS:
+        if (
+            self.peers == 0
+            and self.peerless_since is not None
+            and now - self.peerless_since >= PEER_HINT_SECONDS
+        ):
             return "Looking for peers"
-        if self.peers > 0 and self.idle_since is not None and now - self.idle_since >= NO_DATA_HINT_SECONDS:
+        if (
+            self.peers > 0
+            and self.idle_since is not None
+            and now - self.idle_since >= NO_DATA_HINT_SECONDS
+        ):
             return "Connected, but no data is arriving"
         if self.peers == 0:
             return "Finding peers"
@@ -213,28 +236,48 @@ class _Job:
             if self.payload is None:
                 self.payload = find_payload(self.folder / "data")
             payload_kind, path = self.payload
-            archive_path, folder_path = (path, "") if payload_kind == "archive" else ("", path)
+            archive_path, folder_path = (
+                (path, "") if payload_kind == "archive" else ("", path)
+            )
         return {
-            "job_id": self.id, "game_id": self.game_id, "kind": "torrent", "stage": self.stage,
-            "title": self.title, "version": self.version,
-            "bytes": self.bytes, "total": self.total or None, "speed": self.speed,
-            "error": self.error, "archive_path": archive_path, "folder_path": folder_path,
-            "peers": self.peers, "upload_speed": self.upload_speed,
+            "job_id": self.id,
+            "game_id": self.game_id,
+            "kind": "torrent",
+            "stage": self.stage,
+            "title": self.title,
+            "version": self.version,
+            "bytes": self.bytes,
+            "total": self.total or None,
+            "speed": self.speed,
+            "error": self.error,
+            "archive_path": archive_path,
+            "folder_path": folder_path,
+            "peers": self.peers,
+            "upload_speed": self.upload_speed,
             "ratio": (self.uploaded / self.total) if self.total else 0.0,
-            "seed_state": self.seed_state, "paused": self.paused, "payload_kind": payload_kind,
-            "installed": self.installed, "queue_removed": self.queue_removed,
+            "seed_state": self.seed_state,
+            "paused": self.paused,
+            "payload_kind": payload_kind,
+            "installed": self.installed,
+            "queue_removed": self.queue_removed,
             "ratio_target": torrent_settings.seed_ratio() or 0,
-            "hint": self.hint(now), "eta": self.eta(),
-            "auto_paused": self.auto_paused, "restarting": self.restarting,
-            "info_hash": self.info_hash, "loaded_paused": self.loaded_paused,
-            "rpdl_id": self.rpdl_id, "created": self.created,
+            "hint": self.hint(now),
+            "eta": self.eta(),
+            "auto_paused": self.auto_paused,
+            "restarting": self.restarting,
+            "info_hash": self.info_hash,
+            "loaded_paused": self.loaded_paused,
+            "rpdl_id": self.rpdl_id,
+            "created": self.created,
         }
 
 
 def _default_command() -> tuple[list[str], dict[str, str]]:
     from core import launcher
 
-    return launcher.self_command("--torrent-helper"), launcher.self_env(os.environ.copy())
+    return launcher.self_command("--torrent-helper"), launcher.self_env(
+        os.environ.copy()
+    )
 
 
 def _log(message: str) -> None:
@@ -256,7 +299,9 @@ class TorrentSupervisor:
         self._backoff = backoff
         self._clock = clock
         self._free_space = free_space_fn or free_space
-        self._options: Callable[[], dict[str, object]] = options or torrent_settings.helper_options
+        self._options: Callable[[], dict[str, object]] = (
+            options or torrent_settings.helper_options
+        )
         self._lock = threading.RLock()
         self._jobs: dict[str, _Job] = {}
         self._proc: subprocess.Popen[str] | None = None
@@ -281,8 +326,13 @@ class TorrentSupervisor:
             try:
                 argv, env = self._command()
                 proc = subprocess.Popen(
-                    argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
-                    bufsize=1, env=env, encoding="utf-8",
+                    argv,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    env=env,
+                    encoding="utf-8",
                 )
             except (OSError, ValueError):
                 _log("helper could not start")
@@ -380,7 +430,9 @@ class TorrentSupervisor:
             delay = self._count_restart()
         self._schedule_restart(delay)
 
-    def _on_event(self, event: dict[str, object], proc: subprocess.Popen[str] | None = None) -> None:
+    def _on_event(
+        self, event: dict[str, object], proc: subprocess.Popen[str] | None = None
+    ) -> None:
         """Handle one helper event; `proc` is the helper that sent it (None in tests)."""
         name = event.get("event")
         with self._lock:
@@ -390,7 +442,11 @@ class TorrentSupervisor:
                 self._ready = True
                 for job in self._jobs.values():
                     job.restarting = False
-                    if self._wants_helper(job) and job.folder is not None and not job.added:
+                    if (
+                        self._wants_helper(job)
+                        and job.folder is not None
+                        and not job.added
+                    ):
                         self._add_to_helper(job)
             elif name == "status":
                 self._on_status(event)
@@ -415,7 +471,9 @@ class TorrentSupervisor:
         assert job.folder is not None
         job.removed.clear()
         job.helper_uploaded = None
-        job.added = self._send({"cmd": "add", "id": job.id, "dir": str(job.folder), "paused": job.paused})
+        job.added = self._send(
+            {"cmd": "add", "id": job.id, "dir": str(job.folder), "paused": job.paused}
+        )
         job.waiting_since = self._clock()
         job.peerless_since = self._clock()
         job.idle_since = None
@@ -505,7 +563,9 @@ class TorrentSupervisor:
             return
         self._save_state(job)
 
-    def _on_seeding_status(self, job: _Job, item: dict[str, object], now: float) -> None:
+    def _on_seeding_status(
+        self, job: _Job, item: dict[str, object], now: float
+    ) -> None:
         if job.seed_state not in ("seeding", "awaiting_answer"):
             return
         job.upload_speed = _int(item.get("up"))
@@ -513,10 +573,16 @@ class TorrentSupervisor:
         job.count_upload(_int(item.get("uploaded")))
         if item.get("state") == "seeding" and job.last_status_at is not None:
             # Only time spent seeding counts; a gap (helper restart) adds at most a few seconds.
-            job.seeding_seconds += int(min(max(now - job.last_status_at, 0.0), 5.0) + 0.5)
+            job.seeding_seconds += int(
+                min(max(now - job.last_status_at, 0.0), 5.0) + 0.5
+            )
         job.last_status_at = now
         if job.seed_state == "seeding" and seeding.limit_reached(
-            job.uploaded, job.total, job.seeding_seconds, torrent_settings.seed_ratio(), torrent_settings.seed_hours()
+            job.uploaded,
+            job.total,
+            job.seeding_seconds,
+            torrent_settings.seed_ratio(),
+            torrent_settings.seed_hours(),
         ):
             self._end_seeding(job)
         elif now - job.saved_at >= STATE_SAVE_SECONDS:
@@ -581,13 +647,24 @@ class TorrentSupervisor:
             return
         job.saved_at = self._clock()
         state = {
-            "job_id": job.id, "game_id": job.game_id, "rpdl_id": job.rpdl_id, "title": job.title,
-            "version": job.version, "info_hash": job.info_hash, "size": job.total,
-            "phase": job.phase, "paused": job.paused, "error": job.error,
-            "downloaded": job.bytes, "uploaded": job.uploaded,
-            "seeding_seconds": job.seeding_seconds, "seed_state": job.seed_state, "installed": job.installed,
+            "job_id": job.id,
+            "game_id": job.game_id,
+            "rpdl_id": job.rpdl_id,
+            "title": job.title,
+            "version": job.version,
+            "info_hash": job.info_hash,
+            "size": job.total,
+            "phase": job.phase,
+            "paused": job.paused,
+            "error": job.error,
+            "downloaded": job.bytes,
+            "uploaded": job.uploaded,
+            "seeding_seconds": job.seeding_seconds,
+            "seed_state": job.seed_state,
+            "installed": job.installed,
             "queue_removed": job.queue_removed,
-            "created": job.created, "updated": time.time(),
+            "created": job.created,
+            "updated": time.time(),
         }
         tmp = job.folder / "state.json.tmp"
         try:
@@ -604,7 +681,8 @@ class TorrentSupervisor:
         # A replacement job of the same torrent can claim the folder while this
         # (cancelled) job still finishes; the folder is then that job's, not this one's.
         if any(
-            other is not job and (other.info_hash == folder.name or other.folder == folder)
+            other is not job
+            and (other.info_hash == folder.name or other.folder == folder)
             for other in self._jobs.values()
         ):
             return
@@ -634,7 +712,10 @@ class TorrentSupervisor:
         paused; it moves data only after `resume()` (the download queue's slot).
         """
         with self._lock:
-            if any(j.game_id == game_id and j.stage in ACTIVE_STAGES for j in self._jobs.values()):
+            if any(
+                j.game_id == game_id and j.stage in ACTIVE_STAGES
+                for j in self._jobs.values()
+            ):
                 raise DownloadError("A download is already running for this game")
             job = _Job(game_id, title, version, rpdl_id)
             if job_id:
@@ -667,7 +748,9 @@ class TorrentSupervisor:
             with self._lock:
                 self._fail(job, "Files could not be written")
                 self._delete_folder(job)
-        except Exception as exc:  # The thread ends here: never leave the job in "fetching".
+        except (
+            Exception
+        ) as exc:  # The thread ends here: never leave the job in "fetching".
             # Only the type: the message could hold the passkey or a tracker URL.
             _log(f"torrent start failed: {type(exc).__name__}")
             with self._lock:
@@ -688,7 +771,11 @@ class TorrentSupervisor:
                 raise DownloadError("cancelled")
             # Every job of one torrent uses the folder named after its hash, so
             # two live jobs would share (and later delete) each other's files.
-            same = [j for j in self._jobs.values() if j is not job and j.info_hash == meta.info_hash]
+            same = [
+                j
+                for j in self._jobs.values()
+                if j is not job and j.info_hash == meta.info_hash
+            ]
             if any(self._holds_torrent(j) for j in same):
                 raise DownloadError(
                     "This torrent is already in your downloads. Install, retry or remove that download first."
@@ -845,8 +932,10 @@ class TorrentSupervisor:
             resolved = Path(path).resolve()
             self._open.discard(resolved)
             matching = [
-                job for job in self._jobs.values()
-                if job.folder is not None and job.folder.resolve() in (resolved, *resolved.parents)
+                job
+                for job in self._jobs.values()
+                if job.folder is not None
+                and job.folder.resolve() in (resolved, *resolved.parents)
             ]
             if installed:
                 for job in matching:
@@ -880,7 +969,8 @@ class TorrentSupervisor:
                 from core import database
 
                 database.update_setting(
-                    torrent_settings.SEED_MODE_KEY, seeding.MODE_ALWAYS if seed else seeding.MODE_NEVER
+                    torrent_settings.SEED_MODE_KEY,
+                    seeding.MODE_ALWAYS if seed else seeding.MODE_NEVER,
                 )
             if not seed:
                 self._end_seeding(job)
@@ -918,12 +1008,14 @@ class TorrentSupervisor:
         _, upload = torrent_settings.limits_kib()
         port_mapping = torrent_settings.port_mapping()
         with self._lock:
-            _ = self._send({
-                "cmd": "set_limits",
-                "download_kib": self._download_kib,
-                "upload_kib": upload,
-                "port_mapping": port_mapping,
-            })
+            _ = self._send(
+                {
+                    "cmd": "set_limits",
+                    "download_kib": self._download_kib,
+                    "upload_kib": upload,
+                    "port_mapping": port_mapping,
+                }
+            )
 
     def set_download_limit(self, kib: int) -> None:
         """Set the torrents' download share in KiB/s (0 = unlimited) and push it."""
@@ -942,7 +1034,8 @@ class TorrentSupervisor:
                 return False
             folder = job.folder.resolve() if job.folder is not None else None
             if job.seed_state in ("seeding", "awaiting_answer") or (
-                folder is not None and any(p == folder or folder in p.parents for p in self._open)
+                folder is not None
+                and any(p == folder or folder in p.parents for p in self._open)
             ):
                 # Keep the torrent available to seeding or the install dialog.
                 job.queue_removed = True
@@ -987,7 +1080,12 @@ class TorrentSupervisor:
                 continue
             for path in (folder, folder / "meta.torrent", folder / "resume.dat"):
                 _make_private(path)
-            job = _Job(_int(state.get("game_id")), str(state.get("title") or ""), str(state.get("version") or ""), _int(state.get("rpdl_id")))
+            job = _Job(
+                _int(state.get("game_id")),
+                str(state.get("title") or ""),
+                str(state.get("version") or ""),
+                _int(state.get("rpdl_id")),
+            )
             job.id = str(state.get("job_id") or job.id)
             job.folder = folder
             job.info_hash = folder.name
@@ -1014,7 +1112,9 @@ class TorrentSupervisor:
                 job.seed_state = "ended" if phase == "ended" else ""
             elif phase in ("awaiting_seed_answer", "seeding"):
                 job.stage = "done"
-                job.seed_state = "awaiting_answer" if phase == "awaiting_seed_answer" else "seeding"
+                job.seed_state = (
+                    "awaiting_answer" if phase == "awaiting_seed_answer" else "seeding"
+                )
                 # An unanswered question must not seed in the meantime.
                 job.paused = phase == "awaiting_seed_answer"
                 resumed = True
@@ -1037,14 +1137,18 @@ class TorrentSupervisor:
         now = now if now is not None else time.time()
         root = torrents_dir()
         with self._lock:
-            known = {j.folder.resolve() for j in self._jobs.values() if j.folder is not None}
+            known = {
+                j.folder.resolve() for j in self._jobs.values() if j.folder is not None
+            }
             protected = set(self._open)
         for folder in root.iterdir():
             try:
                 if folder.is_symlink() or not folder.is_dir():
                     continue
                 resolved = folder.resolve()
-                if resolved in protected or any(p == resolved or resolved in p.parents for p in protected):
+                if resolved in protected or any(
+                    p == resolved or resolved in p.parents for p in protected
+                ):
                     continue
                 state = _read_state(folder)
                 if resolved not in known or state is None:
@@ -1053,7 +1157,9 @@ class TorrentSupervisor:
                 if _expired(state, now):
                     shutil.rmtree(folder, ignore_errors=True)
                     with self._lock:
-                        for job_id in [j.id for j in self._jobs.values() if j.folder == folder]:
+                        for job_id in [
+                            j.id for j in self._jobs.values() if j.folder == folder
+                        ]:
                             _ = self._jobs.pop(job_id, None)
             except OSError:
                 continue
@@ -1083,7 +1189,9 @@ def _expired(state: dict[str, object], now: float) -> bool:
 
 def _read_state(folder: Path) -> dict[str, object] | None:
     try:
-        value = cast(object, json.loads((folder / "state.json").read_text(encoding="utf-8")))
+        value = cast(
+            object, json.loads((folder / "state.json").read_text(encoding="utf-8"))
+        )
     except (OSError, ValueError):
         return None
     return cast(dict[str, object], value) if isinstance(value, dict) else None

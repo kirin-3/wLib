@@ -60,7 +60,13 @@ def redact_tracker(url: str) -> str:
 
 
 def _unsafe_component(part: str) -> bool:
-    return part in ("..", ".") or "/" in part or "\\" in part or part == "" or re.match(r"^[A-Za-z]:", part) is not None
+    return (
+        part in ("..", ".")
+        or "/" in part
+        or "\\" in part
+        or part == ""
+        or re.match(r"^[A-Za-z]:", part) is not None
+    )
 
 
 def _is_symlink(entry: Mapping[bytes, object]) -> bool:
@@ -81,7 +87,9 @@ def _unsafe_file_tree(tree: Mapping[bytes, object], depth: int = 0) -> bool:
             if _is_symlink(node):
                 return True
             continue
-        if _unsafe_component(key.decode("utf-8", "replace")) or _unsafe_file_tree(node, depth + 1):
+        if _unsafe_component(key.decode("utf-8", "replace")) or _unsafe_file_tree(
+            node, depth + 1
+        ):
             return True
     return False
 
@@ -109,10 +117,14 @@ def unsafe_paths(info: Mapping[bytes, object]) -> bool:
             if not isinstance(path, list) or not path:
                 return True
             for part in cast(list[object], path):
-                if not isinstance(part, bytes) or _unsafe_component(part.decode("utf-8", "replace")):
+                if not isinstance(part, bytes) or _unsafe_component(
+                    part.decode("utf-8", "replace")
+                ):
                     return True
     tree = info.get(b"file tree")
-    if tree is not None and (not isinstance(tree, dict) or _unsafe_file_tree(cast(dict[bytes, object], tree))):
+    if tree is not None and (
+        not isinstance(tree, dict) or _unsafe_file_tree(cast(dict[bytes, object], tree))
+    ):
         return True
     return False
 
@@ -132,7 +144,9 @@ def _write_atomic(path: str, data: bytes) -> None:
         os.remove(tmp)
     except FileNotFoundError:
         pass
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+    fd = os.open(
+        tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600
+    )
     with os.fdopen(fd, "wb") as handle:
         _ = handle.write(data)
     os.replace(tmp, path)
@@ -194,7 +208,9 @@ class Engine:
         name = command.get("cmd")
         job_id = str(command.get("id") or "")
         if name == "add":
-            self._add(job_id, str(command.get("dir") or ""), bool(command.get("paused")))
+            self._add(
+                job_id, str(command.get("dir") or ""), bool(command.get("paused"))
+            )
         elif name == "set_limits":
             settings: dict[str, object] = {
                 "download_rate_limit": _limit(command.get("download_kib")),
@@ -235,7 +251,11 @@ class Engine:
             with open(os.path.join(folder, "meta.torrent"), "rb") as handle:
                 meta = handle.read()
             decoded = cast(object, lt.bdecode(meta))  # pyright: ignore[reportUnknownMemberType]
-            info = cast(dict[bytes, object], decoded).get(b"info") if isinstance(decoded, dict) else None
+            info = (
+                cast(dict[bytes, object], decoded).get(b"info")
+                if isinstance(decoded, dict)
+                else None
+            )
             if not isinstance(info, dict):
                 raise ValueError("no info")
         except (OSError, ValueError, RuntimeError):
@@ -296,7 +316,11 @@ class Engine:
             status = self._status(entry)
             # A storage error shows as state "error" in the status event; the
             # parent fails the job, so it must not also see "finished".
-            if status["finished"] and status["state"] != "error" and not entry.finished_sent:
+            if (
+                status["finished"]
+                and status["state"] != "error"
+                and not entry.finished_sent
+            ):
                 flush = self._flush(entry, now)
                 if flush == "timeout":
                     del self._entries[entry.job_id]
@@ -311,14 +335,17 @@ class Engine:
         self._emit({"event": "status", "torrents": torrents})
 
     def _flush(self, entry: _Entry, now: float) -> str:
-        """"done" after a cache_flushed_alert, else "waiting" or "timeout"."""
+        """ "done" after a cache_flushed_alert, else "waiting" or "timeout"."""
         if entry.flushed:
             return "done"
         if entry.flush_started_at is None:
             entry.flush_started_at = now
         elif now - entry.flush_started_at >= FLUSH_GIVE_UP:
             return "timeout"
-        elif entry.flush_requested_at is not None and now - entry.flush_requested_at < FLUSH_WAIT:
+        elif (
+            entry.flush_requested_at is not None
+            and now - entry.flush_requested_at < FLUSH_WAIT
+        ):
             return "waiting"
         entry.flush_requested_at = now
         entry.handle.flush_cache()
@@ -328,7 +355,9 @@ class Engine:
         lt = self._lt
         status = entry.handle.status()
         paused = bool(int(status.flags) & int(lt.torrent_flags.paused))
-        state = "paused" if paused else _STATE_NAMES.get(int(status.state), "downloading")
+        state = (
+            "paused" if paused else _STATE_NAMES.get(int(status.state), "downloading")
+        )
         if status.errc.value() != 0 or status.error:
             state = "error"
         result: dict[str, object] = {
@@ -359,7 +388,10 @@ class Engine:
                 entry = self._entry_for(alert.handle)
                 if entry is not None:
                     try:
-                        _write_atomic(os.path.join(entry.folder, "resume.dat"), lt.write_resume_data_buf(alert.params))
+                        _write_atomic(
+                            os.path.join(entry.folder, "resume.dat"),
+                            lt.write_resume_data_buf(alert.params),
+                        )
                     except OSError:
                         continue
                     self._emit({"event": "saved", "id": entry.job_id})
@@ -495,7 +527,13 @@ def run(stdin: TextIO | None = None, stdout: TextIO | None = None) -> int:
                 try:
                     engine = Engine(emit, command)
                 except ImportError:
-                    emit({"event": "error", "message": MSG_UNAVAILABLE, "code": "engine_missing"})
+                    emit(
+                        {
+                            "event": "error",
+                            "message": MSG_UNAVAILABLE,
+                            "code": "engine_missing",
+                        }
+                    )
                     return EXIT_ENGINE_MISSING
             emit({"event": "ready", "port": engine.port})
         elif name == "shutdown":

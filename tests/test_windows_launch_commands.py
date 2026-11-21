@@ -43,7 +43,11 @@ def _launch_batch(monkeypatch, path: str, arguments: str = "") -> object:
 
 @pytest.mark.parametrize(
     "path",
-    [r"C:\Games\A&B\Start.cmd", r"C:\Games\A|B<C>\Start.bat", r"C:\My Games\A&B\go.cmd"],
+    [
+        r"C:\Games\A&B\Start.cmd",
+        r"C:\Games\A|B<C>\Start.bat",
+        r"C:\My Games\A&B\go.cmd",
+    ],
 )
 def test_batch_path_special_characters_stay_quoted(monkeypatch, path):
     command_line = _launch_batch(monkeypatch, path)
@@ -78,9 +82,10 @@ def test_windows_command_line_keeps_plain_arguments_standard():
     plain = [r"C:\Program Files\game.exe", "--name", 'a "b"', ""]
 
     assert _windows_command_line(plain) == subprocess.list2cmdline(plain)
-    assert _windows_command_line(
-        ["cmd.exe", "/c", _batch_command(r"C:\A&B\s.cmd", [])]
-    ) == r'cmd.exe /c "call "C:\A&B\s.cmd""'
+    assert (
+        _windows_command_line(["cmd.exe", "/c", _batch_command(r"C:\A&B\s.cmd", [])])
+        == r'cmd.exe /c "call "C:\A&B\s.cmd""'
+    )
 
 
 def _elevation_required() -> OSError:

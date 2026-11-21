@@ -326,9 +326,7 @@ def _read_data_root(folder: str, stem: str, ext: str) -> MarshalNode | None:
     return dumps[0] if dumps else None
 
 
-def _db_entries(
-    root: MarshalNode | None, category: str, fmt: str
-) -> list[JsonDict]:
+def _db_entries(root: MarshalNode | None, category: str, fmt: str) -> list[JsonDict]:
     arr = _unwrap_link(root)
     if not isinstance(arr, ArrayNode):
         return []
@@ -421,7 +419,9 @@ def load_rgss_names(folder: str, fmt: str) -> JsonDict:
         terms = _ivar(system, b"@terms")
         raw_params = _name_list(_ivar(terms, b"@params"))
         params = [
-            raw_params[i] if i < len(raw_params) and raw_params[i] else _VXACE_DEFAULT_PARAMS[i]
+            raw_params[i]
+            if i < len(raw_params) and raw_params[i]
+            else _VXACE_DEFAULT_PARAMS[i]
             for i in range(8)
         ]
         mp_label = "MP"
@@ -566,7 +566,9 @@ def _actor_view(
 
     level_node = _raw_ivar(actor, b"@level")
     level_val = level_node.value if isinstance(level_node, IntNode) else None
-    level_ref = _node_ref(level_node, editable_ids) if isinstance(level_node, IntNode) else None
+    level_ref = (
+        _node_ref(level_node, editable_ids) if isinstance(level_node, IntNode) else None
+    )
 
     class_node = _raw_ivar(actor, b"@class_id")
     class_id = class_node.value if isinstance(class_node, IntNode) else None
@@ -596,7 +598,11 @@ def _actor_view(
         exp_map = _unwrap_link(_raw_ivar(actor, b"@exp"))
         if isinstance(exp_map, HashNode) and class_id is not None:
             for k, v in exp_map.pairs:
-                if isinstance(k, IntNode) and k.value == class_id and isinstance(v, IntNode):
+                if (
+                    isinstance(k, IntNode)
+                    and k.value == class_id
+                    and isinstance(v, IntNode)
+                ):
                     exp_val = v.value
                     exp_ref = _node_ref(v, editable_ids)
                     break

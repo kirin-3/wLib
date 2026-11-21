@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M18: a cancelled preparation must not delete the folder of a replacement job of the same torrent."""
+
 import json
 import threading
 from pathlib import Path
@@ -47,7 +48,11 @@ class _FakeProc:
 def sup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TorrentSupervisor:
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(torrents.subprocess, "Popen", _FakeProc)
-    supervisor = TorrentSupervisor(command=lambda: (["helper"], {}), options=lambda: {}, free_space_fn=lambda _p: 100 * GIB)
+    supervisor = TorrentSupervisor(
+        command=lambda: (["helper"], {}),
+        options=lambda: {},
+        free_space_fn=lambda _p: 100 * GIB,
+    )
     monkeypatch.setattr(supervisor, "_read", lambda proc: None)
     return supervisor
 
@@ -58,7 +63,9 @@ def _add(sup: TorrentSupervisor) -> _Job:
     return job
 
 
-def test_cancelled_preparation_keeps_the_replacement_folder(sup: TorrentSupervisor, monkeypatch: pytest.MonkeyPatch):
+def test_cancelled_preparation_keeps_the_replacement_folder(
+    sup: TorrentSupervisor, monkeypatch: pytest.MonkeyPatch
+):
     data = _torrent_bytes()
     folder = torrents.torrents_dir() / parse_torrent(data).info_hash
     entered = threading.Event()
@@ -96,7 +103,9 @@ def test_cancelled_preparation_keeps_the_replacement_folder(sup: TorrentSupervis
     assert second.folder == folder
 
 
-def test_cancelled_preparation_still_deletes_its_own_folder(sup: TorrentSupervisor, monkeypatch: pytest.MonkeyPatch):
+def test_cancelled_preparation_still_deletes_its_own_folder(
+    sup: TorrentSupervisor, monkeypatch: pytest.MonkeyPatch
+):
     data = _torrent_bytes()
     folder = torrents.torrents_dir() / parse_torrent(data).info_hash
     real_write = Path.write_bytes

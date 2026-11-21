@@ -114,7 +114,10 @@ def test_runner_codenames_are_available_and_valid(tmp_path, monkeypatch):
     assert api.check_path("UMU-Proton", "runner")["ok"]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Wine prefix tools and Wine launches run only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Wine prefix tools and Wine launches run only on Linux hosts",
+)
 def test_prefix_tools_wine_commands_and_locks(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
     from core.database import add_game
@@ -137,7 +140,12 @@ def test_prefix_tools_wine_commands_and_locks(tmp_path, monkeypatch):
     game.write_bytes(b"MZ")
     game_id = add_game("Example", str(game))
     monkeypatch.setattr("core.umu.resolve_runner", lambda _: "/usr/bin/wine")
-    assert api.launch_game(game_id, str(game), custom_prefix=prefix, proton_version="/usr/bin/wine")["code"] == "prefix_in_use"
+    assert (
+        api.launch_game(
+            game_id, str(game), custom_prefix=prefix, proton_version="/usr/bin/wine"
+        )["code"]
+        == "prefix_in_use"
+    )
     process.poll.return_value = 0
     assert api.open_wine_prefix_tool("winetricks", prefix, "/usr/bin/wine")["success"]
     assert popen.call_args.args[0] == ["/usr/bin/winetricks", "--gui"]
@@ -152,7 +160,11 @@ def test_prefix_tools_proton_environment_and_refusals(tmp_path, monkeypatch):
     monkeypatch.setattr("core.umu.locate_umu", lambda: ("/host/umu-run", "system"))
     monkeypatch.setattr("core.umu.runtime_status", lambda _: {"ready": True})
     monkeypatch.setattr("core.umu._wrapper_path", lambda: "/host/wrapper")
-    patch_api_name(monkeypatch, "host_which", lambda name: "/usr/bin/zenity" if name == "zenity" else None)
+    patch_api_name(
+        monkeypatch,
+        "host_which",
+        lambda name: "/usr/bin/zenity" if name == "zenity" else None,
+    )
     runner = tmp_path / "GE-Proton" / "proton"
     (runner.parent / "protonfixes").mkdir(parents=True)
     runner.touch()
@@ -164,7 +176,12 @@ def test_prefix_tools_proton_environment_and_refusals(tmp_path, monkeypatch):
     monkeypatch.setattr("subprocess.Popen", popen)
     api = Api()
     assert api.open_wine_prefix_tool("winetricks", str(prefix), str(runner))["success"]
-    assert popen.call_args.args[0] == ["python3", "/host/wrapper", "winetricks", "--gui"]
+    assert popen.call_args.args[0] == [
+        "python3",
+        "/host/wrapper",
+        "winetricks",
+        "--gui",
+    ]
     env = popen.call_args.kwargs["env"]
     assert env["WINEPREFIX"] == str(prefix / "proton_compat")
     assert env["GAMEID"] == "umu-default"
@@ -175,11 +192,20 @@ def test_prefix_tools_proton_environment_and_refusals(tmp_path, monkeypatch):
     assert popen.call_args.args[0] == ["python3", "/host/wrapper", "winecfg"]
     api._prefix_tool = None
     (runner.parent / "protonfixes" / "winetricks").unlink()
-    assert "GE-Proton" in api.open_wine_prefix_tool("winetricks", str(prefix), str(runner))["error"]
+    assert (
+        "GE-Proton"
+        in api.open_wine_prefix_tool("winetricks", str(prefix), str(runner))["error"]
+    )
     patch_api_name(monkeypatch, "host_which", lambda _: None)
-    assert "zenity or kdialog" in api.open_wine_prefix_tool("winetricks", str(prefix), str(runner))["error"]
+    assert (
+        "zenity or kdialog"
+        in api.open_wine_prefix_tool("winetricks", str(prefix), str(runner))["error"]
+    )
     monkeypatch.setattr(api.launcher, "game_using_prefix", lambda _: "Running game")
-    assert "Running game" in api.open_wine_prefix_tool("winecfg", str(prefix), str(runner))["error"]
+    assert (
+        "Running game"
+        in api.open_wine_prefix_tool("winecfg", str(prefix), str(runner))["error"]
+    )
 
 
 def test_prefix_tool_refusals(tmp_path, monkeypatch):
@@ -189,24 +215,53 @@ def test_prefix_tool_refusals(tmp_path, monkeypatch):
     api = Api()
     prefix = str(tmp_path / "prefix")
     patch_api_name(monkeypatch, "host_which", lambda _: None)
-    assert "Wine is not installed" in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
-    assert "Wine is not installed" in api.open_wine_prefix_tool("winetricks", prefix, "/usr/bin/wine")["error"]
-    patch_api_name(monkeypatch, "host_which", lambda name: "/usr/bin/wine" if name == "wine" else None)
-    assert "zenity or kdialog" in api.open_wine_prefix_tool("winetricks", prefix, "/usr/bin/wine")["error"]
+    assert (
+        "Wine is not installed"
+        in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
+    )
+    assert (
+        "Wine is not installed"
+        in api.open_wine_prefix_tool("winetricks", prefix, "/usr/bin/wine")["error"]
+    )
+    patch_api_name(
+        monkeypatch,
+        "host_which",
+        lambda name: "/usr/bin/wine" if name == "wine" else None,
+    )
+    assert (
+        "zenity or kdialog"
+        in api.open_wine_prefix_tool("winetricks", prefix, "/usr/bin/wine")["error"]
+    )
     patch_api_name(monkeypatch, "host_which", lambda name: f"/usr/bin/{name}")
     api._deps_install_status["running"] = True
-    assert "install" in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
+    assert (
+        "install"
+        in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
+    )
     api._deps_install_status["running"] = False
     api._rtp_install_status["running"] = True
-    assert "install" in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
+    assert (
+        "install"
+        in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
+    )
     api._rtp_install_status["running"] = False
-    monkeypatch.setattr("subprocess.Popen", MagicMock(side_effect=OSError("spawn failed")))
-    assert "spawn failed" in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
+    monkeypatch.setattr(
+        "subprocess.Popen", MagicMock(side_effect=OSError("spawn failed"))
+    )
+    assert (
+        "spawn failed"
+        in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
+    )
     monkeypatch.setattr("core.umu.locate_umu", lambda: ("", ""))
-    assert "umu-launcher is missing" in api.open_wine_prefix_tool("winecfg", prefix, "/fake/proton")["error"]
+    assert (
+        "umu-launcher is missing"
+        in api.open_wine_prefix_tool("winecfg", prefix, "/fake/proton")["error"]
+    )
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Wine runtime installs run only on Linux hosts")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Wine runtime installs run only on Linux hosts"
+)
 def test_runtime_installs_and_launches_respect_shared_prefix(tmp_path, monkeypatch):
     from core.game_sandbox import normalize_prefix
     from core.launcher import RunningGame
@@ -215,7 +270,9 @@ def test_runtime_installs_and_launches_respect_shared_prefix(tmp_path, monkeypat
     patch_api_name(monkeypatch, "host_which", lambda name: f"/usr/bin/{name}")
     api = Api()
     prefix = str(tmp_path / "prefix")
-    api.launcher._running[1] = RunningGame(None, None, prefix=normalize_prefix(prefix), title="Playing")
+    api.launcher._running[1] = RunningGame(
+        None, None, prefix=normalize_prefix(prefix), title="Playing"
+    )
     for result in (
         api.install_rpgmaker_dependencies(prefix, "/usr/bin/wine"),
         api.install_rpgmaker_rtp(prefix, "/usr/bin/wine"),

@@ -29,4 +29,6 @@ def test_fixture_parses_and_holds_no_credentials(name):
     with open(os.path.join(FIXTURES, name), encoding="utf-8") as handle:
         text = handle.read()
     json.loads(text)
-    assert not re.search(r"set-cookie|\bcookie\b|xf_csrf|_xfToken|\btoken\b|authorization", text, re.I)
+    assert not re.search(
+        r"set-cookie|\bcookie\b|xf_csrf|_xfToken|\btoken\b|authorization", text, re.I
+    )

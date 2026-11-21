@@ -44,7 +44,9 @@ def _no_catalog_startup_check(monkeypatch):
     """Api() would otherwise start a real catalog download on every construction."""
     from core.catalog import CatalogClient
 
-    monkeypatch.setattr(CatalogClient, "start_background", lambda self, force=False: False)
+    monkeypatch.setattr(
+        CatalogClient, "start_background", lambda self, force=False: False
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -57,7 +59,9 @@ def _no_desktop_notifications(request, monkeypatch):
         return
     import core.desktop_notify
 
-    monkeypatch.setattr(core.desktop_notify, "send_notification", lambda title, body: None)
+    monkeypatch.setattr(
+        core.desktop_notify, "send_notification", lambda title, body: None
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -84,7 +88,9 @@ def _isolated_extension_pairing(tmp_path_factory, monkeypatch):
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "slow: takes several seconds (real network loopback)")
+    config.addinivalue_line(
+        "markers", "slow: takes several seconds (real network loopback)"
+    )
     config.addinivalue_line(
         "markers", "schema_fingerprint: keep init_db's skip-when-current check"
     )

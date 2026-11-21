@@ -53,7 +53,17 @@ def test_normalize_resolution_and_errors():
     assert "1 to 16384" in settings_error("gamescope_output_resolution", "0x600")
 
 
-@pytest.mark.parametrize(("value", "ok"), [("", True), ("60", True), ("1000", True), ("0", False), ("1001", False), ("6.5", False)])
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [
+        ("", True),
+        ("60", True),
+        ("1000", True),
+        ("0", False),
+        ("1001", False),
+        ("6.5", False),
+    ],
+)
 def test_fps_limit(value: str, ok: bool):
     assert (settings_error("gamescope_fps_limit", value) == "") is ok
 
@@ -78,17 +88,50 @@ def test_fullscreen_pixel_art_game():
     argv = gamescope_argv(
         options(game_resolution="816x624", scaler="integer", filter="nearest")
     )
-    assert argv == ["gamescope", "-f", "-w", "816", "-h", "624", "-S", "integer", "-F", "nearest"]
+    assert argv == [
+        "gamescope",
+        "-f",
+        "-w",
+        "816",
+        "-h",
+        "624",
+        "-S",
+        "integer",
+        "-F",
+        "nearest",
+    ]
 
 
 def test_output_set_game_auto_uses_output_size():
     argv = gamescope_argv(options(output_resolution="2560x1440"), (3840, 2160))
-    assert argv == ["gamescope", "-f", "-W", "2560", "-H", "1440", "-w", "2560", "-h", "1440"]
+    assert argv == [
+        "gamescope",
+        "-f",
+        "-W",
+        "2560",
+        "-H",
+        "1440",
+        "-w",
+        "2560",
+        "-h",
+        "1440",
+    ]
 
 
 def test_both_auto_uses_screen_size():
     argv = gamescope_argv(options(), (3840, 2160))
-    assert argv == ["gamescope", "-f", "-W", "3840", "-H", "2160", "-w", "3840", "-h", "2160"]
+    assert argv == [
+        "gamescope",
+        "-f",
+        "-W",
+        "3840",
+        "-H",
+        "2160",
+        "-w",
+        "3840",
+        "-h",
+        "2160",
+    ]
 
 
 def test_both_auto_unknown_screen_gives_no_size_flags():
@@ -97,28 +140,74 @@ def test_both_auto_unknown_screen_gives_no_size_flags():
 
 def size_flags(*values: int) -> list[str]:
     flags = ["-W", "-H", "-w", "-h"] if len(values) == 4 else ["-w", "-h"]
-    return [part for flag, value in zip(flags, values, strict=True) for part in (flag, str(value))]
+    return [
+        part
+        for flag, value in zip(flags, values, strict=True)
+        for part in (flag, str(value))
+    ]
 
 
 @pytest.mark.parametrize(
     ("opts", "screen", "native", "expected", "reason"),
     [
         # Output set, game Auto, no native size.
-        ({"output_resolution": "2560x1440"}, None, None, size_flags(2560, 1440, 2560, 1440), gamescope.GAME_SIZE_NOT_FOUND),
+        (
+            {"output_resolution": "2560x1440"},
+            None,
+            None,
+            size_flags(2560, 1440, 2560, 1440),
+            gamescope.GAME_SIZE_NOT_FOUND,
+        ),
         # Both Auto, native size found.
-        ({}, (1920, 1080), (1280, 720), size_flags(1920, 1080, 1280, 720), gamescope.GAME_SIZE_NATIVE),
+        (
+            {},
+            (1920, 1080),
+            (1280, 720),
+            size_flags(1920, 1080, 1280, 720),
+            gamescope.GAME_SIZE_NATIVE,
+        ),
         # Output set, native size found.
-        ({"output_resolution": "2560x1440"}, (3840, 2160), (816, 624), size_flags(2560, 1440, 816, 624), gamescope.GAME_SIZE_NATIVE),
+        (
+            {"output_resolution": "2560x1440"},
+            (3840, 2160),
+            (816, 624),
+            size_flags(2560, 1440, 816, 624),
+            gamescope.GAME_SIZE_NATIVE,
+        ),
         # Native size equal to the output fits.
-        ({}, (1920, 1080), (1920, 1080), size_flags(1920, 1080, 1920, 1080), gamescope.GAME_SIZE_NATIVE),
+        (
+            {},
+            (1920, 1080),
+            (1920, 1080),
+            size_flags(1920, 1080, 1920, 1080),
+            gamescope.GAME_SIZE_NATIVE,
+        ),
         # Native size larger than the output.
-        ({}, (1366, 768), (1920, 1080), size_flags(1366, 768, 1366, 768), gamescope.GAME_SIZE_TOO_LARGE),
+        (
+            {},
+            (1366, 768),
+            (1920, 1080),
+            size_flags(1366, 768, 1366, 768),
+            gamescope.GAME_SIZE_TOO_LARGE,
+        ),
         # Native size wider than the output only.
-        ({"output_resolution": "1280x1024"}, None, (1600, 900), size_flags(1280, 1024, 1280, 1024), gamescope.GAME_SIZE_TOO_LARGE),
+        (
+            {"output_resolution": "1280x1024"},
+            None,
+            (1600, 900),
+            size_flags(1280, 1024, 1280, 1024),
+            gamescope.GAME_SIZE_TOO_LARGE,
+        ),
         # Screen size not known.
         ({}, None, (816, 624), size_flags(816, 624), gamescope.GAME_SIZE_NATIVE),
         # Set game resolution is not replaced.
-        ({"game_resolution": "1920x1080"}, (2560, 1440), (1280, 720), size_flags(1920, 1080), gamescope.GAME_SIZE_SET),
+        (
+            {"game_resolution": "1920x1080"},
+            (2560, 1440),
+            (1280, 720),
+            size_flags(1920, 1080),
+            gamescope.GAME_SIZE_SET,
+        ),
     ],
 )
 def test_auto_game_size(
@@ -193,7 +282,9 @@ def test_resolve_options_defaults_when_global_missing():
 
 
 def test_resolve_options_ignores_invalid_stored_args():
-    resolved = resolve_options({"gamescope_args": "-- bad"}, {"gamescope_args": '"open'})
+    resolved = resolve_options(
+        {"gamescope_args": "-- bad"}, {"gamescope_args": '"open'}
+    )
     assert resolved["args"] == []
 
 
@@ -209,7 +300,9 @@ def test_resolve_options_ignores_invalid_stored_args():
     ],
 )
 def test_install_hint_package_managers(found: set[str], command: str):
-    hint = install_hint(lambda name: f"/usr/bin/{name}" if name in found else None, False)
+    hint = install_hint(
+        lambda name: f"/usr/bin/{name}" if name in found else None, False
+    )
     assert hint["command"] == command
     assert hint["nixos"] is False
 
@@ -236,5 +329,7 @@ def test_in_gamescope_session(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_args_start_gamescope():
-    assert gamescope.args_start_gamescope(["/usr/bin/gamescope", "-f", "--", "%command%"])
+    assert gamescope.args_start_gamescope(
+        ["/usr/bin/gamescope", "-f", "--", "%command%"]
+    )
     assert not gamescope.args_start_gamescope(["%command%", "-gamescope-like"])

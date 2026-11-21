@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M17: a torrent that finishes after a pause or a stop becomes ready to install."""
+
 from core.database import init_db, insert_download_job
 from core.downloads import torrent_settings
 from core.downloads.queue import PAUSED, QUEUED, READY, RUNNING, DownloadQueue, QueueJob
@@ -46,8 +47,12 @@ def test_stopped_waiting_torrent_that_finishes_becomes_ready():
     sup = FakeSupervisor()
     queue = _queue(sup, clock)
     queue._max_active = 1  # pyright: ignore[reportPrivateUsage]
-    first = queue.add("torrent", 1, "One", "1", {"rpdl_id": 7}, TorrentContext(lambda: b"")).id
-    second = queue.add("torrent", 2, "Two", "1", {"rpdl_id": 8}, TorrentContext(lambda: b"")).id
+    first = queue.add(
+        "torrent", 1, "One", "1", {"rpdl_id": 7}, TorrentContext(lambda: b"")
+    ).id
+    second = queue.add(
+        "torrent", 2, "Two", "1", {"rpdl_id": 8}, TorrentContext(lambda: b"")
+    ).id
     queue.tick()
     queue.tick()
     assert queue.get(first).state == RUNNING
@@ -97,7 +102,11 @@ def test_status_shows_a_paused_torrent_that_finished_as_ready():
     sup.complete(job_id)
     jobs = queue.status()["jobs"]
     assert isinstance(jobs, list)
-    assert [job["state"] for job in jobs if isinstance(job, dict) and job.get("job_id") == job_id] == [READY]
+    assert [
+        job["state"]
+        for job in jobs
+        if isinstance(job, dict) and job.get("job_id") == job_id
+    ] == [READY]
 
 
 def test_paused_torrents_do_not_read_the_entire_supervisor_for_each_row(monkeypatch):
@@ -109,7 +118,9 @@ def test_paused_torrents_do_not_read_the_entire_supervisor_for_each_row(monkeypa
         supervisor._jobs[torrent.id] = torrent  # pyright: ignore[reportPrivateUsage]
         job = QueueJob(id=torrent.id, kind="torrent", game_id=game_id, state=PAUSED)
         insert_download_job(job.row())
-    queue = DownloadQueue([TorrentWorker(lambda: supervisor)], run_thread=False, clock=Clock())
+    queue = DownloadQueue(
+        [TorrentWorker(lambda: supervisor)], run_thread=False, clock=Clock()
+    )
     queue.load()
     assert len(queue.jobs()) == 5
 

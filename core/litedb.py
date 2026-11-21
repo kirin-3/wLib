@@ -106,9 +106,7 @@ def _document(cursor: _Cursor, depth: int = 0) -> dict[str, object]:
             if ms == 253402300800000:
                 value = datetime.max.replace(tzinfo=UTC)
             else:
-                value = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(
-                    milliseconds=ms
-                )
+                value = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=ms)
         elif kind in (10, 127, 255):
             value = None
         elif kind == 16:

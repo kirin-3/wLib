@@ -455,7 +455,6 @@ def test_scraper_classify_page_issue_with_various_challenges():
     ]
 
     for title, content in challenge_types:
-
         issue = scraper._classify_page_issue(200, title, content)
         assert issue is not None
         assert "code" in issue

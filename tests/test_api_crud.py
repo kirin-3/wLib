@@ -360,7 +360,9 @@ def test_saves_api_busy_guard_released_after_exception(saves_api, tmp_path):
 
 
 def test_launch_uses_stored_sandbox_flag_for_extra_target(monkeypatch):
-    game_id = add_game("Sandbox game", "/game.exe", sandbox_enabled=True, block_network=True)
+    game_id = add_game(
+        "Sandbox game", "/game.exe", sandbox_enabled=True, block_network=True
+    )
     api = Api()
     captured = {}
 
@@ -532,7 +534,9 @@ def test_cover_cache_api_validity_and_delete(tmp_path, monkeypatch):
 
 def test_performance_settings_round_trip():
     api = Api()
-    assert api.save_settings({"gamemode_enabled": True, "mangohud_enabled": True})["success"]
+    assert api.save_settings({"gamemode_enabled": True, "mangohud_enabled": True})[
+        "success"
+    ]
     settings = api.get_settings()
     assert settings["gamemode_enabled"] is True
     assert settings["mangohud_enabled"] is True
@@ -554,7 +558,13 @@ def test_performance_tool_detection_cache(monkeypatch):
     api = Api()
     calls = []
     patch_api_name(monkeypatch, "is_windows", lambda: False)
-    patch_api_name(monkeypatch, "host_which", lambda name: calls.append(name) or ("/bin/mangohud" if name == "mangohud" else None))
+    patch_api_name(
+        monkeypatch,
+        "host_which",
+        lambda name: (
+            calls.append(name) or ("/bin/mangohud" if name == "mangohud" else None)
+        ),
+    )
     expected = {"gamemode": False, "mangohud": True, "gamescope": False}
     assert api.get_performance_tools() == expected
     assert api.get_performance_tools() == expected
@@ -620,7 +630,11 @@ def test_gamescope_settings_reject_bad_values(key, value, message):
 def test_gamescope_status_install_hint(monkeypatch):
     api = Api()
     patch_api_name(monkeypatch, "is_windows", lambda: False)
-    patch_api_name(monkeypatch, "host_which", lambda name: "/usr/bin/pacman" if name == "pacman" else None)
+    patch_api_name(
+        monkeypatch,
+        "host_which",
+        lambda name: "/usr/bin/pacman" if name == "pacman" else None,
+    )
     import core.host_platform as host_platform
 
     monkeypatch.setattr(host_platform, "host_system_layout", lambda: (False, {}))
@@ -631,8 +645,14 @@ def test_gamescope_status_install_hint(monkeypatch):
         "nixos": False,
     }
     monkeypatch.setattr(host_platform, "host_system_layout", lambda: (True, {}))
-    assert api.get_gamescope_status(True)["command"] == "programs.gamescope.enable = true;"
-    patch_api_name(monkeypatch, "host_which", lambda name: "/usr/bin/gamescope" if name == "gamescope" else None)
+    assert (
+        api.get_gamescope_status(True)["command"] == "programs.gamescope.enable = true;"
+    )
+    patch_api_name(
+        monkeypatch,
+        "host_which",
+        lambda name: "/usr/bin/gamescope" if name == "gamescope" else None,
+    )
     assert api.get_gamescope_status(True) == {
         "installed": True,
         "command": "",
@@ -645,13 +665,16 @@ def test_performance_overrides_passed_to_launcher(monkeypatch):
     api = Api()
     game_id = add_game("Tools", "/game")
     from core.database import update_game, update_setting
+
     update_game(game_id, {"gamemode": "off", "mangohud": "on"})
     update_setting("gamemode_enabled", "true")
     update_setting("mangohud_enabled", "false")
     captured = {}
+
     def launch(*args, **kwargs):
         captured.update(kwargs)
         return {"success": True, "tracks_playtime": False}
+
     monkeypatch.setattr(api.launcher, "launch", launch)
     assert api.launch_game(game_id, "/game")["success"]
     assert captured["gamemode"] is False
@@ -661,7 +684,9 @@ def test_performance_overrides_passed_to_launcher(monkeypatch):
 def _mark_running(api, game_id, prefix=""):
     from core.launcher import RunningGame
 
-    api.launcher._running[game_id] = RunningGame(None, None, prefix=prefix, title="Busy game")
+    api.launcher._running[game_id] = RunningGame(
+        None, None, prefix=prefix, title="Busy game"
+    )
 
 
 def test_save_restore_refused_while_game_runs(saves_api, tmp_path):
@@ -695,7 +720,9 @@ def test_launch_and_install_refused_while_game_files_are_busy(tmp_path):
         zf.writestr("run.exe", b"MZ")
     (tmp_path / "lib").mkdir()
     update_setting("library_folder", str(tmp_path / "lib"))
-    installed = api.install_archive({"archive_path": str(tmp_path / "x.zip"), "game_id": game_id, "title": "Busy"})
+    installed = api.install_archive(
+        {"archive_path": str(tmp_path / "x.zip"), "game_id": game_id, "title": "Busy"}
+    )
     assert installed["success"] is False and installed["error_code"] == "game_busy"
     assert api._archive_install_status["running"] is False
     _ = api._tool_status.pop(game_id)
@@ -823,7 +850,13 @@ def test_delete_game_moves_its_sandbox_aside(tmp_path, monkeypatch):
 def test_cancel_archive_install_only_before_the_move(monkeypatch):
     api = Api()
     assert api.cancel_archive_install()["error_code"] == "not_running"
-    api._archive_install_status = {"running": True, "stage": "extracting", "done": 0, "total": 0, "cancellable": True}
+    api._archive_install_status = {
+        "running": True,
+        "stage": "extracting",
+        "done": 0,
+        "total": 0,
+        "cancellable": True,
+    }
     assert api.cancel_archive_install()["success"] is True
     assert api._archive_install_cancel.is_set()
     assert api.get_archive_install_status()["stage"] == "cancelling"
@@ -831,7 +864,9 @@ def test_cancel_archive_install_only_before_the_move(monkeypatch):
     api._set_archive_install_status(running=True, stage="fixing permissions")
     assert api.get_archive_install_status()["stage"] == "cancelling"
     api._archive_install_cancel.clear()
-    api._set_archive_install_status(running=True, stage="moving into place", done=5, total=9)
+    api._set_archive_install_status(
+        running=True, stage="moving into place", done=5, total=9
+    )
     status = api.get_archive_install_status()
     assert status["cancellable"] is False and status["done"] == 5
     assert api.cancel_archive_install()["error_code"] == "not_cancellable"
@@ -841,7 +876,10 @@ def test_web_player_exports_reject_unknown_game():
     api = Api()
     for game_id in (True, -1, 1024):
         assert api.get_web_player_exports(game_id)["error_code"] == "game_not_found"
-        assert api.open_web_player_exports_folder(game_id)["error_code"] == "game_not_found"
+        assert (
+            api.open_web_player_exports_folder(game_id)["error_code"]
+            == "game_not_found"
+        )
 
 
 def test_web_player_exports_count_and_open(tmp_path, monkeypatch):
@@ -851,7 +889,11 @@ def test_web_player_exports_count_and_open(tmp_path, monkeypatch):
     assert game_id is not None
     folder = tmp_path / "web-player" / str(game_id) / "exports"
     opened = []
-    monkeypatch.setattr(api, "_open_path_with_system_handler", lambda path: opened.append(path) or {"success": True})
+    monkeypatch.setattr(
+        api,
+        "_open_path_with_system_handler",
+        lambda path: opened.append(path) or {"success": True},
+    )
 
     assert api.get_web_player_exports(game_id) == {"success": True, "count": 0}
     assert api.open_web_player_exports_folder(game_id)["success"] is False
@@ -867,7 +909,9 @@ def test_web_player_exports_count_and_open(tmp_path, monkeypatch):
     assert opened == [str(folder)]
 
 
-def test_delete_game_moves_web_player_storage_aside_and_prunes_it(tmp_path, monkeypatch):
+def test_delete_game_moves_web_player_storage_aside_and_prunes_it(
+    tmp_path, monkeypatch
+):
     import os
 
     from core import game_sandbox
@@ -885,7 +929,9 @@ def test_delete_game_moves_web_player_storage_aside_and_prunes_it(tmp_path, monk
     assert api.delete_game(game_id)["success"] is True
     assert not os.path.exists(storage)
     (kept,) = (tmp_path / "data" / "web-player" / "removed").iterdir()
-    assert kept.name.startswith(f"{game_id}_") and (kept / "save.dat").read_text() == "x"
+    assert (
+        kept.name.startswith(f"{game_id}_") and (kept / "save.dat").read_text() == "x"
+    )
     assert (kept / "exports" / "game.save").read_text() == "export"
     assert game_sandbox.prune_removed_sandboxes() == 0
     later = kept.stat().st_mtime + game_sandbox.REMOVED_SANDBOX_KEEP_SECONDS + 1
@@ -893,7 +939,9 @@ def test_delete_game_moves_web_player_storage_aside_and_prunes_it(tmp_path, monk
     assert not kept.exists()
 
 
-def test_builtin_player_saves_are_detected_and_refuse_changes_while_running(saves_api, tmp_path, monkeypatch):
+def test_builtin_player_saves_are_detected_and_refuse_changes_while_running(
+    saves_api, tmp_path, monkeypatch
+):
     from core import game_sandbox
 
     from core.database import update_game
@@ -919,7 +967,9 @@ def test_builtin_player_saves_are_detected_and_refuse_changes_while_running(save
     assert refused["success"] is False and "Close the game" in str(refused["error"])
 
 
-def test_delete_game_deletes_the_video_check_and_export_leaves_it_out(tmp_path, monkeypatch):
+def test_delete_game_deletes_the_video_check_and_export_leaves_it_out(
+    tmp_path, monkeypatch
+):
     import json
     import os
 

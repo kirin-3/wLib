@@ -67,4 +67,6 @@ def build_snapshot(catalog: CatalogStore, out_dir: str, built_at: str) -> Snapsh
         _ = target.write(data)
     uncompressed_size = os.path.getsize(raw_path)
     os.remove(raw_path)
-    return Snapshot(xz_path, name, size, digest.hexdigest(), uncompressed_size, built_at)
+    return Snapshot(
+        xz_path, name, size, digest.hexdigest(), uncompressed_size, built_at
+    )

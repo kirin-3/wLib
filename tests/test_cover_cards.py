@@ -54,7 +54,9 @@ def _lzw_literal(pixels: list[int]) -> bytes:
 
 def make_gif(width=40, height=10, frames=3, delay_cs=5) -> bytes:
     palette = bytes([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255])
-    data = bytearray(b"GIF89a" + struct.pack("<HHBBB", width, height, 0xF1, 0, 0) + palette)
+    data = bytearray(
+        b"GIF89a" + struct.pack("<HHBBB", width, height, 0xF1, 0, 0) + palette
+    )
     data += b"\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00"
     for i in range(frames):
         data += b"\x21\xf9\x04\x00" + struct.pack("<H", delay_cs) + b"\x00\x00"
@@ -147,7 +149,11 @@ def test_output_size_limit_keeps_only_still(tmp_path, monkeypatch):
 def test_corrupt_gif_makes_nothing(tmp_path):
     source = put_cover(tmp_path, b"GIF89a" + b"\x00" * 20)
     assert cover_cards.make_card_copies(source) == (False, False)
-    assert not list((tmp_path / "covers" / "cards").glob("*")) if (tmp_path / "covers" / "cards").exists() else True
+    assert (
+        not list((tmp_path / "covers" / "cards").glob("*"))
+        if (tmp_path / "covers" / "cards").exists()
+        else True
+    )
 
 
 def test_sweep_deletes_only_orphans(tmp_path):
@@ -181,14 +187,18 @@ def test_sweep_keeps_cached_source_copies(tmp_path):
 
 
 def test_pending_sources_lists_referenced_without_copies(tmp_path):
-    game_id = database.add_game("G", "/g/game.sh") if hasattr(database, "add_game") else None
+    game_id = (
+        database.add_game("G", "/g/game.sh") if hasattr(database, "add_game") else None
+    )
     assert game_id is not None
     local = put_cover(tmp_path, make_gif())
     cached = put_cover(tmp_path, make_gif(), cache=True)
     png = put_cover(tmp_path, b"\x89PNG\r\n\x1a\n", ext="png")
     database.set_game_local_cover(game_id, local.name)
     with database.get_connection() as conn:
-        conn.execute("UPDATE games SET cover_cache = ? WHERE id = ?", (cached.name, game_id))
+        conn.execute(
+            "UPDATE games SET cover_cache = ? WHERE id = ?", (cached.name, game_id)
+        )
         conn.commit()
     assert {p.name for p in cover_cards.pending_sources()} == {local.name, cached.name}
     cover_cards.make_card_copies(local)
@@ -257,7 +267,9 @@ def _api():
 def _game(tmp_path, local=None, cached=None, url="https://x/c.gif"):
     game_id = database.add_game("G", "/g/game.sh")
     with database.get_connection() as conn:
-        conn.execute("UPDATE games SET cover_image_path = ? WHERE id = ?", (url, game_id))
+        conn.execute(
+            "UPDATE games SET cover_image_path = ? WHERE id = ?", (url, game_id)
+        )
         if cached:
             conn.execute(
                 "UPDATE games SET cover_cache = ?, cover_cache_url = ? WHERE id = ?",
@@ -352,28 +364,50 @@ def test_copies_stay_out_of_export_and_dirty_tracking(tmp_path):
 
     local = put_cover(tmp_path, make_gif())
     _game(tmp_path, local=local)
-    before_sync = json.dumps(build_sync_backup("t", "d")["games"], sort_keys=True, default=str)
+    before_sync = json.dumps(
+        build_sync_backup("t", "d")["games"], sort_keys=True, default=str
+    )
     before_export = json.dumps(build_library_backup(), sort_keys=True, default=str)
     cover_cards.make_card_copies(local)
     cover_cards.sweep_orphans()
-    after_sync = json.dumps(build_sync_backup("t", "d")["games"], sort_keys=True, default=str)
+    after_sync = json.dumps(
+        build_sync_backup("t", "d")["games"], sort_keys=True, default=str
+    )
     after_export = json.dumps(build_library_backup(), sort_keys=True, default=str)
     assert "cards" not in after_export and "still.webp" not in after_export
     assert before_sync == after_sync
-    assert json.loads(before_export).get("games") == json.loads(after_export).get("games")
+    assert json.loads(before_export).get("games") == json.loads(after_export).get(
+        "games"
+    )
 
 
 def test_is_animated_reads_gif_webp_and_avif_headers(tmp_path):
     assert cover_cards.is_animated(put_cover(tmp_path, make_gif(frames=3)))
     assert not cover_cards.is_animated(put_cover(tmp_path, make_gif(frames=1)))
     vp8x = b"RIFF\x00\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00"
-    assert cover_cards.is_animated(put_cover(tmp_path, vp8x + b"\x02" + b"\x00" * 9, "webp"))
-    assert not cover_cards.is_animated(put_cover(tmp_path, vp8x + b"\x00" + b"\x00" * 9, "webp"))
-    assert not cover_cards.is_animated(put_cover(tmp_path, b"RIFF\x00\x00\x00\x00WEBPVP8 " + b"\x00" * 20, "webp"))
+    assert cover_cards.is_animated(
+        put_cover(tmp_path, vp8x + b"\x02" + b"\x00" * 9, "webp")
+    )
+    assert not cover_cards.is_animated(
+        put_cover(tmp_path, vp8x + b"\x00" + b"\x00" * 9, "webp")
+    )
+    assert not cover_cards.is_animated(
+        put_cover(tmp_path, b"RIFF\x00\x00\x00\x00WEBPVP8 " + b"\x00" * 20, "webp")
+    )
+
     def ftyp(brands):
-        return struct.pack(">I", 16 + 4 * len(brands)) + b"ftypavif\x00\x00\x00\x00" + b"".join(brands)
-    assert cover_cards.is_animated(put_cover(tmp_path, ftyp([b"avif", b"avis"]), "avif"))
-    assert not cover_cards.is_animated(put_cover(tmp_path, ftyp([b"avif", b"mif1"]), "avif"))
+        return (
+            struct.pack(">I", 16 + 4 * len(brands))
+            + b"ftypavif\x00\x00\x00\x00"
+            + b"".join(brands)
+        )
+
+    assert cover_cards.is_animated(
+        put_cover(tmp_path, ftyp([b"avif", b"avis"]), "avif")
+    )
+    assert not cover_cards.is_animated(
+        put_cover(tmp_path, ftyp([b"avif", b"mif1"]), "avif")
+    )
     assert not cover_cards.is_animated(put_cover(tmp_path, b"\x89PNG", "png"))
     assert not cover_cards.is_animated(tmp_path / "missing.gif")
 
@@ -404,7 +438,9 @@ def test_card_paths_with_links_and_passed_folder(tmp_path):
     resolved = cover_cards.resolve_cover_folders()
     assert resolved.cards == folder.resolve()
     for name in ("b" * 32 + ".gif", "c" * 32 + ".gif"):
-        assert cover_cards.card_paths(name, folder=resolved.cards) == cover_cards.card_paths(name)
+        assert cover_cards.card_paths(
+            name, folder=resolved.cards
+        ) == cover_cards.card_paths(name)
         assert cover_cards.card_paths(name) is not None
 
 
@@ -419,7 +455,9 @@ def test_get_games_refuses_links_out_and_keeps_links_in(tmp_path):
     _game(tmp_path, cached=linked)
     first, second = _api().get_games()
     assert "cover_local_url" not in first and "cover_animated" not in first
-    assert second["cover_cache_url"] == f"http://127.0.0.1:8183/covers/cache/{linked.name}"
+    assert (
+        second["cover_cache_url"] == f"http://127.0.0.1:8183/covers/cache/{linked.name}"
+    )
     assert second.get("cover_animated") is True
 
 

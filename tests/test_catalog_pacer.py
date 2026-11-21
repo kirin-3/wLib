@@ -6,7 +6,13 @@ import pytest
 
 from catalog_fakes import FakeClock, FakeTransport, json_response
 from catalog_server.config import USER_AGENT, site_proxies_from_env
-from catalog_server.net import BudgetExhausted, Pacer, RateLimited, Request, urllib_transport
+from catalog_server.net import (
+    BudgetExhausted,
+    Pacer,
+    RateLimited,
+    Request,
+    urllib_transport,
+)
 from catalog_server.store import StateStore
 
 
@@ -41,7 +47,9 @@ def test_f95_budget_holds_across_two_runs(tmp_path):
 def test_waiting_for_budget_sleeps_until_the_window_frees(tmp_path):
     clock = FakeClock()
     state = StateStore(str(tmp_path / "state.sqlite"))
-    pacer = Pacer(state, _ok_transport(), clock=clock, sleep=clock.sleep, wait_for_budget={"f95"})
+    pacer = Pacer(
+        state, _ok_transport(), clock=clock, sleep=clock.sleep, wait_for_budget={"f95"}
+    )
     for _ in range(91):
         pacer.request("f95", "https://f95zone.to/a")
     times = state.request_times("f95", 0)
@@ -85,16 +93,25 @@ def test_rate_limit_body_pauses_the_source(tmp_path):
     state = StateStore(str(tmp_path / "state.sqlite"))
     pacer = Pacer(state, transport, clock=clock, sleep=clock.sleep)
     with pytest.raises(RateLimited):
-        pacer.request("f95", "https://f95zone.to/a", is_rate_limited=lambda response: True)
+        pacer.request(
+            "f95", "https://f95zone.to/a", is_rate_limited=lambda response: True
+        )
 
 
 def test_user_agent_is_on_every_request(tmp_path):
     clock = FakeClock()
     transport = _ok_transport()
-    pacer = Pacer(StateStore(str(tmp_path / "state.sqlite")), transport, clock=clock, sleep=clock.sleep)
+    pacer = Pacer(
+        StateStore(str(tmp_path / "state.sqlite")),
+        transport,
+        clock=clock,
+        sleep=clock.sleep,
+    )
     for site in ("f95", "dlsite", "ryuugames"):
         pacer.request(site, f"https://example.invalid/{site}")
-    pacer.request("vndb", "https://api.vndb.org/kana/vn", method="POST", json_body={"a": 1})
+    pacer.request(
+        "vndb", "https://api.vndb.org/kana/vn", method="POST", json_body={"a": 1}
+    )
     assert transport.requests
     for request in transport.requests:
         assert request.headers["User-Agent"] == USER_AGENT
@@ -103,7 +120,11 @@ def test_user_agent_is_on_every_request(tmp_path):
 
 def test_timeouts_and_5xx_are_retried_within_the_budget(tmp_path):
     clock = FakeClock()
-    answers = [ConnectionError("timed out"), json_response({}, status=502), json_response({"ok": True})]
+    answers = [
+        ConnectionError("timed out"),
+        json_response({}, status=502),
+        json_response({"ok": True}),
+    ]
 
     def transport(request):
         answer = answers.pop(0)
@@ -124,7 +145,12 @@ def test_retries_give_up_after_three_attempts(tmp_path):
     def transport(request):
         raise ConnectionError("down")
 
-    pacer = Pacer(StateStore(str(tmp_path / "state.sqlite")), transport, clock=clock, sleep=clock.sleep)
+    pacer = Pacer(
+        StateStore(str(tmp_path / "state.sqlite")),
+        transport,
+        clock=clock,
+        sleep=clock.sleep,
+    )
     with pytest.raises(ConnectionError):
         pacer.request("dlsite", "https://www.dlsite.com/x")
     assert pacer.sent["dlsite"] == 3
@@ -166,7 +192,10 @@ def test_only_sites_with_a_proxy_send_through_it(tmp_path):
     )
     pacer.request("dlsite", "https://www.dlsite.com/maniax/")
     pacer.request("f95", "https://f95zone.to/a")
-    assert [request.proxy for request in transport.requests] == ["http://127.0.0.1:8888", None]
+    assert [request.proxy for request in transport.requests] == [
+        "http://127.0.0.1:8888",
+        None,
+    ]
 
 
 def test_urllib_transport_sends_through_the_proxy():
@@ -191,7 +220,12 @@ def test_urllib_transport_sends_through_the_proxy():
     try:
         proxy = f"http://127.0.0.1:{server.server_address[1]}"
         response = urllib_transport(
-            Request("GET", "http://catalog.invalid/page", {"User-Agent": USER_AGENT}, proxy=proxy)
+            Request(
+                "GET",
+                "http://catalog.invalid/page",
+                {"User-Agent": USER_AGENT},
+                proxy=proxy,
+            )
         )
     finally:
         server.shutdown()
@@ -209,7 +243,12 @@ def test_site_proxies_come_from_the_environment(monkeypatch):
 
 @pytest.mark.parametrize(
     "value",
-    ["socks5://127.0.0.1:1080", "http://user:secret@127.0.0.1:8888", "127.0.0.1:8888", "http:///x"],
+    [
+        "socks5://127.0.0.1:1080",
+        "http://user:secret@127.0.0.1:8888",
+        "127.0.0.1:8888",
+        "http:///x",
+    ],
 )
 def test_site_proxies_refuse_unsupported_urls(monkeypatch, value):
     monkeypatch.setenv("WLIB_CATALOG_DLSITE_PROXY", value)

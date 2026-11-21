@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """TypedDicts and Protocols for the ``Api`` mixins."""
+
 from __future__ import annotations
 
 from typing import Literal, NotRequired, Protocol, TypedDict

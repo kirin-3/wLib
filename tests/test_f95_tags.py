@@ -86,7 +86,11 @@ def test_thread_adds_a_tag_the_user_added():
 def test_f95_adds_and_then_removes_a_user_tag():
     first = _merge3("rpg, sandbox", "rpg", "rpg, sandbox", True)
     assert first == ("rpg, sandbox", "rpg, sandbox", "sandbox")
-    assert _merge3(first[0], first[1], "rpg", True, first[2]) == ("rpg, sandbox", "rpg", "")
+    assert _merge3(first[0], first[1], "rpg", True, first[2]) == (
+        "rpg, sandbox",
+        "rpg",
+        "",
+    )
 
 
 def test_f95_keeps_listing_a_user_tag():
@@ -152,10 +156,13 @@ def test_split_tags_keeps_null_and_cleans_values():
 
 # The F95 account import adds "Watched on F95"; "Refresh F95 info" must keep it.
 
+
 def _import_watched(thread_id: int) -> None:
     from core import f95_lists
 
-    entry = f95_lists.ListEntry(str(thread_id), "G [v1] [D]", "G", "1", "D", "", [], ["watched"])
+    entry = f95_lists.ListEntry(
+        str(thread_id), "G [v1] [D]", "G", "1", "D", "", [], ["watched"]
+    )
     _ = f95_lists.apply_import([entry], catalog_lookup=lambda _ids: {})
 
 
@@ -218,9 +225,15 @@ def test_update_check_backfill_adds_thread_tags_to_imported_game():
     assert game is not None
     game_id = int(str(game["id"]))
     assert (get_game(game_id) or {}).get("f95_tags") == ""
-    assert Api()._backfill_missing_metadata_for_url(url, {"tags": ["3dcg", "sandbox"]}) == 1  # pyright: ignore[reportPrivateUsage]
+    assert (
+        Api()._backfill_missing_metadata_for_url(url, {"tags": ["3dcg", "sandbox"]})
+        == 1
+    )  # pyright: ignore[reportPrivateUsage]
     full = get_game(game_id) or {}
-    assert (full["tags"], full["f95_tags"]) == ("3dcg, sandbox, Watched on F95", "3dcg, sandbox")
+    assert (full["tags"], full["f95_tags"]) == (
+        "3dcg, sandbox, Watched on F95",
+        "3dcg, sandbox",
+    )
     # A later refresh keeps the list tag.
     assert _refresh(13, "3dcg, sandbox, rpg") == "3dcg, sandbox, rpg, Watched on F95"
 
@@ -232,7 +245,12 @@ def test_backfill_keeps_tags_of_games_without_a_baseline():
     init_db()
     game_id = add_game("Old", "", "https://f95zone.to/threads/14/", tags="mine")
     assert game_id is not None
-    assert Api()._backfill_missing_metadata_for_url("https://f95zone.to/threads/14/", {"tags": ["3dcg"]}) == 0  # pyright: ignore[reportPrivateUsage]
+    assert (
+        Api()._backfill_missing_metadata_for_url(
+            "https://f95zone.to/threads/14/", {"tags": ["3dcg"]}
+        )
+        == 0
+    )  # pyright: ignore[reportPrivateUsage]
     assert (get_game(game_id) or {})["tags"] == "mine"
 
 
@@ -244,7 +262,9 @@ def test_refresh_keeps_a_user_tag_that_f95_adds_and_removes():
     url = "https://f95zone.to/threads/15/"
     game_id = add_game("Kept", "", url, tags="rpg")
     assert game_id is not None
-    _ = update_game(game_id, {"f95_tags": "rpg", "tags": "rpg, sandbox", "tags_user_edited": 1})
+    _ = update_game(
+        game_id, {"f95_tags": "rpg", "tags": "rpg, sandbox", "tags_user_edited": 1}
+    )
     api = Api()
     first = api._refresh_f95_info_for_url(url, {"tags": "rpg, sandbox"})  # pyright: ignore[reportPrivateUsage]
     assert first[game_id] == {"f95_tags": "rpg", "user_f95_tags": ""}
@@ -256,7 +276,11 @@ def test_refresh_keeps_a_user_tag_that_f95_adds_and_removes():
     )
     second = api._refresh_f95_info_for_url(url, {"tags": "rpg"})  # pyright: ignore[reportPrivateUsage]
     game = get_game(game_id) or {}
-    assert (game["tags"], game["f95_tags"], game["user_f95_tags"]) == ("rpg, sandbox", "rpg", "")
+    assert (game["tags"], game["f95_tags"], game["user_f95_tags"]) == (
+        "rpg, sandbox",
+        "rpg",
+        "",
+    )
 
     # Undo restores all three tag columns.
     assert second[game_id] == {"f95_tags": "rpg, sandbox", "user_f95_tags": "sandbox"}
@@ -278,7 +302,10 @@ def test_refresh_undo_restores_null_kept_tags_as_empty():
     game_id = add_game("Null", "", url, tags="rpg, sandbox")
     assert game_id is not None
     conn = get_connection()
-    _ = conn.execute("UPDATE games SET f95_tags = 'rpg', user_f95_tags = NULL WHERE id = ?", (game_id,))
+    _ = conn.execute(
+        "UPDATE games SET f95_tags = 'rpg', user_f95_tags = NULL WHERE id = ?",
+        (game_id,),
+    )
     conn.commit()
     conn.close()
     changes = Api()._refresh_f95_info_for_url(url, {"tags": "rpg, sandbox"})  # pyright: ignore[reportPrivateUsage]

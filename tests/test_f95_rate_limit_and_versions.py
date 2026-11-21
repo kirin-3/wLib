@@ -36,7 +36,9 @@ def recording_lock(monkeypatch: pytest.MonkeyPatch) -> _RecordingLock:
 
 
 def _fake_bridge_fetch(status: int) -> Callable[..., extension_bridge.BridgeResponse]:
-    def fetch(url: str, *_args: object, **_kwargs: object) -> extension_bridge.BridgeResponse:
+    def fetch(
+        url: str, *_args: object, **_kwargs: object
+    ) -> extension_bridge.BridgeResponse:
         return extension_bridge.BridgeResponse(status=status, final_url=url, body="")
 
     return fetch
@@ -54,7 +56,9 @@ def test_extension_fetch_429_starts_cooldown_before_the_slot_is_released(
     monkeypatch: pytest.MonkeyPatch, recording_lock: _RecordingLock
 ) -> None:
     monkeypatch.setattr(extension_bridge, "fetch", _fake_bridge_fetch(429))
-    monkeypatch.setattr(extension_bridge, "record_fetch_outcome", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        extension_bridge, "record_fetch_outcome", lambda *_args, **_kwargs: None
+    )
     status, _ = scraper_module._f95_get_via_extension("https://f95zone.to/threads/1/")  # pyright: ignore[reportPrivateUsage]
     assert status == 429
     assert recording_lock.cooldown_at_release[-1] > 0
@@ -65,7 +69,9 @@ def test_list_page_429_starts_cooldown_before_the_slot_is_released(
 ) -> None:
     monkeypatch.setattr(extension_bridge, "list_fetch_unavailable_reason", lambda: None)
     monkeypatch.setattr(extension_bridge, "fetch_list_page", _fake_bridge_fetch(429))
-    status, _, _ = f95_lists.fetch_page_via_extension("https://f95zone.to/watched/threads")
+    status, _, _ = f95_lists.fetch_page_via_extension(
+        "https://f95zone.to/watched/threads"
+    )
     assert status == 429
     assert recording_lock.cooldown_at_release[-1] > 0
     # The next queued request is refused during the cooldown.
@@ -84,12 +90,16 @@ def test_list_page_429_starts_cooldown_before_the_slot_is_released(
         ("<p>Release: 0.5.</p>", "0.5"),
     ],
 )
-def test_release_year_with_sentence_punctuation_is_not_a_version(body: str, expected: str) -> None:
+def test_release_year_with_sentence_punctuation_is_not_a_version(
+    body: str, expected: str
+) -> None:
     assert Scraper()._extract_version_from_post(body) == expected  # pyright: ignore[reportPrivateUsage]
 
 
 def test_list_cell_version_wins_over_a_title_placeholder() -> None:
-    entry = entry_from_row(ListRow("1", "Game [Unknown] [Dev]", list_version="v2.1"), "watched")
+    entry = entry_from_row(
+        ListRow("1", "Game [Unknown] [Dev]", list_version="v2.1"), "watched"
+    )
     assert entry.version == "2.1"
 
 
@@ -100,8 +110,14 @@ def test_title_placeholder_is_kept_when_nothing_better_exists() -> None:
 
 def test_catalog_placeholder_does_not_hide_the_list_version() -> None:
     entry = ListEntry(
-        thread_id="1", raw_title="Game", title="Game", version="2.1",
-        developer="", engine="", prefixes=[], lists=["watched"],
+        thread_id="1",
+        raw_title="Game",
+        title="Game",
+        version="2.1",
+        developer="",
+        engine="",
+        prefixes=[],
+        lists=["watched"],
     )
     values = f95_lists._catalog_values(entry, {"version": "Unknown"})  # pyright: ignore[reportPrivateUsage]
     assert values["version"] == "2.1"

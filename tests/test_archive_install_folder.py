@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Installing a game folder downloaded by a torrent."""
+
 import json
 import time
 from pathlib import Path
@@ -18,7 +19,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "db.sqlite"))
     database.init_db()
-    sup = TorrentSupervisor(command=lambda: (["true"], {}), free_space_fn=lambda p: 10**12, options=dict)
+    sup = TorrentSupervisor(
+        command=lambda: (["true"], {}), free_space_fn=lambda p: 10**12, options=dict
+    )
     monkeypatch.setattr(torrents, "supervisor", sup)
     return sup
 
@@ -31,16 +34,29 @@ def make_download(tmp_path, wrapper="Game-0.8-pc", files=None, phase="seeding"):
         path = game / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(body)
-    (folder / "state.json").write_text(json.dumps({
-        "job_id": "j1", "game_id": 1, "size": 10, "phase": phase, "updated": time.time(),
-    }))
+    (folder / "state.json").write_text(
+        json.dumps(
+            {
+                "job_id": "j1",
+                "game_id": 1,
+                "size": 10,
+                "phase": phase,
+                "updated": time.time(),
+            }
+        )
+    )
     return folder, game
 
 
 def run(source, lib, **extra):
     return install_archive(
-        str(source), library_folder=str(lib), pattern="{title}/{version}", title="Game", version="0.8",
-        source_kind="folder", **extra,
+        str(source),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="0.8",
+        source_kind="folder",
+        **extra,
     )
 
 
@@ -53,10 +69,16 @@ def test_folder_install_flattens_wrapper_and_points_to_new_exe(tmp_path, env):
     lib.mkdir()
     result = run(folder / "data", lib)
     dest = lib / "Game" / "0.8"
-    assert result["success"] is True and (dest / "Game.exe").is_file() and not (dest / "Game-0.8-pc").exists()
+    assert (
+        result["success"] is True
+        and (dest / "Game.exe").is_file()
+        and not (dest / "Game-0.8-pc").exists()
+    )
     assert (dest / "sub" / "readme.txt").read_text() == "hi"
     game_row = database.get_all_games()[0]
-    assert game_row["exe_path"] == str(dest / "Game.exe") and game_row["version"] == "0.8"
+    assert (
+        game_row["exe_path"] == str(dest / "Game.exe") and game_row["version"] == "0.8"
+    )
 
 
 def test_folder_outside_staging_is_refused(tmp_path):
@@ -85,7 +107,10 @@ def test_not_enough_space_copies_nothing(tmp_path, env, monkeypatch):
     env.load()
     lib = tmp_path / "lib"
     lib.mkdir()
-    monkeypatch.setattr("core.archive_install.shutil.disk_usage", lambda p: type("U", (), {"free": 10})())
+    monkeypatch.setattr(
+        "core.archive_install.shutil.disk_usage",
+        lambda p: type("U", (), {"free": 10})(),
+    )
     with pytest.raises(ArchiveInstallError, match="Not enough free space"):
         run(folder / "data", lib)
     assert (folder / "data" / "Game-0.8-pc" / "Game.exe").is_file()
@@ -141,12 +166,20 @@ def test_folder_update_can_be_retried_with_the_chosen_launch_file(tmp_path, env)
     game_id = database.add_game("DDB", str(dest / "Game.exe"), version="1.0")
     # Two wrapper levels: one is flattened, the next is still a single folder.
     folder, game = make_download(
-        tmp_path, wrapper="Wrap/Game", phase="ended",
+        tmp_path,
+        wrapper="Wrap/Game",
+        phase="ended",
         files={"PC/DDB/Game.exe": b"n", "Mac/DDB/Game.exe": b"m"},
     )
     env.load()
-    options = {"library_folder": str(tmp_path / "lib"), "pattern": "{title}", "title": "Other", "version": "2.0",
-               "game_id": game_id, "source_kind": "folder"}
+    options = {
+        "library_folder": str(tmp_path / "lib"),
+        "pattern": "{title}",
+        "title": "Other",
+        "version": "2.0",
+        "game_id": game_id,
+        "source_kind": "folder",
+    }
     with pytest.raises(NoLauncherChosenError) as info:
         install_archive(str(folder / "data"), **options)
     chosen = next(c for c in info.value.candidates if c.endswith("PC/DDB/Game.exe"))
@@ -165,11 +198,28 @@ def test_seeding_archive_survives_install_even_with_delete_ticked(tmp_path, env)
     archive = folder / "data" / "Game-0.8.zip"
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("Game.exe", b"x")
-    (folder / "state.json").write_text(json.dumps({"job_id": "j2", "game_id": 1, "size": 5, "phase": "seeding", "updated": time.time()}))
+    (folder / "state.json").write_text(
+        json.dumps(
+            {
+                "job_id": "j2",
+                "game_id": 1,
+                "size": 5,
+                "phase": "seeding",
+                "updated": time.time(),
+            }
+        )
+    )
     env.load()
     lib = tmp_path / "lib"
     lib.mkdir()
-    result = install_archive(str(archive), library_folder=str(lib), pattern="{title}/{version}", title="Game", version="0.8", delete_archive=True)
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="0.8",
+        delete_archive=True,
+    )
     assert result["success"] is True and archive.is_file()
 
 
@@ -181,12 +231,28 @@ def test_ended_torrent_archive_deleted_when_install_releases_it(tmp_path, env):
     archive = folder / "data" / "Game-0.8.zip"
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("Game.exe", b"x")
-    (folder / "state.json").write_text(json.dumps({"job_id": "j3", "game_id": 1, "size": 5, "phase": "ended", "updated": time.time()}))
+    (folder / "state.json").write_text(
+        json.dumps(
+            {
+                "job_id": "j3",
+                "game_id": 1,
+                "size": 5,
+                "phase": "ended",
+                "updated": time.time(),
+            }
+        )
+    )
     env.load()
     env.mark_open(str(archive))
     lib = tmp_path / "lib"
     lib.mkdir()
-    assert install_archive(str(archive), library_folder=str(lib), pattern="{title}/{version}", title="Game", version="0.8")["success"]
+    assert install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="0.8",
+    )["success"]
     assert folder.exists()
     env.release(str(archive), installed=True)
     assert not folder.exists()
@@ -200,7 +266,14 @@ def test_regular_archive_still_deleted_on_request(tmp_path):
         zf.writestr("Game.exe", b"x")
     lib = tmp_path / "lib"
     lib.mkdir()
-    install_archive(str(archive), library_folder=str(lib), pattern="{title}/{version}", title="Game", version="0.8", delete_archive=True)
+    install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="0.8",
+        delete_archive=True,
+    )
     assert not archive.exists()
 
 
@@ -216,17 +289,28 @@ def test_api_install_holds_then_releases_the_download(tmp_path, env):
     update_setting("library_folder", str(lib))
     api = Api()
     info = api.inspect_archive(str(folder / "data"))
-    assert info["success"] is True and info["source_kind"] == "folder" and info["torrent_seeding"] is True
+    assert (
+        info["success"] is True
+        and info["source_kind"] == "folder"
+        and info["torrent_seeding"] is True
+    )
     assert info["tool_error"] == ""
     assert api.inspect_archive(str(tmp_path))["success"] is False
-    result = api.install_archive({
-        "archive_path": str(folder / "data"), "source_kind": "folder", "library_folder": str(lib),
-        "pattern": "{title}/{version}", "title": "Game", "version": "0.8",
-    })
+    result = api.install_archive(
+        {
+            "archive_path": str(folder / "data"),
+            "source_kind": "folder",
+            "library_folder": str(lib),
+            "pattern": "{title}/{version}",
+            "title": "Game",
+            "version": "0.8",
+        }
+    )
     assert result["success"] is True, result
-    assert (lib / "Game" / "0.8" / "Game.exe").is_file() and (game / "Game.exe").is_file()
+    assert (lib / "Game" / "0.8" / "Game.exe").is_file() and (
+        game / "Game.exe"
+    ).is_file()
     assert not env._open  # pyright: ignore[reportPrivateUsage]
-
 
 
 class _Crash(BaseException):
@@ -301,11 +385,16 @@ def test_successful_move_install_leaves_no_record(tmp_path, env):
 
 
 def test_same_drive_move_needs_no_free_space(tmp_path, env, monkeypatch):
-    folder, game = make_download(tmp_path, phase="ended", files={"Game.exe": b"x" * 1000})
+    folder, game = make_download(
+        tmp_path, phase="ended", files={"Game.exe": b"x" * 1000}
+    )
     env.load()
     lib = tmp_path / "lib"
     lib.mkdir()
-    monkeypatch.setattr("core.archive_install.shutil.disk_usage", lambda p: type("U", (), {"free": 10})())
+    monkeypatch.setattr(
+        "core.archive_install.shutil.disk_usage",
+        lambda p: type("U", (), {"free": 10})(),
+    )
     result = run(folder / "data", lib)
     assert result["success"] is True
     assert (lib / "Game" / "0.8" / "Game.exe").is_file() and not game.exists()
@@ -314,7 +403,9 @@ def test_same_drive_move_needs_no_free_space(tmp_path, env, monkeypatch):
 def test_move_that_falls_back_to_copy_checks_free_space(tmp_path, env, monkeypatch):
     import core.archive_install as ai
 
-    folder, game = make_download(tmp_path, phase="ended", files={"Game.exe": b"x" * 1000})
+    folder, game = make_download(
+        tmp_path, phase="ended", files={"Game.exe": b"x" * 1000}
+    )
     env.load()
     lib = tmp_path / "lib"
     lib.mkdir()
@@ -326,7 +417,10 @@ def test_move_that_falls_back_to_copy_checks_free_space(tmp_path, env, monkeypat
         return real_replace(src, dst)
 
     monkeypatch.setattr(ai.os, "replace", no_cross_rename)
-    monkeypatch.setattr("core.archive_install.shutil.disk_usage", lambda p: type("U", (), {"free": 10})())
+    monkeypatch.setattr(
+        "core.archive_install.shutil.disk_usage",
+        lambda p: type("U", (), {"free": 10})(),
+    )
     with pytest.raises(ArchiveInstallError, match="Not enough free space"):
         run(folder / "data", lib)
     assert (game / "Game.exe").is_file()

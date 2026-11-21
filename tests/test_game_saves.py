@@ -130,9 +130,7 @@ def test_same_second_backups_stay_in_creation_order_and_respect_retention(tmp_pa
     _ = _write(saves / "a.save")
     root = tmp_path / "backups"
 
-    names = [
-        backup_saves(str(saves), str(root), 1, 1, now=NOW).name for _ in range(3)
-    ]
+    names = [backup_saves(str(saves), str(root), 1, 1, now=NOW).name for _ in range(3)]
 
     assert names == [
         "2026-10-23_12-00-00",
@@ -601,9 +599,7 @@ def test_windows_local_low_does_not_settle_for_the_developer_folder(tmp_path):
     saves = tmp_path / "home" / "AppData" / "LocalLow" / "Dev" / "Zelda"
     _write(saves / "save.dat")
 
-    results = detect_save_locations(
-        "/games/Zelda/Game.exe", "Zelda", windows=True
-    )
+    results = detect_save_locations("/games/Zelda/Game.exe", "Zelda", windows=True)
 
     assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
     assert str(saves.parent) not in {r["path"] for r in results}
@@ -630,9 +626,7 @@ def test_windows_local_low_matches_an_exact_specific_exe_name(tmp_path):
 
 def test_wine_prefix_documents_my_games_prefers_the_game_folder(tmp_path):
     prefix = tmp_path / "prefix"
-    container = (
-        prefix / "drive_c" / "users" / "steamuser" / "Documents" / "My Games"
-    )
+    container = prefix / "drive_c" / "users" / "steamuser" / "Documents" / "My Games"
     saves = container / "Zelda"
     _write(saves / "save.dat")
     _write(container / "OtherGame" / "other.dat")
@@ -652,24 +646,14 @@ def test_windows_documents_my_games_container_is_not_a_saves_folder(tmp_path):
     container = tmp_path / "home" / "Documents" / "My Games"
     (container / "OtherGame").mkdir(parents=True)
 
-    results = detect_save_locations(
-        "/games/Zelda/Game.exe", "Zelda", windows=True
-    )
+    results = detect_save_locations("/games/Zelda/Game.exe", "Zelda", windows=True)
 
     assert results == []
 
 
 def test_wine_prefix_keeps_a_game_named_appdata_folder(tmp_path):
     prefix = tmp_path / "prefix"
-    saves = (
-        prefix
-        / "drive_c"
-        / "users"
-        / "steamuser"
-        / "AppData"
-        / "Roaming"
-        / "Game"
-    )
+    saves = prefix / "drive_c" / "users" / "steamuser" / "AppData" / "Roaming" / "Game"
     _write(saves / "save.dat")
 
     results = detect_save_locations(
@@ -707,7 +691,9 @@ def test_sandbox_renpy_detection_includes_real_and_sandbox(tmp_path, monkeypatch
 @pytest.mark.skipif(os.name == "nt", reason="Wine prefixes are Linux-only")
 def test_sandboxed_wine_game_saves_are_found_in_its_own_prefix(tmp_path, monkeypatch):
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr(game_saves, "get_setting", lambda _key: str(tmp_path / "global"))
+    monkeypatch.setattr(
+        game_saves, "get_setting", lambda _key: str(tmp_path / "global")
+    )
     saves = (
         tmp_path
         / "data/sandbox/12/prefix/drive_c/users/steamuser/AppData/Roaming/Zelda"
@@ -716,7 +702,11 @@ def test_sandboxed_wine_game_saves_are_found_in_its_own_prefix(tmp_path, monkeyp
     _write(tmp_path / "global/drive_c/users/steamuser/AppData/Roaming/Zelda/save.dat")
 
     locations = detect_save_locations(
-        "/games/Zelda/Game.exe", "Zelda", windows=False, game_id=12, sandbox_enabled=True
+        "/games/Zelda/Game.exe",
+        "Zelda",
+        windows=False,
+        game_id=12,
+        sandbox_enabled=True,
     )
 
     assert resolve_effective_folder("", locations) == str(saves)
@@ -742,10 +732,18 @@ def test_profile_folders_need_a_real_name_match(tmp_path):
     assert [os.path.basename(r["path"]) for r in results] == ["OfficeAffairs"]
 
 
-@pytest.mark.parametrize(("exe", "own"), [("Game.exe", "Game-Saves"), ("Launcher.exe", "launcher")])
+@pytest.mark.parametrize(
+    ("exe", "own"), [("Game.exe", "Game-Saves"), ("Launcher.exe", "launcher")]
+)
 def test_generic_exe_name_does_not_match_other_apps(tmp_path, exe, own):
     home = tmp_path / "home"
-    for name in ("GameMaker", "GameMakerStudio2", "PrismLauncher", "heroic-launcher", own):
+    for name in (
+        "GameMaker",
+        "GameMakerStudio2",
+        "PrismLauncher",
+        "heroic-launcher",
+        own,
+    ):
         (home / ".config" / name).mkdir(parents=True, exist_ok=True)
     results = detect_save_locations(
         f"/games/x/{exe}", "Zq", windows=False, _profile_home=str(home)
@@ -759,7 +757,10 @@ def test_my_documents_link_is_not_a_second_location(tmp_path):
     saves.mkdir(parents=True)
     os.symlink("Documents", user / "My Documents")
     results = detect_save_locations(
-        "/games/z/zq.exe", "Zelda Quest", custom_prefix=str(tmp_path / "prefix"), windows=False,
+        "/games/z/zq.exe",
+        "Zelda Quest",
+        custom_prefix=str(tmp_path / "prefix"),
+        windows=False,
         _profile_home=str(tmp_path / "nohome"),
     )
     assert len([r for r in results if r["eligible"]]) == 1
@@ -784,21 +785,31 @@ def test_windows_finds_saves_in_a_moved_documents_folder(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("sandboxed", [True, False])
-def test_builtin_web_player_storage_is_a_save_location(tmp_path, monkeypatch, sandboxed):
+def test_builtin_web_player_storage_is_a_save_location(
+    tmp_path, monkeypatch, sandboxed
+):
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
     storage = tmp_path / "data/web-player/5"
     _write(storage / "data/Local Storage/leveldb/000003.log")
     locations = detect_save_locations(
-        "/games/web/index.html", "Web", windows=False, game_id=5,
-        sandbox_enabled=sandboxed, web_player=True,
+        "/games/web/index.html",
+        "Web",
+        windows=False,
+        game_id=5,
+        sandbox_enabled=sandboxed,
+        web_player=True,
     )
     assert {"path": str(storage), "type": "Web Player"}.items() <= locations[0].items()
     assert locations[0]["eligible"]
     assert resolve_effective_folder("", locations) == str(storage)
     # A System browser game keeps its saves outside wLib's data folder.
     locations = detect_save_locations(
-        "/games/web/index.html", "Web", windows=False, game_id=5,
-        sandbox_enabled=sandboxed, web_player=False,
+        "/games/web/index.html",
+        "Web",
+        windows=False,
+        game_id=5,
+        sandbox_enabled=sandboxed,
+        web_player=False,
     )
     assert str(storage) not in {item["path"] for item in locations}
 
@@ -836,20 +847,30 @@ def test_one_title_word_does_not_match_a_longer_name(tmp_path):
     results = detect_save_locations(
         "/games/m/tm.exe", "The Mansion", windows=False, _profile_home=str(home)
     )
-    assert sorted(os.path.basename(r["path"]) for r in results) == ["Mansion", "TheMansion-Saves"]
+    assert sorted(os.path.basename(r["path"]) for r in results) == [
+        "Mansion",
+        "TheMansion-Saves",
+    ]
 
 
 def test_renpy_exe_name_matches_versioned_and_split_folder_names(tmp_path):
     base = tmp_path / ".renpy"
     for name in ("MyGame-0.5-1234", "My_Game-12", "Mygamer-1", "Other-1"):
         (base / name).mkdir(parents=True)
-    found = sorted(os.path.basename(p) for p in game_saves._renpy_children(str(base), "", "mygame"))
+    found = sorted(
+        os.path.basename(p) for p in game_saves._renpy_children(str(base), "", "mygame")
+    )
     assert found == ["MyGame-0.5-1234", "My_Game-12"]
 
 
 @pytest.mark.parametrize(
     ("entry", "expected"),
-    [("CaribdisEternum", True), ("Eternum Saves", True), ("Eternum v2", True), ("Eternum Of Souls", False)],
+    [
+        ("CaribdisEternum", True),
+        ("Eternum Saves", True),
+        ("Eternum v2", True),
+        ("Eternum Of Souls", False),
+    ],
 )
 def test_one_title_word_allows_a_developer_prefix_only(entry, expected):
     assert game_saves._name_matches_game(entry, "Eternum", "game") is expected

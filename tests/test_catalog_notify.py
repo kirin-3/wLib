@@ -9,7 +9,13 @@ from catalog_fakes import FakeTransport, make_context
 from catalog_server.__main__ import main
 from catalog_server.config import discord_webhook_from_env
 from catalog_server.net import Response
-from catalog_server.notify import COLOR_FAILED, COLOR_OK, COLOR_WARNING, build_report, send_report
+from catalog_server.notify import (
+    COLOR_FAILED,
+    COLOR_OK,
+    COLOR_WARNING,
+    build_report,
+    send_report,
+)
 from catalog_server.runner import RunResult, SourceResult, run
 from catalog_server.sources.f95_threads import NO_LOGIN as F95_NO_LOGIN
 from catalog_server.sources.lc import NO_LOGIN as LC_NO_LOGIN
@@ -42,8 +48,11 @@ def test_webhook_setting_accepts_only_discord_webhooks(monkeypatch):
     assert discord_webhook_from_env() is None
     monkeypatch.setenv("WLIB_CATALOG_DISCORD_WEBHOOK", f" {WEBHOOK} ")
     assert discord_webhook_from_env() == WEBHOOK
-    for bad in ("http://discord.com/api/webhooks/1/t", "https://evil.example/api/webhooks/1/t",
-                "https://discord.com/channels/1"):
+    for bad in (
+        "http://discord.com/api/webhooks/1/t",
+        "https://evil.example/api/webhooks/1/t",
+        "https://discord.com/channels/1",
+    ):
         monkeypatch.setenv("WLIB_CATALOG_DISCORD_WEBHOOK", bad)
         with pytest.raises(ValueError) as error:
             discord_webhook_from_env()
@@ -72,9 +81,13 @@ def test_login_loss_and_missing_cookie_are_problems():
         f95_threads=SourceResult("error", detail=f"ValueError: {F95_NO_LOGIN}"),
         lc=SourceResult("error", detail=f"LcLoginError: {LC_NO_LOGIN} (HTTP 403)"),
         dlsite=SourceResult("rate_limited", detail="HTTP 429"),
-        vndb=SourceResult("budget", detail="request budget used up; continues next run"),
+        vndb=SourceResult(
+            "budget", detail="request budget used up; continues next run"
+        ),
     )
-    payload = build_report(result, sources=SOURCES, skipped={"lc_threads": "it needs the LC login cookie"})
+    payload = build_report(
+        result, sources=SOURCES, skipped={"lc_threads": "it needs the LC login cookie"}
+    )
     assert _embed(payload)["color"] == COLOR_WARNING
     problems = _field(payload, "Problems")
     assert "🔑 **f95_threads** lost its login" in problems
@@ -89,7 +102,9 @@ def test_unpublished_run_is_red_with_the_reason():
     payload = build_report(result, sources=SOURCES, skipped={})
     assert _embed(payload)["title"] == "Catalog not published"
     assert _embed(payload)["color"] == COLOR_FAILED
-    assert "Publish refused: f95 dropped from 1000 to 1 rows" in _field(payload, "Problems")
+    assert "Publish refused: f95 dropped from 1000 to 1 rows" in _field(
+        payload, "Problems"
+    )
 
 
 def test_long_details_fit_discord_limits():
@@ -118,8 +133,12 @@ def test_send_report_posts_json_and_never_raises(caplog):
 def test_run_reports_new_and_removed_rows(tmp_path):
     ctx, clock = make_context(tmp_path, FakeTransport())
     ctx.catalog.upsert(
-        "ryuu_posts", "post_id",
-        [{"post_id": n, "title": "T", "raw_title": "T", "url": f"u{n}"} for n in (1, 2)],
+        "ryuu_posts",
+        "post_id",
+        [
+            {"post_id": n, "title": "T", "raw_title": "T", "url": f"u{n}"}
+            for n in (1, 2)
+        ],
         "2026-01-01T00:00:00Z",
     )
 
@@ -127,18 +146,34 @@ def test_run_reports_new_and_removed_rows(tmp_path):
         name = "ryuugames"
 
         def incremental(self, ctx):
-            ctx.upsert("ryuu_posts", "post_id", [
-                {"post_id": n, "title": "T", "raw_title": "T", "url": f"u{n}"} for n in (2, 3)
-            ])
-            ctx.catalog.conn.execute("UPDATE ryuu_posts SET removed_at = ? WHERE post_id = 1", (ctx.now(),))
+            ctx.upsert(
+                "ryuu_posts",
+                "post_id",
+                [
+                    {"post_id": n, "title": "T", "raw_title": "T", "url": f"u{n}"}
+                    for n in (2, 3)
+                ],
+            )
+            ctx.catalog.conn.execute(
+                "UPDATE ryuu_posts SET removed_at = ? WHERE post_id = 1", (ctx.now(),)
+            )
             ctx.catalog.conn.commit()
 
         def sweep_due(self, ctx):
             return False
 
     reports = []
-    run(ctx.catalog, ctx.state, ctx.pacer, {"ryuugames": Adds()}, ["ryuugames"],
-        storage=None, work_dir=str(tmp_path), now=clock.iso, report=reports.append)
+    run(
+        ctx.catalog,
+        ctx.state,
+        ctx.pacer,
+        {"ryuugames": Adds()},
+        ["ryuugames"],
+        storage=None,
+        work_dir=str(tmp_path),
+        now=clock.iso,
+        report=reports.append,
+    )
     outcome = reports[0].sources["ryuugames"]
     assert (outcome.added, outcome.removed, outcome.total) == (1, 1, 2)
 
@@ -149,8 +184,18 @@ def test_run_reports_even_when_the_upload_fails(tmp_path):
     ctx, clock = make_context(tmp_path, FakeTransport())
     reports = []
     with pytest.raises(ConnectionError):
-        run(ctx.catalog, ctx.state, ctx.pacer, {}, [], storage=MemoryStorage(fail_on="v1/"),
-            work_dir=str(tmp_path), now=clock.iso, force_publish=True, report=reports.append)
+        run(
+            ctx.catalog,
+            ctx.state,
+            ctx.pacer,
+            {},
+            [],
+            storage=MemoryStorage(fail_on="v1/"),
+            work_dir=str(tmp_path),
+            now=clock.iso,
+            force_publish=True,
+            report=reports.append,
+        )
     assert reports[0].error == "ConnectionError: upload interrupted"
     assert reports[0].manifest is None
 
@@ -201,4 +246,7 @@ def test_cli_lists_steps_skipped_for_a_missing_cookie(tmp_path, monkeypatch):
 
 def test_cli_refuses_a_bad_webhook(tmp_path, monkeypatch):
     monkeypatch.setenv("WLIB_CATALOG_DISCORD_WEBHOOK", "https://example.com/hook")
-    assert main(["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "none"]) == 2
+    assert (
+        main(["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "none"])
+        == 2
+    )

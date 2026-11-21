@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Launch, stop, Steam, sandbox, launch targets and companion tools."""
+
 from __future__ import annotations
 
 import json
@@ -25,12 +26,12 @@ if TYPE_CHECKING:
     from core.steam_sync import SteamSync
 
 
-
 def _busy_code(reason: str) -> str:
     """`web_media_converting` opens the progress dialog; other busy reasons are a toast."""
     from core.web_video import WEB_MEDIA_BUSY
 
     return "web_media_converting" if reason == WEB_MEDIA_BUSY else "game_busy"
+
 
 class LaunchMixin(ApiBase):
     def open_steam_keyboard(self) -> dict[str, object]:
@@ -162,14 +163,20 @@ class LaunchMixin(ApiBase):
     def get_web_player_exports(self, game_id: int) -> dict[str, object]:
         folder = self._web_player_exports_path(game_id)
         if folder is None:
-            return {"success": False, "error": "Game was not found", "error_code": "game_not_found"}
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
         try:
             if os.path.islink(folder):
                 return {"success": True, "count": 0}
             with os.scandir(folder) as entries:
                 count = sum(
-                    1 for entry in entries
-                    if not entry.name.startswith(".") and not entry.name.endswith(".crdownload")
+                    1
+                    for entry in entries
+                    if not entry.name.startswith(".")
+                    and not entry.name.endswith(".crdownload")
                     and entry.is_file(follow_symlinks=False)
                 )
         except FileNotFoundError:
@@ -181,9 +188,16 @@ class LaunchMixin(ApiBase):
     def open_web_player_exports_folder(self, game_id: int) -> dict[str, object]:
         folder = self._web_player_exports_path(game_id)
         if folder is None:
-            return {"success": False, "error": "Game was not found", "error_code": "game_not_found"}
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
         if os.path.islink(folder) or not os.path.isdir(folder):
-            return {"success": False, "error": "The game's exports folder does not exist."}
+            return {
+                "success": False,
+                "error": "The game's exports folder does not exist.",
+            }
         try:
             return dict(self._open_path_with_system_handler(folder))
         except OSError as exc:
@@ -472,14 +486,26 @@ class LaunchMixin(ApiBase):
 
     def get_performance_tools(self, refresh: bool = False) -> dict[str, bool]:
         if self._performance_tools is None or refresh:
-            self._performance_tools: dict[str, bool] | None = {name: bool(not is_windows() and host_which(binary)) for name, binary in (("gamemode", "gamemoderun"), ("mangohud", "mangohud"), ("gamescope", "gamescope"))}
+            self._performance_tools: dict[str, bool] | None = {
+                name: bool(not is_windows() and host_which(binary))
+                for name, binary in (
+                    ("gamemode", "gamemoderun"),
+                    ("mangohud", "mangohud"),
+                    ("gamescope", "gamescope"),
+                )
+            }
         return dict(self._performance_tools)
 
     def get_gamescope_status(self, refresh: bool = False) -> dict[str, object]:
         """Whether gamescope is on the host, and the install command when it is not."""
         installed = self.get_performance_tools(refresh).get("gamescope", False)
         if installed or is_windows():
-            return {"installed": installed, "command": "", "package_manager": "", "nixos": False}
+            return {
+                "installed": installed,
+                "command": "",
+                "package_manager": "",
+                "nixos": False,
+            }
         from core import gamescope
         from core.host_platform import host_system_layout
 
@@ -503,11 +529,16 @@ class LaunchMixin(ApiBase):
         Uses the Launcher class to execute the game via Proton/Wine.
         """
         from core.game_launch import launch_tracked
+
         if game_id is not None and is_linux():
             from core.steam_runner import runner_pid
 
             if runner_pid(game_id) is not None:
-                return {"success": False, "code": "already_running", "error": "Game is already running"}
+                return {
+                    "success": False,
+                    "code": "already_running",
+                    "error": "Game is already running",
+                }
         if game_id is not None:
             with self._status_lock:
                 busy = self._game_busy_reason(game_id)
@@ -521,17 +552,22 @@ class LaunchMixin(ApiBase):
                     f"window.dispatchEvent(new CustomEvent('wlib-playtime-tick', {{ detail: {json.dumps(detail)} }}))"
                 )
 
-        result = launch_tracked(self.launcher, game_id, {
-            "check_web_media": True,
-            "exe_path": exe_path,
-            "command_line_args": command_line_args,
-            "run_japanese_locale": run_japanese_locale,
-            "run_wayland": run_wayland,
-            "auto_inject_ce": auto_inject_ce,
-            "custom_prefix": custom_prefix,
-            "proton_version": proton_version,
-            "launch_mode": launch_mode,
-        }, on_tick)
+        result = launch_tracked(
+            self.launcher,
+            game_id,
+            {
+                "check_web_media": True,
+                "exe_path": exe_path,
+                "command_line_args": command_line_args,
+                "run_japanese_locale": run_japanese_locale,
+                "run_wayland": run_wayland,
+                "auto_inject_ce": auto_inject_ce,
+                "custom_prefix": custom_prefix,
+                "proton_version": proton_version,
+                "launch_mode": launch_mode,
+            },
+            on_tick,
+        )
         # A conversion that started after the check above is caught by the
         # launcher's reservation.
         if result.get("code") == "game_busy":
@@ -551,12 +587,18 @@ class LaunchMixin(ApiBase):
 
     def _notify_steam_covers(self) -> None:
         if self.window and not self.launcher.shutting_down:
-            self.window.evaluate_js("window.dispatchEvent(new Event('wlib-steam-covers'))")
+            self.window.evaluate_js(
+                "window.dispatchEvent(new Event('wlib-steam-covers'))"
+            )
 
     def get_steam_cover_conversions(self) -> dict[str, object]:
         """Covers Qt cannot decode, for the window to convert to PNG."""
         if not is_linux():
-            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+            return {
+                "success": False,
+                "code": "unsupported",
+                "error": "Steam integration is Linux only",
+            }
         if self.steam_sync is None:
             return {"success": True, "covers": []}
         import base64
@@ -573,14 +615,30 @@ class LaunchMixin(ApiBase):
             except (OSError, KeyError, ValueError):
                 _ = self.steam_sync.finish_conversion(token, None)
                 continue
-            covers.append({"token": token, "type": kind, "data": base64.b64encode(data).decode("ascii")})
+            covers.append(
+                {
+                    "token": token,
+                    "type": kind,
+                    "data": base64.b64encode(data).decode("ascii"),
+                }
+            )
         return {"success": True, "covers": covers}
 
-    def save_steam_cover_png(self, token: object = None, data: object = None) -> dict[str, object]:
+    def save_steam_cover_png(
+        self, token: object = None, data: object = None
+    ) -> dict[str, object]:
         """Store a converted cover; empty data marks the conversion as failed."""
         if not is_linux():
-            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
-        if self.steam_sync is None or not isinstance(token, str) or not isinstance(data, str):
+            return {
+                "success": False,
+                "code": "unsupported",
+                "error": "Steam integration is Linux only",
+            }
+        if (
+            self.steam_sync is None
+            or not isinstance(token, str)
+            or not isinstance(data, str)
+        ):
             return {"success": False, "error": "Invalid cover"}
         import base64
         import binascii
@@ -591,29 +649,46 @@ class LaunchMixin(ApiBase):
                 png = base64.b64decode(data, validate=True)
             except (binascii.Error, ValueError):
                 png = None
-            if png is None or not png.startswith(b"\x89PNG\r\n\x1a\n") or len(png) > 32 * 1024 * 1024:
+            if (
+                png is None
+                or not png.startswith(b"\x89PNG\r\n\x1a\n")
+                or len(png) > 32 * 1024 * 1024
+            ):
                 _ = self.steam_sync.finish_conversion(token, None)
                 return {"success": False, "error": "Invalid PNG"}
         try:
             if not self.steam_sync.finish_conversion(token, png):
-                return {"success": False, "error": "Cover is not waiting for conversion"}
+                return {
+                    "success": False,
+                    "error": "Cover is not waiting for conversion",
+                }
         except OSError as exc:
             return {"success": False, "error": str(exc)}
         return {"success": True}
 
     def get_steam_status(self) -> dict[str, object]:
         if not is_linux():
-            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+            return {
+                "success": False,
+                "code": "unsupported",
+                "error": "Steam integration is Linux only",
+            }
         from core.steam_sync import environment
 
         result = environment()
         result["success"] = True
-        result["sync"] = self.steam_sync.status() if self.steam_sync else {"running": False}
+        result["sync"] = (
+            self.steam_sync.status() if self.steam_sync else {"running": False}
+        )
         return result
 
     def add_wlib_to_steam(self) -> dict[str, object]:
         if not is_linux():
-            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+            return {
+                "success": False,
+                "code": "unsupported",
+                "error": "Steam integration is Linux only",
+            }
         if self.steam_sync is None:
             return {"success": False, "error": "Steam integration is not ready"}
         self.steam_sync.queue_add_wlib()
@@ -621,7 +696,11 @@ class LaunchMixin(ApiBase):
 
     def set_steam_games_mode(self, mode: object = None) -> dict[str, object]:
         if not is_linux():
-            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+            return {
+                "success": False,
+                "code": "unsupported",
+                "error": "Steam integration is Linux only",
+            }
         if mode not in ("off", "all-installed", "marked"):
             return {"success": False, "error": "Invalid Steam games mode"}
         database.update_setting("steam_games_mode", str(mode))
@@ -630,10 +709,16 @@ class LaunchMixin(ApiBase):
 
     def set_steam_account(self, account: object = None) -> dict[str, object]:
         if not is_linux():
-            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+            return {
+                "success": False,
+                "code": "unsupported",
+                "error": "Steam integration is Linux only",
+            }
         from core.steam_sync import environment
 
-        if not isinstance(account, str) or account not in cast(list[str], environment()["accounts"]):
+        if not isinstance(account, str) or account not in cast(
+            list[str], environment()["accounts"]
+        ):
             return {"success": False, "error": "Steam account not found"}
         database.update_setting("steam_account_id", account)
         self._schedule_steam_sync()
@@ -641,32 +726,53 @@ class LaunchMixin(ApiBase):
 
     def sync_steam_shortcuts(self) -> dict[str, object]:
         if not is_linux():
-            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+            return {
+                "success": False,
+                "code": "unsupported",
+                "error": "Steam integration is Linux only",
+            }
         if self.steam_sync is None:
             return {"success": False, "error": "Steam integration is not ready"}
         self.steam_sync.schedule(0, retry_removed=True)
         return {"success": True}
 
-    def set_game_steam_shortcut(self, game_id: object = None, enabled: object = None) -> dict[str, object]:
+    def set_game_steam_shortcut(
+        self, game_id: object = None, enabled: object = None
+    ) -> dict[str, object]:
         if not is_linux():
-            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+            return {
+                "success": False,
+                "code": "unsupported",
+                "error": "Steam integration is Linux only",
+            }
         from core.steam_sync import environment
 
         game_id = self._coerce_db_id(game_id)
-        if game_id is None or database.get_game(game_id) is None or not isinstance(enabled, bool):
+        if (
+            game_id is None
+            or database.get_game(game_id) is None
+            or not isinstance(enabled, bool)
+        ):
             return {"success": False, "error": "Invalid game or mark"}
         _ = database.update_game(game_id, {"steam_shortcut": enabled})
         account = str(environment()["account_id"])
         if enabled and account:
             links = database.list_steam_shortcuts(account)
-            if any(link["game_id"] == game_id and link["state"] == "user_removed" for link in links):
+            if any(
+                link["game_id"] == game_id and link["state"] == "user_removed"
+                for link in links
+            ):
                 database.delete_steam_shortcut(account, game_id)
         self._schedule_steam_sync()
         return {"success": True}
 
     def get_game_steam_state(self, game_id: object = None) -> dict[str, object]:
         if not is_linux():
-            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+            return {
+                "success": False,
+                "code": "unsupported",
+                "error": "Steam integration is Linux only",
+            }
         from core.steam_sync import environment
 
         game_id = self._coerce_db_id(game_id)
@@ -676,17 +782,39 @@ class LaunchMixin(ApiBase):
         from core.steam_shortcuts import desired_games
         from pathlib import Path
 
-        eligible = game_id in desired_games([game], "all-installed", Path("/wlib-steam"))
+        eligible = game_id in desired_games(
+            [game], "all-installed", Path("/wlib-steam")
+        )
         exe = os.path.expanduser(str(game.get("exe_path") or "").strip())
         reason = ""
         if not eligible:
-            reason = "wishlisted" if not exe else "missing_file" if not os.path.isfile(exe) else "browser_game"
+            reason = (
+                "wishlisted"
+                if not exe
+                else "missing_file"
+                if not os.path.isfile(exe)
+                else "browser_game"
+            )
         links = database.list_steam_shortcuts(str(env["account_id"]))
-        state = next((str(link["state"]) for link in links if link["game_id"] == game_id), "not_in_steam")
-        return {"success": True, "state": state, "marked": bool(game.get("steam_shortcut")), "mode": env["mode"], "eligible": eligible, "reason": reason}
+        state = next(
+            (str(link["state"]) for link in links if link["game_id"] == game_id),
+            "not_in_steam",
+        )
+        return {
+            "success": True,
+            "state": state,
+            "marked": bool(game.get("steam_shortcut")),
+            "mode": env["mode"],
+            "eligible": eligible,
+            "reason": reason,
+        }
 
     def get_startup_launch_error(self) -> dict[str, str]:
-        return {"error": os.environ.pop("WLIB_LAUNCH_ERROR", "") if "--show-launch-error" in sys.argv else ""}
+        return {
+            "error": os.environ.pop("WLIB_LAUNCH_ERROR", "")
+            if "--show-launch-error" in sys.argv
+            else ""
+        }
 
     def get_game_play_sessions(self, game_id: int) -> dict[str, object]:
         from core.database import get_play_sessions

@@ -4,6 +4,7 @@
 It has no wLib imports, so `core.downloads.torrents` can use it without an
 import cycle through `core.archive_install`.
 """
+
 from __future__ import annotations
 
 import os
@@ -81,7 +82,10 @@ def volume_set(archive_path: str) -> VolumeSet | None:
         groups = {n: by_lower.get(key, []) for n, key in keys.items()}
         if any(len(entries) > 1 for entries in groups.values()):
             own = exact_base(name)
-            groups = {n: [e for e in entries if exact_base(e) == own] for n, entries in groups.items()}
+            groups = {
+                n: [e for e in entries if exact_base(e) == own]
+                for n, entries in groups.items()
+            }
         resolved: dict[int, str] = {}
         for n, entries in groups.items():
             if name in entries:

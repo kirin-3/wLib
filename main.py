@@ -447,7 +447,10 @@ def _trim_renderer_log_file(path: str) -> None:
     # Keep only the newest half once the log passes the cap. Never rewrite
     # through a symlink: that would truncate whatever file it points at.
     try:
-        if os.path.islink(path) or os.path.getsize(path) <= RENDERER_DIAGNOSTICS_MAX_BYTES:
+        if (
+            os.path.islink(path)
+            or os.path.getsize(path) <= RENDERER_DIAGNOSTICS_MAX_BYTES
+        ):
             return
         with open(path, "rb") as log_file:
             _ = log_file.seek(-(RENDERER_DIAGNOSTICS_MAX_BYTES // 2), os.SEEK_END)
@@ -772,7 +775,9 @@ def track_screen_size() -> None:
         def __init__(self) -> None:
             super().__init__()
             # Queued: the slot runs on the GUI thread, which owns this object.
-            connect = cast(Callable[[object, Qt.ConnectionType], object], self.attach.connect)
+            connect = cast(
+                Callable[[object, Qt.ConnectionType], object], self.attach.connect
+            )
             _ = connect(self._attach, Qt.ConnectionType.QueuedConnection)
 
         # Real Qt slots: a queued call to a plain Python method would run in
@@ -794,7 +799,9 @@ def track_screen_size() -> None:
                 return
             size = screen.geometry().size()
             ratio = screen.devicePixelRatio()
-            display_info.set_screen_size(round(size.width() * ratio), round(size.height() * ratio))
+            display_info.set_screen_size(
+                round(size.width() * ratio), round(size.height() * ratio)
+            )
 
     tracker = _ScreenTracker()
     _ = tracker.moveToThread(app.thread())
@@ -996,9 +1003,7 @@ def stop_vite_dev_server(process: subprocess.Popen[bytes] | None) -> None:
 
 def get_bundle_root() -> str:
     if getattr(sys, "frozen", False):
-        return str(
-            getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-        )
+        return str(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))))
     return os.path.dirname(os.path.abspath(__file__))
 
 
@@ -1221,10 +1226,16 @@ def acquire_instance_lock(path: str) -> IO[bytes] | None:
 
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BaseException as exc:
-        if isinstance(exc, OSError) and exc.errno in _NO_LOCK_SUPPORT and not is_windows():
+        if (
+            isinstance(exc, OSError)
+            and exc.errno in _NO_LOCK_SUPPORT
+            and not is_windows()
+        ):
             # Some network and FUSE filesystems refuse file locks. Start
             # without the lock; the extension port still stops a second copy.
-            print(f"[wLib] Data folder cannot be locked ({exc.strerror or exc}); continuing without the lock.")
+            print(
+                f"[wLib] Data folder cannot be locked ({exc.strerror or exc}); continuing without the lock."
+            )
             return lock
         lock.close()
         if isinstance(exc, BlockingIOError) or (
@@ -1290,9 +1301,7 @@ def start_desktop(ssl_summary: str | None) -> None:
         # Serve focus requests before the slow WebView/API startup.
         print("Starting extension HTTP receiver on port 8183...")
         cast(ExtensionServer, extension_server).database_ready = database_ready
-        threading.Thread(
-            target=extension_server.serve_forever, daemon=True
-        ).start()
+        threading.Thread(target=extension_server.serve_forever, daemon=True).start()
     _ = configure_qt_runtime_environment()
     ensure_packaged_webview_cache_fresh()
     webview_module = load_webview_module()
@@ -1371,7 +1380,9 @@ def start_desktop(ssl_summary: str | None) -> None:
             api.library_sync.server_available = True
 
         def start_loaded_services() -> None:
-            if cast(RendererDiagnosticsWindow, cast(object, window)).events.loaded.wait(60):
+            if cast(RendererDiagnosticsWindow, cast(object, window)).events.loaded.wait(
+                60
+            ):
                 api.controller_watcher.start()
                 api.cover_cache.start()
                 api.cover_cards.start()

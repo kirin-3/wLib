@@ -21,6 +21,7 @@ States (design D3):
 One daemon thread ticks once per second while a job that can change by
 itself exists (see `_needs_tick`); an idle queue has no thread.
 """
+
 from __future__ import annotations
 
 import json
@@ -123,13 +124,23 @@ class QueueJob:
 
     def row(self) -> dict[str, object]:
         return {
-            "id": self.id, "kind": self.kind, "game_id": self.game_id, "title": self.title,
-            "version": self.version, "position": self.position, "state": self.state,
-            "reason": self.reason, "error_code": self.error_code, "error_text": self.error_text,
+            "id": self.id,
+            "kind": self.kind,
+            "game_id": self.game_id,
+            "title": self.title,
+            "version": self.version,
+            "position": self.position,
+            "state": self.state,
+            "reason": self.reason,
+            "error_code": self.error_code,
+            "error_text": self.error_text,
             "source": json.dumps(self.source, separators=(",", ":"), sort_keys=True),
-            "bytes_done": self.bytes_done, "bytes_total": self.bytes_total,
-            "retries": self.retries, "retry_at": self.retry_at,
-            "created_at": self.created_at, "updated_at": self.updated_at,
+            "bytes_done": self.bytes_done,
+            "bytes_total": self.bytes_total,
+            "retries": self.retries,
+            "retry_at": self.retry_at,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
             "finished_at": self.finished_at,
         }
 
@@ -250,7 +261,9 @@ class DownloadQueue:
     # --- helpers ----------------------------------------------------------
 
     def _ordered(self) -> list[QueueJob]:
-        return sorted(self._jobs.values(), key=lambda job: (job.position, job.created_at, job.id))
+        return sorted(
+            self._jobs.values(), key=lambda job: (job.position, job.created_at, job.id)
+        )
 
     def _worker(self, job: QueueJob) -> Worker:
         return self._workers[job.kind]
@@ -305,7 +318,9 @@ class DownloadQueue:
             return
         if not self._needs_tick():
             return
-        thread = threading.Thread(target=self._loop, name="wlib-download-queue", daemon=True)
+        thread = threading.Thread(
+            target=self._loop, name="wlib-download-queue", daemon=True
+        )
         self._thread = thread
         thread.start()
 
@@ -373,7 +388,10 @@ class DownloadQueue:
                 # Paused while preparing: an automatic retry would start the
                 # job, so keep the pause; resuming it starts it with this
                 # error noted. Other failures need the user, as before.
-                job.error_code, job.error_text = failures.classify(state.error), state.error
+                job.error_code, job.error_text = (
+                    failures.classify(state.error),
+                    state.error,
+                )
                 job.retry_at = None
                 self._set_state(job, PAUSED)
                 self._save(job, "error_code", "error_text", "retry_at")
@@ -414,7 +432,9 @@ class DownloadQueue:
     @staticmethod
     def _stopped(job: QueueJob) -> bool:
         """A job whose worker was stopped (waiting, held or paused by the user)."""
-        return job.state in (QUEUED, HELD) or (job.state == PAUSED and job.reason != REASON_PREPARING)
+        return job.state in (QUEUED, HELD) or (
+            job.state == PAUSED and job.reason != REASON_PREPARING
+        )
 
     def _finish_if_done(self, job: QueueJob, now: float) -> None:
         """A stopped worker can still finish: a torrent paused after its last
@@ -428,10 +448,14 @@ class DownloadQueue:
         job.can_continue = state.can_continue
         job.details = dict(state.details)
         job.speed = state.speed if state.phase == PHASE_RUNNING else 0.0
-        changed = state.bytes_done != job.bytes_done or state.bytes_total != job.bytes_total
+        changed = (
+            state.bytes_done != job.bytes_done or state.bytes_total != job.bytes_total
+        )
         if state.bytes_done or state.bytes_total is not None:
             job.bytes_done = state.bytes_done
-            job.bytes_total = state.bytes_total if state.bytes_total is not None else job.bytes_total
+            job.bytes_total = (
+                state.bytes_total if state.bytes_total is not None else job.bytes_total
+            )
         if changed and now - job.saved_progress_at >= PROGRESS_SAVE_SECONDS:
             job.saved_progress_at = now
             self._save(job, "bytes_done", "bytes_total", "source")
@@ -444,8 +468,17 @@ class DownloadQueue:
         if job.bytes_total:
             job.bytes_done = job.bytes_total
         self._set_state(job, READY)
-        self._save(job, "finished_at", "error_code", "error_text", "retries", "retry_at",
-                   "bytes_done", "bytes_total", "source")
+        self._save(
+            job,
+            "finished_at",
+            "error_code",
+            "error_text",
+            "retries",
+            "retry_at",
+            "bytes_done",
+            "bytes_total",
+            "source",
+        )
 
     def _fail(self, job: QueueJob, message: str, now: float) -> None:
         code = failures.classify(message)
@@ -457,7 +490,16 @@ class DownloadQueue:
         else:
             job.retry_at = None
             self._set_state(job, ATTENTION)
-        self._save(job, "error_code", "error_text", "retries", "retry_at", "bytes_done", "bytes_total", "source")
+        self._save(
+            job,
+            "error_code",
+            "error_text",
+            "retries",
+            "retry_at",
+            "bytes_done",
+            "bytes_total",
+            "source",
+        )
 
     def _check_retries(self, now: float) -> None:
         for job in self._ordered():
@@ -510,7 +552,11 @@ class DownloadQueue:
         with self._lock:
             if not self._hold_active():
                 return []
-            return [job.id for job in self._ordered() if job.state == RUNNING and not job.can_continue]
+            return [
+                job.id
+                for job in self._ordered()
+                if job.state == RUNNING and not job.can_continue
+            ]
 
     # --- slots ------------------------------------------------------------
 
@@ -552,7 +598,9 @@ class DownloadQueue:
             sides[job.kind] = sides.get(job.kind, 0.0) + job.speed
         self._history.append(total)
         for kind in self._workers:
-            self._side_speed.setdefault(kind, deque(maxlen=2)).append(sides.get(kind, 0.0))
+            self._side_speed.setdefault(kind, deque(maxlen=2)).append(
+                sides.get(kind, 0.0)
+            )
 
     def _apply_shares(self) -> None:
         running = self._running()
@@ -607,15 +655,28 @@ class DownloadQueue:
                 raise QueueError("This game is already in the downloads")
             now = self._clock()
             job = QueueJob(
-                id=uuid.uuid4().hex, kind=kind, game_id=game_id, title=title, version=version,
-                state=PREPARING, source=dict(source), created_at=now, updated_at=now,
+                id=uuid.uuid4().hex,
+                kind=kind,
+                game_id=game_id,
+                title=title,
+                version=version,
+                state=PREPARING,
+                source=dict(source),
+                created_at=now,
+                updated_at=now,
             )
             # The same build and mirror again resumes the old partial file.
             # Workers add their own keys (part_file, archive) to the old source.
-            same = replaced is not None and replaced.kind == kind and bool(source) and all(
-                (replaced.source.get(key) or "f95") == value
-                if kind == "host" and key == "site" else replaced.source.get(key) == value
-                for key, value in source.items()
+            same = (
+                replaced is not None
+                and replaced.kind == kind
+                and bool(source)
+                and all(
+                    (replaced.source.get(key) or "f95") == value
+                    if kind == "host" and key == "site"
+                    else replaced.source.get(key) == value
+                    for key, value in source.items()
+                )
             )
             if same and replaced is not None and replaced.source.get("part_file"):
                 # Startup cleanup keeps the partial files that jobs name.
@@ -650,7 +711,11 @@ class DownloadQueue:
     def reorder(self, job_ids: list[str]) -> None:
         """Put the named jobs first, in this order; the rest keep their order after them."""
         with self._lock:
-            named = [self._jobs[job_id] for job_id in dict.fromkeys(job_ids) if job_id in self._jobs]
+            named = [
+                self._jobs[job_id]
+                for job_id in dict.fromkeys(job_ids)
+                if job_id in self._jobs
+            ]
             self._move_to_top_of_waiting(named)
         self.poke()
 
@@ -709,7 +774,9 @@ class DownloadQueue:
         self._set_state(victim, QUEUED)
         self._start(job, now)
         # The stopped job becomes the first waiting job.
-        rest = [item for item in self._ordered() if item is not job and item is not victim]
+        rest = [
+            item for item in self._ordered() if item is not job and item is not victim
+        ]
         self._move_to_top_of_waiting([job, victim, *rest])
         return "yielded"
 
@@ -745,7 +812,9 @@ class DownloadQueue:
             job = self._jobs.get(job_id)
             if job is None or job.state != PAUSED:
                 return False
-            self._set_state(job, PREPARING if job.reason == REASON_PREPARING else QUEUED)
+            self._set_state(
+                job, PREPARING if job.reason == REASON_PREPARING else QUEUED
+            )
             self._evaluate_holds()
             self._fill_slots(self._clock())
         self.poke()
@@ -761,7 +830,9 @@ class DownloadQueue:
         with self._lock:
             paused = [job for job in self._ordered() if job.state == PAUSED]
             for job in paused:
-                self._set_state(job, PREPARING if job.reason == REASON_PREPARING else QUEUED)
+                self._set_state(
+                    job, PREPARING if job.reason == REASON_PREPARING else QUEUED
+                )
             self._evaluate_holds()
             self._fill_slots(self._clock())
         self.poke()
@@ -828,7 +899,9 @@ class DownloadQueue:
         try:
             self._worker(job).remove(job, keep_partial=keep_partial)
         except Exception as exc:
-            _log(f"could not delete the data of a {job.kind} download: {type(exc).__name__}")
+            _log(
+                f"could not delete the data of a {job.kind} download: {type(exc).__name__}"
+            )
 
     def installed(self, path: str) -> list[str]:
         """Drop ready jobs whose archive or folder `path` is; the data stays with its worker."""
@@ -840,8 +913,14 @@ class DownloadQueue:
             for job in list(self._jobs.values()):
                 if job.state != READY:
                     continue
-                paths = [_resolved(str(job.details.get(key) or "")) for key in ("archive_path", "folder_path")]
-                if any(item is not None and (item == target or item in target.parents) for item in paths):
+                paths = [
+                    _resolved(str(job.details.get(key) or ""))
+                    for key in ("archive_path", "folder_path")
+                ]
+                if any(
+                    item is not None and (item == target or item in target.parents)
+                    for item in paths
+                ):
                     _ = self._jobs.pop(job.id, None)
                     self._store.delete(job.id)
                     removed.append(job.id)
@@ -880,7 +959,11 @@ class DownloadQueue:
                 if self._stopped(job):
                     # Only paused jobs left means no tick thread to see a late finish.
                     self._finish_if_done(job, now)
-                elif job.state in (RUNNING, PREPARING, READY) or self._transient_attention(job):
+                elif job.state in (
+                    RUNNING,
+                    PREPARING,
+                    READY,
+                ) or self._transient_attention(job):
                     state = self._worker(job).snapshot(job)
                     if job.state == READY:
                         job.details = dict(state.details)
@@ -901,8 +984,12 @@ class DownloadQueue:
                 "hold_reason": self._hold,
                 "hold_override": self._hold_override,
                 "hold_keeps_running": [
-                    job.id for job in self._ordered() if job.state == RUNNING and not job.can_continue
-                ] if self._hold_active() else [],
+                    job.id
+                    for job in self._ordered()
+                    if job.state == RUNNING and not job.can_continue
+                ]
+                if self._hold_active()
+                else [],
                 "speed": speed,
                 "peak": max(peak, speed),
                 "forecast": self._forecast(),
@@ -916,15 +1003,33 @@ class DownloadQueue:
         eta: int | None = None
         if job.state == RUNNING and job.speed > 0 and job.bytes_total:
             eta = int(max(0, job.bytes_total - job.bytes_done) / job.speed)
-        retry_in = max(0, int((job.retry_at or now) - now)) if job.state == RETRY_WAIT else None
+        retry_in = (
+            max(0, int((job.retry_at or now) - now))
+            if job.state == RETRY_WAIT
+            else None
+        )
         return {
-            "job_id": job.id, "kind": job.kind, "game_id": job.game_id, "title": job.title,
-            "version": job.version, "state": job.state, "reason": job.reason,
-            "position": job.position, "error_code": job.error_code, "error_text": job.error_text,
-            "bytes_done": job.bytes_done, "bytes_total": job.bytes_total, "speed": job.speed,
-            "eta": eta, "retries": job.retries, "retry_at": job.retry_at, "retry_in": retry_in,
-            "created_at": job.created_at, "finished_at": job.finished_at,
-            "can_continue": job.can_continue, "source": _public_source(job),
+            "job_id": job.id,
+            "kind": job.kind,
+            "game_id": job.game_id,
+            "title": job.title,
+            "version": job.version,
+            "state": job.state,
+            "reason": job.reason,
+            "position": job.position,
+            "error_code": job.error_code,
+            "error_text": job.error_text,
+            "bytes_done": job.bytes_done,
+            "bytes_total": job.bytes_total,
+            "speed": job.speed,
+            "eta": eta,
+            "retries": job.retries,
+            "retry_at": job.retry_at,
+            "retry_in": retry_in,
+            "created_at": job.created_at,
+            "finished_at": job.finished_at,
+            "can_continue": job.can_continue,
+            "source": _public_source(job),
             "details": dict(job.details),
         }
 
@@ -997,7 +1102,9 @@ class DownloadQueue:
                 try:
                     alive = worker.restore(job)
                 except Exception as exc:
-                    _log(f"could not restore a {job.kind} download: {type(exc).__name__}")
+                    _log(
+                        f"could not restore a {job.kind} download: {type(exc).__name__}"
+                    )
                     alive = False
                 if not alive:
                     self._store.delete(job.id)
@@ -1027,7 +1134,9 @@ class DownloadQueue:
                 try:
                     adopted.extend(worker.unclaimed(claimed))
                 except Exception as exc:
-                    _log(f"could not adopt {worker.kind} downloads: {type(exc).__name__}")
+                    _log(
+                        f"could not adopt {worker.kind} downloads: {type(exc).__name__}"
+                    )
             adopted.sort(key=lambda job: job.created_at)
             last = max((job.position for job in self._jobs.values()), default=-1)
             for job in adopted:
@@ -1102,7 +1211,15 @@ class QueueStore:
             _log(f"could not remove a download: {type(exc).__name__}")
 
 
-_PUBLIC_SOURCE_KEYS = ("site", "label", "section", "platform", "host", "part", "rpdl_id")
+_PUBLIC_SOURCE_KEYS = (
+    "site",
+    "label",
+    "section",
+    "platform",
+    "host",
+    "part",
+    "rpdl_id",
+)
 
 
 def _public_source(job: QueueJob) -> dict[str, object]:

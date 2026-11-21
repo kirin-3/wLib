@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Read live LewdCorner updates through the browser bridge."""
+
 from __future__ import annotations
 
 import logging
@@ -11,7 +12,9 @@ from core.versions import actionable_remote_version, normalize_version
 
 logger = logging.getLogger(__name__)
 FEED_READ_AT = "lc_feed_read_at"
-_FEED_URL = "https://lewdcorner.com/latest-updates/api?page={}&per_page=90&cat=Games&sort=date"
+_FEED_URL = (
+    "https://lewdcorner.com/latest-updates/api?page={}&per_page=90&cat=Games&sort=date"
+)
 
 
 def _fetch(url: str) -> extension_bridge.BridgeResponse:
@@ -115,7 +118,9 @@ class CheckResult:
 
     @property
     def version_checked(self) -> bool:
-        return self.error is None and bool(self.game and self.game.get("lc_latest_version"))
+        return self.error is None and bool(
+            self.game and self.game.get("lc_latest_version")
+        )
 
 
 def check_thread(
@@ -133,7 +138,11 @@ def check_thread(
         return CheckResult(error=lc.LcUpdateError("lc_extract_failed"))
     available = extension_bridge.is_available(site="lc")
     catalog_usable = lc.usable_catalog_entry(catalog)
-    flags = lc.prefix_details(feed_item.prefixes)[1] if feed_item and feed_item.prefixes else None
+    flags = (
+        lc.prefix_details(feed_item.prefixes)[1]
+        if feed_item and feed_item.prefixes
+        else None
+    )
     completed = bool(flags and flags.completed)
     # The catalog's Completed flag is as old as its version.
     catalog_completed = False
@@ -148,7 +157,9 @@ def check_thread(
     elif (single or not catalog_usable and not stored_version) and available:
         try:
             response = _fetch(url)
-            lewdcorner_plus.note_thread_page(lc.extract_thread_id(url), response.body, response.status)
+            lewdcorner_plus.note_thread_page(
+                lc.extract_thread_id(url), response.body, response.status
+            )
             premium = bool(feed_item and feed_item.premium) or (
                 str(catalog.get("tier") or "").casefold() == "premium"
             )
@@ -196,8 +207,15 @@ def check_thread(
     # the catalog can lag behind the feed.
     lc_completed = True if completed else (False if flags is not None else None)
     saved = database.store_thread_update(
-        game_id, "lc", url, observation, completed=completed, keep_newer=True,
-        states=states, lc_completed=lc_completed, lc_completed_from_feed=lc_completed_from_feed,
+        game_id,
+        "lc",
+        url,
+        observation,
+        completed=completed,
+        keep_newer=True,
+        states=states,
+        lc_completed=lc_completed,
+        lc_completed_from_feed=lc_completed_from_feed,
         catalog_completed=catalog_completed,
     )
     if saved is None:

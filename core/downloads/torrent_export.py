@@ -4,6 +4,7 @@
 The file and the magnet link hold the user's tracker passkey. Callers must
 never log them.
 """
+
 from __future__ import annotations
 
 import os
@@ -66,7 +67,9 @@ def write_torrent(folder: str, file_name: str, data: bytes) -> str:
             # O_BINARY: os.open() is text mode on Windows, which would turn
             # each LF byte of the bencoded data into CR LF.
             fd = os.open(
-                part, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o666
+                part,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+                0o666,
             )
         except FileExistsError:
             continue

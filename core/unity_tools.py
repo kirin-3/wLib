@@ -48,7 +48,9 @@ def _pe_arch(path: Path) -> str:
             pe = stream.read(6)
             if len(pe) != 6 or pe[:4] != b"PE\0\0":
                 return ""
-            return {0x14C: "x86", 0x8664: "x64"}.get(struct.unpack_from("<H", pe, 4)[0], "")
+            return {0x14C: "x86", 0x8664: "x64"}.get(
+                struct.unpack_from("<H", pe, 4)[0], ""
+            )
     except OSError:
         return ""
 
@@ -77,7 +79,9 @@ def _version_string(path: Path) -> str:
 _DATA_FILES = ("globalgamemanagers", "data.unity3d", "mainData")
 
 
-def _unity_layout(folder: str, exe_path: str) -> tuple[Path, Path | None, Path | None, bool, Path] | None:
+def _unity_layout(
+    folder: str, exe_path: str
+) -> tuple[Path, Path | None, Path | None, bool, Path] | None:
     """(root, exe, data folder, windows, player) when the folder is a Unity game."""
     root = Path(folder)
     if not root.is_dir():
@@ -89,7 +93,9 @@ def _unity_layout(folder: str, exe_path: str) -> tuple[Path, Path | None, Path |
         data = candidates[0] if len(candidates) == 1 else None
     windows = bool(exe and exe.suffix.lower() == ".exe")
     player = root / ("UnityPlayer.dll" if windows else "UnityPlayer.so")
-    if not player.is_file() and not (data and any((data / f).is_file() for f in _DATA_FILES)):
+    if not player.is_file() and not (
+        data and any((data / f).is_file() for f in _DATA_FILES)
+    ):
         return None
     return root, exe, data, windows, player
 
@@ -106,9 +112,14 @@ def detect_unity(folder: str, exe_path: str = "") -> UnityGame | None:
     root, exe, data, windows, player = layout
     files = _DATA_FILES
     backend = ""
-    if (root / "GameAssembly.dll").is_file() or (data and (data / "il2cpp_data").is_dir()):
+    if (root / "GameAssembly.dll").is_file() or (
+        data and (data / "il2cpp_data").is_dir()
+    ):
         backend = "il2cpp"
-    elif data and any((data / "Managed" / f).is_file() for f in ("Assembly-CSharp.dll", "UnityEngine.dll")):
+    elif data and any(
+        (data / "Managed" / f).is_file()
+        for f in ("Assembly-CSharp.dll", "UnityEngine.dll")
+    ):
         backend = "mono"
     binary = player if player.is_file() else exe
     arch = _pe_arch(binary) if windows and binary else ""
@@ -120,10 +131,18 @@ def detect_unity(folder: str, exe_path: str = "") -> UnityGame | None:
                 version = match.group(1).decode("ascii")
                 break
     if not version and binary:
-        match = _UNITY_VERSION.search(_version_string(binary).encode("ascii", errors="ignore"))
+        match = _UNITY_VERSION.search(
+            _version_string(binary).encode("ascii", errors="ignore")
+        )
         if match:
             version = match.group(1).decode("ascii")
-    return UnityGame("windows" if windows else "linux", str(data) if data else "", backend, arch, version)
+    return UnityGame(
+        "windows" if windows else "linux",
+        str(data) if data else "",
+        backend,
+        arch,
+        version,
+    )
 
 
 def detect_installed(folder: str) -> dict[str, object] | None:
@@ -148,7 +167,9 @@ def detect_installed(folder: str) -> dict[str, object] | None:
     return {
         "version": version,
         "major": 6 if dll == dll6 else 5,
-        "backend": "il2cpp" if (core / "BepInEx.Unity.IL2CPP.dll").is_file() else "mono",
+        "backend": "il2cpp"
+        if (core / "BepInEx.Unity.IL2CPP.dll").is_file()
+        else "mono",
         "complete": (root / "winhttp.dll").is_file(),
         "managed_by_wlib": managed,
     }
@@ -156,9 +177,17 @@ def detect_installed(folder: str) -> dict[str, object] | None:
 
 # Official releases have used these names across the 5.x and 6.x eras.
 _ASSET_PATTERNS = (
-    re.compile(r"^BepInEx_(?:win_)?(?P<arch>x86|x64)_(?P<version>5\.[\w.+-]+)\.zip$", re.I),
-    re.compile(r"^BepInEx-Unity\.(?P<backend>Mono|IL2CPP)-win-(?P<arch>x86|x64)-(?P<version>6\.[\w.+-]+)\.zip$", re.I),
-    re.compile(r"^BepInEx_Unity(?P<backend>Mono|IL2CPP)_(?P<arch>x86|x64)_(?P<version>6\.[\w.+-]+)\.zip$", re.I),
+    re.compile(
+        r"^BepInEx_(?:win_)?(?P<arch>x86|x64)_(?P<version>5\.[\w.+-]+)\.zip$", re.I
+    ),
+    re.compile(
+        r"^BepInEx-Unity\.(?P<backend>Mono|IL2CPP)-win-(?P<arch>x86|x64)-(?P<version>6\.[\w.+-]+)\.zip$",
+        re.I,
+    ),
+    re.compile(
+        r"^BepInEx_Unity(?P<backend>Mono|IL2CPP)_(?P<arch>x86|x64)_(?P<version>6\.[\w.+-]+)\.zip$",
+        re.I,
+    ),
 )
 GITHUB_RELEASES = "https://api.github.com/repos/BepInEx/BepInEx/releases?per_page=100"
 BLEEDING_EDGE = "https://builds.bepinex.dev/api/projects/bepinex_be/artifacts/latest"
@@ -178,12 +207,16 @@ def _asset(name: str, arch: str, backend: str) -> tuple[str, int] | None:
 def fetch_json(url: str) -> object:
     import urllib.request
 
-    request = urllib.request.Request(url, headers={"User-Agent": "wLib", "Accept": "application/json"})
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "wLib", "Accept": "application/json"}
+    )
     with cast(HTTPResponse, urllib.request.urlopen(request, timeout=30)) as response:  # noqa: S310
         return cast(object, json.load(response))
 
 
-def list_versions(arch: str, backend: str, fetcher: Callable[[str], object] | None = None) -> tuple[list[dict[str, object]], list[str]]:
+def list_versions(
+    arch: str, backend: str, fetcher: Callable[[str], object] | None = None
+) -> tuple[list[dict[str, object]], list[str]]:
     from urllib.parse import quote
 
     fetcher = fetcher or fetch_json
@@ -210,12 +243,28 @@ def list_versions(arch: str, backend: str, fetcher: Callable[[str], object] | No
                 if parsed:
                     version, major = parsed
                     digest = str(item.get("digest") or "")
-                    builds.append({"id": version, "major": major, "backend": backend,
-                                   "channel": "pre" if release.get("prerelease") else "stable",
-                                   "url": item.get("browser_download_url", ""), "file_name": name,
-                                   "sha256": digest[7:] if digest.startswith("sha256:") else "",
-                                   "date": release.get("published_at") or ""})
-    except (OSError, HTTPException, ValueError, TypeError, AttributeError, KeyError) as exc:
+                    builds.append(
+                        {
+                            "id": version,
+                            "major": major,
+                            "backend": backend,
+                            "channel": "pre" if release.get("prerelease") else "stable",
+                            "url": item.get("browser_download_url", ""),
+                            "file_name": name,
+                            "sha256": digest[7:]
+                            if digest.startswith("sha256:")
+                            else "",
+                            "date": release.get("published_at") or "",
+                        }
+                    )
+    except (
+        OSError,
+        HTTPException,
+        ValueError,
+        TypeError,
+        AttributeError,
+        KeyError,
+    ) as exc:
         warnings.append(f"Could not load GitHub releases: {exc}")
     try:
         raw_feed = fetcher(BLEEDING_EDGE)
@@ -233,27 +282,63 @@ def list_versions(arch: str, backend: str, fetcher: Callable[[str], object] | No
             parsed = _asset(name, arch, backend)
             if parsed and parsed[1] == 6:
                 version, major = parsed
-                builds.append({"id": version, "major": major, "backend": backend, "channel": "be",
-                               "url": f"https://builds.bepinex.dev/projects/bepinex_be/{quote(str(feed['id']), safe='')}/{quote(name, safe='')}",
-                               "file_name": name, "sha256": "", "date": feed.get("date") or ""})
-    except (OSError, HTTPException, ValueError, TypeError, AttributeError, KeyError) as exc:
+                builds.append(
+                    {
+                        "id": version,
+                        "major": major,
+                        "backend": backend,
+                        "channel": "be",
+                        "url": f"https://builds.bepinex.dev/projects/bepinex_be/{quote(str(feed['id']), safe='')}/{quote(name, safe='')}",
+                        "file_name": name,
+                        "sha256": "",
+                        "date": feed.get("date") or "",
+                    }
+                )
+    except (
+        OSError,
+        HTTPException,
+        ValueError,
+        TypeError,
+        AttributeError,
+        KeyError,
+    ) as exc:
         warnings.append(f"Could not load bleeding-edge builds: {exc}")
     return builds, warnings
 
 
-def recommended_build(builds: list[dict[str, object]], backend: str, major: int | None = None) -> dict[str, object] | None:
+def recommended_build(
+    builds: list[dict[str, object]], backend: str, major: int | None = None
+) -> dict[str, object] | None:
     target = major or (6 if backend == "il2cpp" else 5)
     channels = ("stable",) if target == 5 else ("be", "pre")
     for channel in channels:
-        choices = [b for b in builds if b["major"] == target and b["channel"] == channel]
+        choices = [
+            b for b in builds if b["major"] == target and b["channel"] == channel
+        ]
         if choices:
+
             def version_key(build: dict[str, object]) -> tuple[int, ...]:
-                return tuple(int(n) for n in cast(list[str], re.findall(r"\d+", str(build["id"]).split("+")[0])))
+                return tuple(
+                    int(n)
+                    for n in cast(
+                        list[str], re.findall(r"\d+", str(build["id"]).split("+")[0])
+                    )
+                )
+
             return max(choices, key=version_key)
     return None
 
 
-def _download_cached_unlocked(url: str, file_name: str, cache_dir: str, sha256: str = "", progress: Callable[[int, int, str], None] | None = None, cancelled: Callable[[], bool] | None = None, opener: Callable[..., HTTPResponse] | None = None, label: str = "Downloading BepInEx ...") -> Path | None:
+def _download_cached_unlocked(
+    url: str,
+    file_name: str,
+    cache_dir: str,
+    sha256: str = "",
+    progress: Callable[[int, int, str], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    opener: Callable[..., HTTPResponse] | None = None,
+    label: str = "Downloading BepInEx ...",
+) -> Path | None:
     """Download to a cache atomically; return None for a missing resource."""
     import hashlib
     import urllib.error
@@ -266,12 +351,14 @@ def _download_cached_unlocked(url: str, file_name: str, cache_dir: str, sha256: 
     cache = Path(cache_dir)
     cache.mkdir(parents=True, exist_ok=True)
     target = cache / file_name
+
     def digest(path: Path) -> str:
         h = hashlib.sha256()
         with path.open("rb") as stream:
             for chunk in iter(lambda: stream.read(CHUNK_SIZE), b""):
                 h.update(chunk)
         return h.hexdigest()
+
     def complete(path: Path) -> bool:
         # Without a published hash, a zip's central directory (written last)
         # is the only sign that the whole file arrived.
@@ -286,6 +373,7 @@ def _download_cached_unlocked(url: str, file_name: str, cache_dir: str, sha256: 
             except (OSError, zipfile.BadZipFile, EOFError):
                 return False
         return True
+
     if target.is_file():
         if complete(target):
             return target
@@ -331,7 +419,16 @@ def _download_cached_unlocked(url: str, file_name: str, cache_dir: str, sha256: 
 _download_lock = threading.Lock()
 
 
-def download_cached(url: str, file_name: str, cache_dir: str, sha256: str = "", progress: Callable[[int, int, str], None] | None = None, cancelled: Callable[[], bool] | None = None, opener: Callable[..., HTTPResponse] | None = None, label: str = "Downloading BepInEx ...") -> Path | None:
+def download_cached(
+    url: str,
+    file_name: str,
+    cache_dir: str,
+    sha256: str = "",
+    progress: Callable[[int, int, str], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    opener: Callable[..., HTTPResponse] | None = None,
+    label: str = "Downloading BepInEx ...",
+) -> Path | None:
     """Serialize cache writes, including downloads shared by different games."""
     from core.game_tools import GameToolError
 
@@ -339,7 +436,9 @@ def download_cached(url: str, file_name: str, cache_dir: str, sha256: str = "", 
         if cancelled and cancelled():
             raise GameToolError("Download cancelled")
     try:
-        return _download_cached_unlocked(url, file_name, cache_dir, sha256, progress, cancelled, opener, label)
+        return _download_cached_unlocked(
+            url, file_name, cache_dir, sha256, progress, cancelled, opener, label
+        )
     finally:
         _download_lock.release()
 
@@ -398,7 +497,9 @@ _RESTORE_ASIDE = ".wlib-bepinex-restoring"
 
 def _read_backup_manifest(backup: Path) -> dict[str, object] | None:
     try:
-        value = cast(object, json.loads((backup / "manifest.json").read_text(encoding="utf-8")))
+        value = cast(
+            object, json.loads((backup / "manifest.json").read_text(encoding="utf-8"))
+        )
     except (OSError, ValueError):
         return None
     return cast(dict[str, object], value) if isinstance(value, dict) else None
@@ -456,12 +557,19 @@ def _merge_move(source: Path, destination: Path, change: _BackupChange) -> list[
         _ = shutil.move(str(source), str(destination))
         change.moves.append((destination, source))
         return [destination]
-    if source.is_dir() and not source.is_symlink() and destination.is_dir() and not destination.is_symlink():
+    if (
+        source.is_dir()
+        and not source.is_symlink()
+        and destination.is_dir()
+        and not destination.is_symlink()
+    ):
         moved: list[Path] = []
         for child in sorted(source.iterdir()):
             moved.extend(_merge_move(child, destination / child.name, change))
         return moved
-    raise GameToolError(f"The BepInEx backup already holds {destination.name}. Restore or remove the backup first.")
+    raise GameToolError(
+        f"The BepInEx backup already holds {destination.name}. Restore or remove the backup first."
+    )
 
 
 def _is_wlib_owned(name: str, owned: list[str] | None, installed: list[str]) -> bool:
@@ -475,7 +583,9 @@ def _is_wlib_owned(name: str, owned: list[str] | None, installed: list[str]) -> 
     )
 
 
-def _move_to_backup(root: Path, paths: list[str], installed: list[str], owned: list[str] | None = None) -> _BackupChange | None:
+def _move_to_backup(
+    root: Path, paths: list[str], installed: list[str], owned: list[str] | None = None
+) -> _BackupChange | None:
     """Move what the operation replaces into the backup; None when nothing moved.
 
     The backup normally holds the state before the last install or uninstall.
@@ -511,9 +621,14 @@ def _move_to_backup(root: Path, paths: list[str], installed: list[str], owned: l
     existing = _read_backup_manifest(backup) if backup.is_dir() else None
     if existing is not None and existing.get("foreign") is True:
         moved_value = existing.get("moved")
-        moved_list = [p for p in cast(list[object], moved_value) if isinstance(p, str)] if isinstance(moved_value, list) else []
+        moved_list = (
+            [p for p in cast(list[object], moved_value) if isinstance(p, str)]
+            if isinstance(moved_value, list)
+            else []
+        )
         change.manifest_path = backup / "manifest.json"
         change.manifest_before = change.manifest_path.read_text(encoding="utf-8")
+
         def discard(name: str) -> None:
             # wLib's own files: set aside, deleted once the operation succeeds.
             if change.discard is None:
@@ -536,14 +651,20 @@ def _move_to_backup(root: Path, paths: list[str], installed: list[str], owned: l
                     # "Remove user data"): set wLib's files aside first, so
                     # they never collide with the user's copies in the backup.
                     inner = sorted(
-                        {p for p in owned or [] if Path(p) != Path(name) and Path(p).is_relative_to(name)},
+                        {
+                            p
+                            for p in owned or []
+                            if Path(p) != Path(name) and Path(p).is_relative_to(name)
+                        },
                         key=lambda p: (len(Path(p).parts), p),
                     )
                     done: list[Path] = []
                     for path_name in inner:
                         if any(Path(path_name).is_relative_to(p) for p in done):
                             continue
-                        if (root / path_name).exists() or (root / path_name).is_symlink():
+                        if (root / path_name).exists() or (
+                            root / path_name
+                        ).is_symlink():
                             _ = _safe_target(root, path_name)
                             discard(path_name)
                             done.append(Path(path_name))
@@ -552,7 +673,10 @@ def _move_to_backup(root: Path, paths: list[str], installed: list[str], owned: l
                         if relative not in moved_list:
                             moved_list.append(relative)
             _ = change.manifest_path.write_text(
-                json.dumps({"moved": moved_list, "installed": installed, "foreign": True}), encoding="utf-8"
+                json.dumps(
+                    {"moved": moved_list, "installed": installed, "foreign": True}
+                ),
+                encoding="utf-8",
             )
         except Exception:
             change.rollback()
@@ -578,7 +702,8 @@ def _move_to_backup(root: Path, paths: list[str], installed: list[str], owned: l
             moved.append(name)
             change.moves.append((destination, root / name))
         _ = (backup / "manifest.json").write_text(
-            json.dumps({"moved": moved, "installed": installed, "foreign": foreign}), encoding="utf-8"
+            json.dumps({"moved": moved, "installed": installed, "foreign": foreign}),
+            encoding="utf-8",
         )
     except Exception:
         change.rollback()
@@ -586,7 +711,13 @@ def _move_to_backup(root: Path, paths: list[str], installed: list[str], owned: l
     return change
 
 
-def install_build(folder: str, zip_path: str, unity_libs_zip: str | None, progress: Callable[[int, int, str], None], cancelled: Callable[[], bool]) -> dict[str, object]:
+def install_build(
+    folder: str,
+    zip_path: str,
+    unity_libs_zip: str | None,
+    progress: Callable[[int, int, str], None],
+    cancelled: Callable[[], bool],
+) -> dict[str, object]:
     import shutil
     import stat
     import zipfile
@@ -619,7 +750,11 @@ def install_build(folder: str, zip_path: str, unity_libs_zip: str | None, progre
                     raise GameToolError("Installation cancelled")
                 rel = _safe_relative(entry.filename)
                 parts = rel.parts
-                preserved = len(parts) > 1 and parts[0].lower() == "bepinex" and parts[1].lower() in _PRESERVED
+                preserved = (
+                    len(parts) > 1
+                    and parts[0].lower() == "bepinex"
+                    and parts[1].lower() in _PRESERVED
+                )
                 dest = stage / rel
                 if entry.is_dir():
                     dest.mkdir(parents=True, exist_ok=True)
@@ -645,7 +780,9 @@ def install_build(folder: str, zip_path: str, unity_libs_zip: str | None, progre
             if match:
                 version = match.group("version")
                 break
-        _ = marker.write_text(json.dumps({"owned": owned, "version": version}), encoding="utf-8")
+        _ = marker.write_text(
+            json.dumps({"owned": owned, "version": version}), encoding="utf-8"
+        )
         previous = _owned_manifest(root)
         wlib_owned = None if previous is None else [*previous, _MARKER]
         if previous is None:
@@ -654,7 +791,11 @@ def install_build(folder: str, zip_path: str, unity_libs_zip: str | None, progre
             if existing and existing["backend"] == "il2cpp":
                 previous.append("dotnet")
         dotnet = any(Path(name).parts[0].lower() == "dotnet" for name in owned)
-        installed = [name for name in owned if not (dotnet and Path(name).parts[0].lower() == "dotnet")] + [_MARKER]
+        installed = [
+            name
+            for name in owned
+            if not (dotnet and Path(name).parts[0].lower() == "dotnet")
+        ] + [_MARKER]
         if dotnet:
             installed.append("dotnet")
         staged_files = [p for p in stage.rglob("*") if p.is_file()]
@@ -698,7 +839,13 @@ def uninstall(folder: str, remove_user_data: bool) -> dict[str, object]:
     owned = _owned_manifest(root)
     wlib_owned = None if owned is None else [*owned, _MARKER]
     if owned is None:
-        owned = ["BepInEx/core", "winhttp.dll", "doorstop_config.ini", ".doorstop_version", "changelog.txt"]
+        owned = [
+            "BepInEx/core",
+            "winhttp.dll",
+            "doorstop_config.ini",
+            ".doorstop_version",
+            "changelog.txt",
+        ]
         if installed and installed["backend"] == "il2cpp":
             owned.append("dotnet")
     owned.append(_MARKER)
@@ -713,10 +860,14 @@ def uninstall(folder: str, remove_user_data: bool) -> dict[str, object]:
 
 def _prune_empty_parents(root: Path, paths: list[str]) -> None:
     """Drop folders such as BepInEx/core that moving files out left empty."""
-    folders = {parent for name in paths for parent in Path(name).parents if parent != Path(".")}
+    folders = {
+        parent for name in paths for parent in Path(name).parents if parent != Path(".")
+    }
     for folder in sorted(folders, key=lambda p: len(p.parts), reverse=True):
         parts = folder.parts
-        if parts[0].lower() == "bepinex" and (len(parts) == 1 or parts[1].lower() in _PRESERVED):
+        if parts[0].lower() == "bepinex" and (
+            len(parts) == 1 or parts[1].lower() in _PRESERVED
+        ):
             continue
         target = root / folder
         if target.is_dir() and not target.is_symlink() and not any(target.iterdir()):
@@ -733,17 +884,25 @@ def restore(folder: str) -> dict[str, object]:
     if backup.is_symlink():
         raise GameToolError("Backup path is a symbolic link")
     try:
-        raw_manifest = cast(object, json.loads((backup / "manifest.json").read_text(encoding="utf-8")))
+        raw_manifest = cast(
+            object, json.loads((backup / "manifest.json").read_text(encoding="utf-8"))
+        )
         if not isinstance(raw_manifest, dict):
             raise ValueError("Invalid backup manifest")
         manifest = cast(dict[str, object], raw_manifest)
         moved_value, installed_value = manifest["moved"], manifest["installed"]
         if not isinstance(moved_value, list) or not isinstance(installed_value, list):
             raise ValueError("Invalid backup manifest")
-        moved_items, installed_items = cast(list[object], moved_value), cast(list[object], installed_value)
+        moved_items, installed_items = (
+            cast(list[object], moved_value),
+            cast(list[object], installed_value),
+        )
         if not all(isinstance(p, str) for p in moved_items + installed_items):
             raise ValueError("Invalid backup manifest")
-        moved, installed = cast(list[str], moved_items), cast(list[str], installed_items)
+        moved, installed = (
+            cast(list[str], moved_items),
+            cast(list[str], installed_items),
+        )
         for name in moved + installed:
             _ = _safe_target(root, name)
             _ = _safe_target(backup, name)
@@ -775,7 +934,9 @@ def restore(folder: str) -> dict[str, object]:
         for name in moved:
             target = root / name
             target.parent.mkdir(parents=True, exist_ok=True)
-            if target.is_dir() and not any(p.is_file() or p.is_symlink() for p in target.rglob("*")):
+            if target.is_dir() and not any(
+                p.is_file() or p.is_symlink() for p in target.rglob("*")
+            ):
                 shutil.rmtree(target)
             if target.exists():
                 raise GameToolError(f"Cannot restore over existing path: {name}")

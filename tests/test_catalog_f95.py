@@ -32,7 +32,9 @@ def _page_number(request):
 
 def test_rows_store_ids_tags_and_prefixes(tmp_path):
     transport_pages = {1: _page(1, _entries(), total=1)}
-    ctx, _ = make_context(tmp_path, lambda request: transport_pages[_page_number(request)])
+    ctx, _ = make_context(
+        tmp_path, lambda request: transport_pages[_page_number(request)]
+    )
     assert F95Source().sweep_step(ctx) is True
     row = rows(
         ctx.catalog,
@@ -40,7 +42,11 @@ def test_rows_store_ids_tags_and_prefixes(tmp_path):
         "FROM f95_threads WHERE thread_id = 223393",
     )[0]
     title, creator, version, tags, prefixes, cover, url, updated_at = row
-    assert (title, creator, url) == ("Sarah's House", "AceStudio", "https://f95zone.to/threads/223393/")
+    assert (title, creator, url) == (
+        "Sarah's House",
+        "AceStudio",
+        "https://f95zone.to/threads/223393/",
+    )
     assert version.startswith("v")
     assert json.loads(tags) and all(isinstance(tag, int) for tag in json.loads(tags))
     assert json.loads(prefixes)
@@ -49,7 +55,11 @@ def test_rows_store_ids_tags_and_prefixes(tmp_path):
 
 def test_sweep_resumes_from_its_cursor_and_429_keeps_collected_rows(tmp_path):
     entries = _entries()
-    pages = {1: _page(1, entries[:2]), 2: _page(2, entries[2:4]), 3: _page(3, entries[4:])}
+    pages = {
+        1: _page(1, entries[:2]),
+        2: _page(2, entries[2:4]),
+        3: _page(3, entries[4:]),
+    }
     limited = {"on": True}
 
     def transport(request):
@@ -77,7 +87,9 @@ def test_sweep_resumes_from_its_cursor_and_429_keeps_collected_rows(tmp_path):
 
 
 def test_rate_limit_body_with_200_counts_as_limit(tmp_path):
-    ctx, _ = make_context(tmp_path, lambda request: Response(200, fixture_bytes("f95_rate_limited.json")))
+    ctx, _ = make_context(
+        tmp_path, lambda request: Response(200, fixture_bytes("f95_rate_limited.json"))
+    )
     try:
         F95Source().sweep_step(ctx)
     except RateLimited:
@@ -88,7 +100,11 @@ def test_rate_limit_body_with_200_counts_as_limit(tmp_path):
 
 def test_a_truncated_page_does_not_complete_or_wipe_the_sweep(tmp_path):
     entries = _entries()
-    pages = {1: _page(1, entries[:2]), 2: _page(2, entries[2:4]), 3: _page(3, entries[4:])}
+    pages = {
+        1: _page(1, entries[:2]),
+        2: _page(2, entries[2:4]),
+        3: _page(3, entries[4:]),
+    }
     truncated = {"on": False}
 
     def transport(request):
@@ -133,7 +149,11 @@ def test_incremental_stops_at_known_entries(tmp_path):
     def transport(request):
         number = _page_number(request)
         fetched.append(number)
-        return {1: _page(1, entries[:2], total=3), 2: _page(2, entries[2:4], total=3), 3: _page(3, entries[4:], total=3)}[number]
+        return {
+            1: _page(1, entries[:2], total=3),
+            2: _page(2, entries[2:4], total=3),
+            3: _page(3, entries[4:], total=3),
+        }[number]
 
     ctx, _ = make_context(tmp_path, transport)
     # Everything up to entries[2] was collected before.
@@ -145,7 +165,9 @@ def test_incremental_stops_at_known_entries(tmp_path):
 
 
 def test_incremental_does_nothing_on_first_install(tmp_path):
-    ctx, _ = make_context(tmp_path, lambda request: (_ for _ in ()).throw(AssertionError("no request")))
+    ctx, _ = make_context(
+        tmp_path, lambda request: (_ for _ in ()).throw(AssertionError("no request"))
+    )
     F95Source().incremental(ctx)
 
 
@@ -166,13 +188,21 @@ def test_tag_map_names_known_ids_and_keeps_unknown_ones(tmp_path):
         json.dumps(
             {
                 "tags": {str(known_tag): "2dcg"},
-                "prefixes": {str(known_prefix): {"name": "Ren'Py", "category": "Engine"}},
+                "prefixes": {
+                    str(known_prefix): {"name": "Ren'Py", "category": "Engine"}
+                },
             }
         )
     )
     load_names(ctx.catalog, str(tags_file))
     F95Source().sweep_step(ctx)
-    stored = json.loads(rows(ctx.catalog, "SELECT tags FROM f95_threads WHERE thread_id = ?", (entries[0]["thread_id"],))[0][0])
+    stored = json.loads(
+        rows(
+            ctx.catalog,
+            "SELECT tags FROM f95_threads WHERE thread_id = ?",
+            (entries[0]["thread_id"],),
+        )[0][0]
+    )
     assert stored == entries[0]["tags"]
     named = dict(
         rows(
@@ -184,7 +214,9 @@ def test_tag_map_names_known_ids_and_keeps_unknown_ones(tmp_path):
     )
     assert named[known_tag] == "2dcg"
     assert any(name is None for name in named.values())
-    assert rows(ctx.catalog, "SELECT name, category FROM f95_prefix_names") == [("Ren'Py", "Engine")]
+    assert rows(ctx.catalog, "SELECT name, category FROM f95_prefix_names") == [
+        ("Ren'Py", "Engine")
+    ]
 
 
 def test_a_missing_tag_map_keeps_the_names_already_in_the_catalog(tmp_path):
@@ -208,8 +240,18 @@ def test_import_tool_converts_latest_updates_object(tmp_path):
                 "tags": {"130": "2dcg", "107": "3dcg"},
                 "prefixes": {
                     "games": [
-                        {"id": 1, "name": "Engine", "prefixes": [{"id": 7, "name": "Ren'Py", "class": "pre-renpy"}]},
-                        {"id": 4, "name": "Status", "prefixes": [{"id": 18, "name": "Completed"}]},
+                        {
+                            "id": 1,
+                            "name": "Engine",
+                            "prefixes": [
+                                {"id": 7, "name": "Ren'Py", "class": "pre-renpy"}
+                            ],
+                        },
+                        {
+                            "id": 4,
+                            "name": "Status",
+                            "prefixes": [{"id": 18, "name": "Completed"}],
+                        },
                     ]
                 },
             }
@@ -226,13 +268,21 @@ def test_import_tool_converts_latest_updates_object(tmp_path):
 
 def test_feed_screens_replace_previous_list(tmp_path):
     entry = _entries()[0]
-    entry["screens"] = ["https://preview.f95zone.to/a", "http://bad", 1, "https://img/b"]
+    entry["screens"] = [
+        "https://preview.f95zone.to/a",
+        "http://bad",
+        1,
+        "https://img/b",
+    ]
     payload = fixture_json("f95_latest_page.json")
     payload["msg"]["data"] = [entry]
     parsed, _ = parse_page(payload)
     ctx, _ = make_context(tmp_path, FakeTransport())
     ctx.catalog.upsert("f95_threads", "thread_id", parsed, "now")
-    assert json.loads(rows(ctx.catalog, "SELECT screens FROM f95_threads")[0][0]) == ["https://preview.f95zone.to/a", "https://img/b"]
+    assert json.loads(rows(ctx.catalog, "SELECT screens FROM f95_threads")[0][0]) == [
+        "https://preview.f95zone.to/a",
+        "https://img/b",
+    ]
     entry["screens"] = []
     parsed, _ = parse_page(payload)
     ctx.catalog.upsert("f95_threads", "thread_id", parsed, "later")
@@ -241,7 +291,10 @@ def test_feed_screens_replace_previous_list(tmp_path):
 
 def test_page_without_total_does_not_end_the_sweep():
     assert parse_page({"status": "ok", "msg": {"data": []}})[1] is None
-    assert parse_page({"status": "ok", "msg": {"data": [], "pagination": {"total": 0}}})[1] is None
+    assert (
+        parse_page({"status": "ok", "msg": {"data": [], "pagination": {"total": 0}}})[1]
+        is None
+    )
 
 
 def test_first_page_without_total_fails_instead_of_completing(tmp_path):
@@ -263,7 +316,9 @@ def test_first_page_without_total_fails_instead_of_completing(tmp_path):
     assert F95Source().sweep_step(ctx) is True
 
 
-NEW_ACCOUNT = "Latest Updates opens for new accounts a few days after they join F95zone."
+NEW_ACCOUNT = (
+    "Latest Updates opens for new accounts a few days after they join F95zone."
+)
 
 
 def test_a_refused_feed_reports_f95s_reason(tmp_path):
@@ -271,12 +326,18 @@ def test_a_refused_feed_reports_f95s_reason(tmp_path):
     ctx, _ = make_context(tmp_path, lambda request: json_response(payload, status=403))
     result = run_source(F95Source(), ctx)
     assert result.status == "error" and not result.sweep_completed
-    assert result.detail == f"F95FeedRefused: F95 refused the feed (HTTP 403): {NEW_ACCOUNT}"
+    assert (
+        result.detail
+        == f"F95FeedRefused: F95 refused the feed (HTTP 403): {NEW_ACCOUNT}"
+    )
     assert rows(ctx.catalog, "SELECT COUNT(*) FROM f95_threads") == [(0,)]
 
 
 def test_a_logged_out_feed_reports_f95s_reason(tmp_path):
-    payload = {"status": "error", "msg": "You have to be logged in to see Latest Updates."}
+    payload = {
+        "status": "error",
+        "msg": "You have to be logged in to see Latest Updates.",
+    }
     ctx, _ = make_context(tmp_path, lambda request: json_response(payload, status=403))
     result = run_source(F95Source(), ctx)
     assert result.detail == (
@@ -289,7 +350,10 @@ def test_an_error_answer_with_200_reports_f95s_reason(tmp_path):
     payload = {"status": "error", "msg": NEW_ACCOUNT}
     ctx, _ = make_context(tmp_path, lambda request: json_response(payload))
     result = run_source(F95Source(), ctx)
-    assert result.detail == f"F95FeedRefused: F95 refused the feed (HTTP 200): {NEW_ACCOUNT}"
+    assert (
+        result.detail
+        == f"F95FeedRefused: F95 refused the feed (HTTP 200): {NEW_ACCOUNT}"
+    )
 
 
 def test_a_refusal_without_json_says_so(tmp_path):

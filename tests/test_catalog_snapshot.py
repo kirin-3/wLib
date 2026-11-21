@@ -9,7 +9,12 @@ from catalog_server.store import CatalogStore
 
 def test_snapshot_decompresses_to_a_readable_catalog(tmp_path):
     catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
-    catalog.upsert("f95_threads", "thread_id", [{"thread_id": 1, "title": "A", "url": "u"}], "2026-10-26T00:00:00Z")
+    catalog.upsert(
+        "f95_threads",
+        "thread_id",
+        [{"thread_id": 1, "title": "A", "url": "u"}],
+        "2026-10-26T00:00:00Z",
+    )
     snapshot = build_snapshot(catalog, str(tmp_path / "out"), "2026-10-27T05:12:09Z")
     assert snapshot.name == "catalog-20261027T051209Z.sqlite.xz"
     data = open(snapshot.path, "rb").read()
@@ -32,5 +37,12 @@ def test_snapshot_decompresses_to_a_readable_catalog(tmp_path):
 
 
 def test_snapshot_names_sort_by_time():
-    names = [snapshot_name(stamp) for stamp in ("2026-10-27T05:00:00Z", "2026-11-01T17:00:00Z", "2026-10-28T05:00:00Z")]
+    names = [
+        snapshot_name(stamp)
+        for stamp in (
+            "2026-10-27T05:00:00Z",
+            "2026-11-01T17:00:00Z",
+            "2026-10-28T05:00:00Z",
+        )
+    ]
     assert sorted(names) == [names[0], names[2], names[1]]

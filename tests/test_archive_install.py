@@ -131,7 +131,13 @@ def test_tool_detection_nothing_available(monkeypatch, tmp_path):
     ],
 )
 def test_tool_detection_bundled_and_host_fallback(
-    monkeypatch, tmp_path, extension, flatpak, bundled, archive_visible, library_writable
+    monkeypatch,
+    tmp_path,
+    extension,
+    flatpak,
+    bundled,
+    archive_visible,
+    library_writable,
 ):
     import core.archive_install as ai
 
@@ -246,7 +252,9 @@ def test_external_tool_traversal_rejected_before_run(monkeypatch, tmp_path):
     import core.archive_install as ai
 
     monkeypatch.setattr(
-        ai, "list_tool_entries", lambda _t, _a, _links=None: ["ok.txt", "../../evil.txt"]
+        ai,
+        "list_tool_entries",
+        lambda _t, _a, _links=None: ["ok.txt", "../../evil.txt"],
     )
     called = []
 
@@ -360,7 +368,6 @@ def test_infolder_saves_found_when_install_path_has_brackets(tmp_path):
     assert infolder_save_relpaths(str(root)) == ["slot1.sav"]
 
 
-
 def test_can_remove_old_folder_guards(tmp_path):
     lib = tmp_path / "lib"
     lib.mkdir()
@@ -440,9 +447,10 @@ def test_archive_stem_strips_a_multipart_suffix():
     assert archive_stem("/downloads/Eternum-0.8.part1.rar") == "Eternum-0.8"
     assert archive_stem("Eternum-0.8.PART12.RAR") == "Eternum-0.8"
     assert archive_stem("Eternum-0.8-pc.zip") == "Eternum-0.8-pc"
-    assert guess_title_and_version(
-        archive_stem("Eternum-0.8.part1.rar")
-    ) == ("Eternum", "0.8")
+    assert guess_title_and_version(archive_stem("Eternum-0.8.part1.rar")) == (
+        "Eternum",
+        "0.8",
+    )
 
 
 def test_can_remove_old_folder_refuses_a_mounted_drive_root(tmp_path, monkeypatch):
@@ -551,7 +559,6 @@ def test_install_prefers_title_executable_over_alphabetically_earlier_tool(
     assert db.get_all_games()[0]["exe_path"] == expected
 
 
-
 def test_install_update_removes_old_and_keeps_when_unticked(tmp_path, monkeypatch):
     db = _isolated_db(tmp_path, monkeypatch)
     from core.archive_install import install_archive
@@ -619,9 +626,7 @@ def test_install_update_expands_tilde_in_stored_game_paths(tmp_path, monkeypatch
     (old_dir / "MySaves" / "a.save").write_text("override")
     game_id = db.add_game("Game", "~/games/Game/1.0/Game.exe", version="1.0")
     assert game_id is not None
-    _ = db.update_game(
-        int(game_id), {"save_path_override": "~/games/Game/1.0/MySaves"}
-    )
+    _ = db.update_game(int(game_id), {"save_path_override": "~/games/Game/1.0/MySaves"})
 
     lib = tmp_path / "lib"
     archive = tmp_path / "Game-2.0.zip"
@@ -770,18 +775,14 @@ def test_new_install_without_launcher_still_adds_game_and_deletes_archive(
     assert not archive.exists()
 
 
-def test_new_install_finds_launcher_nested_several_folders_deep(
-    tmp_path, monkeypatch
-):
+def test_new_install_finds_launcher_nested_several_folders_deep(tmp_path, monkeypatch):
     _isolated_db(tmp_path, monkeypatch)
     from core.archive_install import install_archive
 
     lib = tmp_path / "lib"
     lib.mkdir()
     archive = tmp_path / "Game-1.0.zip"
-    _write_game_zip(
-        archive, {"readme.txt": b"x", "Game/Game 1.0/win/Game.exe": b"exe"}
-    )
+    _write_game_zip(archive, {"readme.txt": b"x", "Game/Game 1.0/win/Game.exe": b"exe"})
 
     result = install_archive(
         str(archive), library_folder=str(lib), pattern="{title}", title="Game"
@@ -1049,11 +1050,11 @@ def test_find_download_offers_skips_skipped_update_and_wishlisted_game(
     downloads.mkdir()
     db.update_setting("downloads_folder", str(downloads))
 
-    skipped_id = db.add_game(
-        "Eternum", "/games/Eternum/0.7/Eternum.exe", version="0.7"
-    )
+    skipped_id = db.add_game("Eternum", "/games/Eternum/0.7/Eternum.exe", version="0.7")
     assert skipped_id is not None
-    db.update_game(int(skipped_id), {"latest_version": "0.8", "skipped_version": "v0.8"})
+    db.update_game(
+        int(skipped_id), {"latest_version": "0.8", "skipped_version": "v0.8"}
+    )
     wishlist_id = db.add_game("Wanted", "", version="")
     assert wishlist_id is not None
     db.update_game(int(wishlist_id), {"latest_version": "1.0"})
@@ -1359,7 +1360,9 @@ def test_extract_with_tool_flatpak_argv_and_default_path(monkeypatch, tmp_path):
     staging.mkdir()
     archive = str(tmp_path / "game.7z")
 
-    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a, _links=None: ["Game.exe"])
+    monkeypatch.setattr(
+        ai, "list_tool_entries", lambda _t, _a, _links=None: ["Game.exe"]
+    )
 
     calls: list[list[str]] = []
 
@@ -1384,7 +1387,14 @@ def test_extract_with_tool_flatpak_argv_and_default_path(monkeypatch, tmp_path):
     # Inside Flatpak the extractor runs on the host.
     _simulate_flatpak_archive(monkeypatch, enabled=True)
     assert ai.extract_with_tool("/usr/bin/7z", archive, str(staging)) == 1
-    assert calls[-1][:6] == ["env", "-u", "LD_LIBRARY_PATH", "flatpak-spawn", "--host", "--watch-bus"]
+    assert calls[-1][:6] == [
+        "env",
+        "-u",
+        "LD_LIBRARY_PATH",
+        "flatpak-spawn",
+        "--host",
+        "--watch-bus",
+    ]
     sep = calls[-1].index("--")
     inner = calls[-1][sep + 1 :]
     assert inner[0] == "/usr/bin/7z"
@@ -1402,8 +1412,10 @@ def test_flatpak_tool_execution_for_listing_extraction_and_size(
     tool = ai.BUNDLED_7ZZ if bundled else "/usr/bin/7zz"
     monkeypatch.setattr(ai, "detect_archive_tool", lambda _p, **_kw: (tool, None))
     if bundled:
+
         def unexpected_host_env():
             raise AssertionError("Bundled tool must inherit the sandbox environment")
+
         monkeypatch.setattr(ai, "build_host_open_env", unexpected_host_env)
     else:
         monkeypatch.setattr(ai, "build_host_open_env", lambda: {"WLIB_TEST": "host"})
@@ -1427,7 +1439,14 @@ def test_flatpak_tool_execution_for_listing_extraction_and_size(
             assert "flatpak-spawn" not in argv
             assert kwargs["env"] is None
         else:
-            assert argv[:6] == ["env", "-u", "LD_LIBRARY_PATH", "flatpak-spawn", "--host", "--watch-bus"]
+            assert argv[:6] == [
+                "env",
+                "-u",
+                "LD_LIBRARY_PATH",
+                "flatpak-spawn",
+                "--host",
+                "--watch-bus",
+            ]
             assert argv[argv.index("--") + 1] == tool
             assert "--env=WLIB_TEST=host" in argv
             assert kwargs["env"] == {"WLIB_TEST": "host"}
@@ -1455,7 +1474,8 @@ def test_install_checks_destination_when_selecting_tool(monkeypatch, tmp_path):
     monkeypatch.setattr(ai, "detect_archive_tool", detect)
     monkeypatch.setattr(ai, "extract_with_tool", extract)
     monkeypatch.setattr(
-        ai.subprocess, "run",
+        ai.subprocess,
+        "run",
         lambda *a, **kw: ai.subprocess.CompletedProcess(a[0], 0, stdout="Size = 4\n"),
     )
     result = ai.install_archive(
@@ -1512,7 +1532,9 @@ def test_case_insensitive_collision_rejected(tmp_path):
 def test_external_tool_duplicate_precheck(monkeypatch, tmp_path):
     import core.archive_install as ai
 
-    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a, _links=None: ["a.txt", "a.txt"])
+    monkeypatch.setattr(
+        ai, "list_tool_entries", lambda _t, _a, _links=None: ["a.txt", "a.txt"]
+    )
     called = []
 
     def _fail(cmd, **kwargs):
@@ -1528,7 +1550,9 @@ def test_external_tool_duplicate_precheck(monkeypatch, tmp_path):
 def test_external_tool_case_collision_precheck(monkeypatch, tmp_path):
     import core.archive_install as ai
 
-    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a, _links=None: ["Game.exe", "game.exe"])
+    monkeypatch.setattr(
+        ai, "list_tool_entries", lambda _t, _a, _links=None: ["Game.exe", "game.exe"]
+    )
 
     def _fail(cmd, **kwargs):
         raise AssertionError("subprocess must not run")
@@ -1874,7 +1898,9 @@ def test_install_override_equal_to_old_root_is_repointed_not_copied(
 
     new_dir = lib / "Game" / "2.0"
     assert db.get_all_games()[0]["save_path_override"] == str(new_dir)
-    assert (new_dir / "Game.exe").read_bytes() == b"new"  # not clobbered by the old copy
+    assert (
+        new_dir / "Game.exe"
+    ).read_bytes() == b"new"  # not clobbered by the old copy
 
 
 def test_install_keeps_old_folder_when_override_is_the_game_folder(
@@ -1902,7 +1928,8 @@ def test_install_keeps_old_folder_when_override_is_the_game_folder(
 
 
 @pytest.mark.parametrize(
-    "name", ["Save01.rvdata2", "Save1.rvdata", "Save1.rxdata", "Save01.lsd", "SLOT1.SAV"]
+    "name",
+    ["Save01.rvdata2", "Save1.rvdata", "Save1.rxdata", "Save01.lsd", "SLOT1.SAV"],
 )
 def test_infolder_saves_include_classic_rpg_maker_files(tmp_path, name):
     root = tmp_path / "game"
@@ -2109,8 +2136,12 @@ def test_update_selected_part_preserves_or_relocates_default(
         assert default.read_bytes() == b"ep1"
 
 
-@pytest.mark.parametrize("helper_present,update_fails", [(False, False), (True, False), (True, True)])
-def test_cleanup_waits_for_own_target_relocation(tmp_path, monkeypatch, helper_present, update_fails):
+@pytest.mark.parametrize(
+    "helper_present,update_fails", [(False, False), (True, False), (True, True)]
+)
+def test_cleanup_waits_for_own_target_relocation(
+    tmp_path, monkeypatch, helper_present, update_fails
+):
     db = _isolated_db(tmp_path, monkeypatch)
     from core.archive_install import install_archive
 
@@ -2131,8 +2162,10 @@ def test_cleanup_waits_for_own_target_relocation(tmp_path, monkeypatch, helper_p
         },
     )
     if update_fails:
+
         def fail_update(*_args, **_kwargs):
             raise OSError("Cannot update target")
+
         monkeypatch.setattr(db, "update_game_launch_target", fail_update)
     result = install_archive(
         str(archive),
@@ -2145,7 +2178,9 @@ def test_cleanup_waits_for_own_target_relocation(tmp_path, monkeypatch, helper_p
     assert result["removed_old"] is removed
     assert old.exists() is not removed
     if not removed:
-        assert ('"Config"' if helper_present else '"Ep2"') in result["kept_old_folder_reason"]
+        assert ('"Config"' if helper_present else '"Ep2"') in result[
+            "kept_old_folder_reason"
+        ]
         assert helper.read_bytes() == b"helper"
 
 
@@ -2195,7 +2230,9 @@ def test_update_removes_whole_old_install_when_exe_is_nested(tmp_path, monkeypat
     lib = tmp_path / "lib"
     (lib / "Game" / "1.0" / "DLC").mkdir()
 
-    result = _install_nested(tmp_path, "{title}/{version}", "2.0", game_id, "Game-2.0.zip")
+    result = _install_nested(
+        tmp_path, "{title}/{version}", "2.0", game_id, "Game-2.0.zip"
+    )
 
     assert result["removed_old"] is True
     assert result["old_folder"] == str(lib / "Game" / "1.0")
@@ -2214,7 +2251,9 @@ def test_update_carries_saves_beside_a_nested_exe(tmp_path, monkeypatch):
     (old / "UserSaves" / "a.dat").write_text("user")
     db.update_game(game_id, {"save_path_override": str(old / "UserSaves")})
 
-    result = _install_nested(tmp_path, "{title}/{version}", "2.0", game_id, "Game-2.0.zip")
+    result = _install_nested(
+        tmp_path, "{title}/{version}", "2.0", game_id, "Game-2.0.zip"
+    )
 
     new = tmp_path / "lib" / "Game" / "2.0"
     assert result["removed_old"] is True
@@ -2350,9 +2389,7 @@ def test_7z_listing_reports_tar_symlinks(tmp_path, monkeypatch):
     assert links == [("Game/esc", "/etc", False)]
 
 
-def test_install_same_folder_refuses_when_another_game_is_inside(
-    tmp_path, monkeypatch
-):
+def test_install_same_folder_refuses_when_another_game_is_inside(tmp_path, monkeypatch):
     db = _isolated_db(tmp_path, monkeypatch)
     from core.archive_install import ArchiveInstallError, install_archive
 
@@ -2413,7 +2450,9 @@ def test_install_same_folder_keeps_backup_for_target_outside_exe_folder(
     backups = [p for p in lib.iterdir() if ".wlib-old-" in p.name]
     assert len(backups) == 1
     assert (backups[0] / "Tools" / "Mod.exe").read_text() == "mod"
-    mod = next(t for t in db.list_game_launch_targets(int(game_id)) if t["label"] == "Mod")
+    mod = next(
+        t for t in db.list_game_launch_targets(int(game_id)) if t["label"] == "Mod"
+    )
     assert mod["exe_path"] == str(backups[0] / "Tools" / "Mod.exe")
     unmoved = cast(list[dict[str, object]], result["unmoved_targets"])
     assert [t["label"] for t in unmoved] == ["Mod"]
@@ -2427,7 +2466,8 @@ def test_extract_zip_is_byte_exact(tmp_path, workers):
     import core.archive_install as ai
 
     payloads = {
-        f"Game/d{i % 3}/f{i}.bin": b"line\nwin\r\nnul\x00end\n" * (i + 1) + os.urandom(64)
+        f"Game/d{i % 3}/f{i}.bin": b"line\nwin\r\nnul\x00end\n" * (i + 1)
+        + os.urandom(64)
         for i in range(12)
     }
     archive = tmp_path / "g.zip"
@@ -2481,7 +2521,9 @@ def _patch_compress_type(path, method):
     with zipfile.ZipFile(path) as zf:
         infos = zf.infolist()
     for info in infos:
-        data[info.header_offset + 8 : info.header_offset + 10] = method.to_bytes(2, "little")
+        data[info.header_offset + 8 : info.header_offset + 10] = method.to_bytes(
+            2, "little"
+        )
     start = data.find(b"PK\x01\x02")
     while start != -1:
         data[start + 10 : start + 12] = method.to_bytes(2, "little")
@@ -2579,7 +2621,9 @@ def test_install_cancelled_during_extraction_changes_nothing(tmp_path, monkeypat
     lib = tmp_path / "lib"
     lib.mkdir()
     archive = tmp_path / "Eternum-0.8-pc.zip"
-    _write_game_zip(archive, {f"file{n}.dat": b"x" * 10 for n in range(5)} | {"Eternum.exe": b"x"})
+    _write_game_zip(
+        archive, {f"file{n}.dat": b"x" * 10 for n in range(5)} | {"Eternum.exe": b"x"}
+    )
     cancel = threading.Event()
     real_write = archive_install._check_cancel
     seen = []
@@ -2612,13 +2656,25 @@ def test_extract_with_tool_kills_the_extractor_on_cancel(tmp_path, monkeypatch):
 
     from core import archive_install
 
-    monkeypatch.setattr(archive_install, "list_tool_entries", lambda tool, path, links: ["a.txt"])
-    monkeypatch.setattr(archive_install, "_tool_argv", lambda tool, args, env=None: [sys.executable, "-c", "import time; time.sleep(30)"])
+    monkeypatch.setattr(
+        archive_install, "list_tool_entries", lambda tool, path, links: ["a.txt"]
+    )
+    monkeypatch.setattr(
+        archive_install,
+        "_tool_argv",
+        lambda tool, args, env=None: [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(30)",
+        ],
+    )
     cancel = threading.Event()
     threading.Timer(0.3, cancel.set).start()
     started = time.monotonic()
     with pytest.raises(archive_install.InstallCancelled):
-        archive_install.extract_with_tool("7z", str(tmp_path / "a.7z"), str(tmp_path / "out"), cancel)
+        archive_install.extract_with_tool(
+            "7z", str(tmp_path / "a.7z"), str(tmp_path / "out"), cancel
+        )
     assert time.monotonic() - started < 10
 
 
@@ -2629,7 +2685,9 @@ def test_extract_meter_reports_bytes_written(tmp_path):
 
     reports = []
     (tmp_path / "f").write_bytes(b"x" * 100)
-    with _ExtractMeter(str(tmp_path), 1000, lambda done, total: reports.append((done, total))):
+    with _ExtractMeter(
+        str(tmp_path), 1000, lambda done, total: reports.append((done, total))
+    ):
         time.sleep(1.3)
     assert reports and reports[-1] == (100, 1000)
 
@@ -2637,7 +2695,12 @@ def test_extract_meter_reports_bytes_written(tmp_path):
 @pytest.mark.parametrize(
     ("names", "chosen", "first", "missing"),
     [
-        (["G.part1.rar", "G.part2.rar", "G.part3.rar"], "G.part2.rar", "G.part1.rar", ()),
+        (
+            ["G.part1.rar", "G.part2.rar", "G.part3.rar"],
+            "G.part2.rar",
+            "G.part1.rar",
+            (),
+        ),
         (["G.part01.rar", "G.part03.rar"], "G.part01.rar", "G.part01.rar", (2,)),
         (["G.7z.001", "G.7z.002"], "G.7z.002", "G.7z.001", ()),
         (["G.zip.002"], "G.zip.002", "", (1,)),
@@ -2683,11 +2746,20 @@ def test_install_refuses_a_set_with_parts_missing(tmp_path, monkeypatch):
     (tmp_path / "G.part3.rar").write_bytes(b"x")
     lib = tmp_path / "lib"
     lib.mkdir()
-    with pytest.raises(ArchiveInstallError, match="Part 2 of this multi-part archive is missing"):
-        install_archive(str(tmp_path / "G.part3.rar"), library_folder=str(lib), pattern="{title}", title="G")
+    with pytest.raises(
+        ArchiveInstallError, match="Part 2 of this multi-part archive is missing"
+    ):
+        install_archive(
+            str(tmp_path / "G.part3.rar"),
+            library_folder=str(lib),
+            pattern="{title}",
+            title="G",
+        )
 
 
-def test_install_of_a_set_starts_at_part_one_and_deletes_every_part(tmp_path, monkeypatch):
+def test_install_of_a_set_starts_at_part_one_and_deletes_every_part(
+    tmp_path, monkeypatch
+):
     db = _isolated_db(tmp_path, monkeypatch)
     from core import archive_install
 
@@ -2705,11 +2777,17 @@ def test_install_of_a_set_starts_at_part_one_and_deletes_every_part(tmp_path, mo
             handle.write(b"x")
         return 1
 
-    monkeypatch.setattr(archive_install, "detect_archive_tool", lambda *a, **k: ("/usr/bin/7z", None))
+    monkeypatch.setattr(
+        archive_install, "detect_archive_tool", lambda *a, **k: ("/usr/bin/7z", None)
+    )
     monkeypatch.setattr(archive_install, "uncompressed_size", lambda *a, **k: 1)
     monkeypatch.setattr(archive_install, "extract_with_tool", extract)
     result = archive_install.install_archive(
-        str(parts[1]), library_folder=str(lib), pattern="{title}", title="Game", delete_archive=True
+        str(parts[1]),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Game",
+        delete_archive=True,
     )
     assert result["success"] is True
     assert seen == [str(parts[0])]
@@ -2788,7 +2866,9 @@ def test_seven_zip_listing_skips_split_set_headers(monkeypatch):
 
     monkeypatch.setattr(archive_install.subprocess, "run", fake_run)
     assert archive_install.list_tool_entries("7z", "/x/G.7z.001") == ["G", "G/Game.exe"]
-    monkeypatch.setattr(archive_install, "detect_archive_tool", lambda *a, **k: ("7z", None))
+    monkeypatch.setattr(
+        archive_install, "detect_archive_tool", lambda *a, **k: ("7z", None)
+    )
     assert archive_install.uncompressed_size("/x/G.7z.001") == 6000
 
 
@@ -2837,10 +2917,18 @@ def test_real_seven_zip_keeps_non_ascii_names_and_split_sets(tmp_path):
     split = tmp_path / "split.7z"
     for archive, extra in ((single, []), (split, ["-v2k", "-mx0"])):
         completed = subprocess.run(
-            [tool, "a", *extra, str(archive), str(source)], capture_output=True, check=False
+            [tool, "a", *extra, str(archive), str(source)],
+            capture_output=True,
+            check=False,
         )
         assert completed.returncode == 0, completed
-    expected = {"ゲーム", "ゲーム/ア.txt", "ゲーム/イ.txt", "ゲーム/café.txt", "ゲーム/big.bin"}
+    expected = {
+        "ゲーム",
+        "ゲーム/ア.txt",
+        "ゲーム/イ.txt",
+        "ゲーム/café.txt",
+        "ゲーム/big.bin",
+    }
     for archive in (single, tmp_path / "split.7z.001"):
         entries = archive_install.list_tool_entries(tool, str(archive))
         assert {entry.replace("\\", "/") for entry in entries} == expected
@@ -2872,7 +2960,9 @@ def test_update_explains_a_folder_windows_keeps_in_use(tmp_path, monkeypatch):
         real_rename(src, dst)
 
     monkeypatch.setattr(archive_install.os, "rename", rename)
-    with pytest.raises(archive_install.ArchiveInstallError, match="is in use. Close the game"):
+    with pytest.raises(
+        archive_install.ArchiveInstallError, match="is in use. Close the game"
+    ):
         archive_install.install_archive(
             str(archive),
             library_folder=str(lib),
@@ -2890,12 +2980,27 @@ def test_windows_path_length_failure_gets_a_clear_message(monkeypatch):
 
     monkeypatch.setattr(archive_install, "_is_windows", lambda platform=None: True)
     long_name = "C:\\Library\\" + "x" * 250
-    message = archive_install._windows_long_path_error(FileNotFoundError(3, "missing", long_name))
+    message = archive_install._windows_long_path_error(
+        FileNotFoundError(3, "missing", long_name)
+    )
     assert "longer than Windows allows" in message
-    assert archive_install._windows_long_path_error(FileNotFoundError(3, "missing", "C:\\a")) == ""
-    assert archive_install._long_path_safe("C:\\Library\\Game") == "\\\\?\\C:\\Library\\Game"
+    assert (
+        archive_install._windows_long_path_error(
+            FileNotFoundError(3, "missing", "C:\\a")
+        )
+        == ""
+    )
+    assert (
+        archive_install._long_path_safe("C:\\Library\\Game")
+        == "\\\\?\\C:\\Library\\Game"
+    )
     monkeypatch.setattr(archive_install, "_is_windows", lambda platform=None: False)
-    assert archive_install._windows_long_path_error(FileNotFoundError(3, "missing", long_name)) == ""
+    assert (
+        archive_install._windows_long_path_error(
+            FileNotFoundError(3, "missing", long_name)
+        )
+        == ""
+    )
 
 
 def test_old_seven_zip_without_the_utf8_switch_still_lists(monkeypatch):
@@ -2906,8 +3011,12 @@ def test_old_seven_zip_without_the_utf8_switch_still_lists(monkeypatch):
     def fake_run(cmd, **kwargs):
         calls.append(list(cmd))
         if "-sccUTF-8" in cmd:
-            return subprocess.CompletedProcess(cmd, 7, stdout="", stderr="Unsupported switch")
-        return subprocess.CompletedProcess(cmd, 0, stdout="Path = Game.exe\n", stderr="")
+            return subprocess.CompletedProcess(
+                cmd, 7, stdout="", stderr="Unsupported switch"
+            )
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout="Path = Game.exe\n", stderr=""
+        )
 
     tool = r"C:\Old 7-Zip\7z.exe"
     monkeypatch.setattr(archive_install, "_is_windows", lambda platform=None: True)
@@ -2948,7 +3057,9 @@ def test_list_launch_candidates_filters_and_limits(tmp_path):
     assert len(list_launch_candidates(str(tmp_path))) == 50
 
 
-def test_update_without_pick_lists_candidates_and_changes_nothing(tmp_path, monkeypatch):
+def test_update_without_pick_lists_candidates_and_changes_nothing(
+    tmp_path, monkeypatch
+):
     from core.archive_install import NoLauncherChosenError, install_archive
 
     db, lib, dest, game_id = _ddb_game(tmp_path, monkeypatch)
@@ -2958,8 +3069,12 @@ def test_update_without_pick_lists_candidates_and_changes_nothing(tmp_path, monk
     before = db.get_all_games()[0]["exe_path"]
     with pytest.raises(NoLauncherChosenError) as info:
         install_archive(
-            str(archive), library_folder=str(lib), pattern="{title}",
-            title="Other", version="2.0", game_id=game_id,
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}",
+            title="Other",
+            version="2.0",
+            game_id=game_id,
         )
     assert sorted(info.value.candidates) == ["Mac/DDB/Game.exe", "PC/DDB/Game.exe"]
     assert db.get_all_games()[0]["exe_path"] == before
@@ -2974,9 +3089,14 @@ def test_update_with_chosen_exe_relpath_completes(tmp_path, monkeypatch):
     archive = tmp_path / "DDB-2.0.zip"
     _write_game_zip(archive, {"PC/DDB/Game.exe": b"n", "Mac/DDB/Game.exe": b"m"})
     result = install_archive(
-        str(archive), library_folder=str(lib), pattern="{title}",
-        title="Other", version="2.0", game_id=game_id,
-        exe_relpath="PC/DDB/Game.exe", remove_old=True,
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Other",
+        version="2.0",
+        game_id=game_id,
+        exe_relpath="PC/DDB/Game.exe",
+        remove_old=True,
     )
     assert result["success"] is True, result
     assert result["exe_path"] == str(lib / "Other" / "PC" / "DDB" / "Game.exe")
@@ -2994,8 +3114,13 @@ def test_update_rejects_invalid_exe_relpath(tmp_path, monkeypatch, bad):
     _write_game_zip(archive, {"PC/DDB/Game.exe": b"n", "Mac/DDB/Game.exe": b"m"})
     with pytest.raises(ArchiveInstallError):
         install_archive(
-            str(archive), library_folder=str(lib), pattern="{title}",
-            title="Other", version="2.0", game_id=game_id, exe_relpath=bad,
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}",
+            title="Other",
+            version="2.0",
+            game_id=game_id,
+            exe_relpath=bad,
         )
     assert (dest / "Game.exe").read_text() == "old"
 
@@ -3008,8 +3133,12 @@ def test_update_archive_without_launch_file_changes_nothing(tmp_path, monkeypatc
     _write_game_zip(archive, {"readme.txt": b"x"})
     with pytest.raises(ArchiveInstallError, match="No launchable file") as info:
         install_archive(
-            str(archive), library_folder=str(lib), pattern="{title}",
-            title="DDB", version="2.0", game_id=game_id,
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}",
+            title="DDB",
+            version="2.0",
+            game_id=game_id,
         )
     assert not isinstance(info.value, NoLauncherChosenError)
     assert (dest / "Game.exe").read_text() == "old"
@@ -3034,8 +3163,13 @@ def test_update_season_layout_refuses_without_changes(tmp_path, monkeypatch):
     _write_game_zip(archive, {"game.sh": b"new", "data.bin": b"x"})
     with pytest.raises(ArchiveInstallError, match="destination folder already exists"):
         install_archive(
-            str(archive), library_folder=str(lib), pattern="[{creator}] {title}",
-            title="Title", creator="Dev", version="2", game_id=int(game_id),
+            str(archive),
+            library_folder=str(lib),
+            pattern="[{creator}] {title}",
+            title="Title",
+            creator="Dev",
+            version="2",
+            game_id=int(game_id),
         )
     assert (root / "Season 1" / "game.sh").read_text() == "s1"
     assert (root / "Season 2" / "game.sh").read_text() == "s2"
@@ -3060,8 +3194,13 @@ def test_update_missing_sibling_target_points_at_backup(tmp_path, monkeypatch):
     archive = tmp_path / "Title-2.zip"
     _write_game_zip(archive, {"Game.sh": b"new", "data.bin": b"x"})
     result = install_archive(
-        str(archive), library_folder=str(lib), pattern="{title}",
-        title="Title", version="2", game_id=int(game_id), remove_old=True,
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Title",
+        version="2",
+        game_id=int(game_id),
+        remove_old=True,
     )
     assert result["success"] is True, result
     backups = [p for p in lib.iterdir() if ".wlib-old-" in p.name]
@@ -3076,7 +3215,9 @@ def test_update_missing_sibling_target_points_at_backup(tmp_path, monkeypatch):
     assert "Ep2" in str(result["kept_old_folder_reason"])
 
 
-def test_update_keeps_default_target_label_and_names_it_in_results(tmp_path, monkeypatch):
+def test_update_keeps_default_target_label_and_names_it_in_results(
+    tmp_path, monkeypatch
+):
     from core.archive_install import install_archive
 
     db = _isolated_db(tmp_path, monkeypatch)
@@ -3089,20 +3230,29 @@ def test_update_keeps_default_target_label_and_names_it_in_results(tmp_path, mon
     game_id = db.add_game("Title", str(root / "S1" / "Game.sh"), version="1")
     assert game_id is not None
     db.update_game(int(game_id), {"default_target_label": "Season 1"})
-    assert db.add_game_launch_target(int(game_id), "Season 2", str(root / "S2" / "Game.sh"))
+    assert db.add_game_launch_target(
+        int(game_id), "Season 2", str(root / "S2" / "Game.sh")
+    )
     target_id = db.list_game_launch_targets(int(game_id))[0]["id"]
     archive = tmp_path / "Title-2.zip"
     _write_game_zip(archive, {"Game.sh": b"new"})
     result = install_archive(
-        str(archive), library_folder=str(lib), pattern="{title}/{version}",
-        title="Title", version="2", game_id=int(game_id), target_id=target_id,
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Title",
+        version="2",
+        game_id=int(game_id),
+        target_id=target_id,
         remove_old=False,
     )
     assert result["success"] is True, result
     game = db.get_all_games()[0]
     assert game["default_target_label"] == "Season 1"
     # The renamed default (outside the replaced folder) is never labelled "Default".
-    assert "Default" not in [t.get("label") for t in cast(list[dict[str, object]], result["unmoved_targets"])]
+    assert "Default" not in [
+        t.get("label") for t in cast(list[dict[str, object]], result["unmoved_targets"])
+    ]
 
 
 @pytest.mark.parametrize(
@@ -3113,7 +3263,9 @@ def test_update_keeps_default_target_label_and_names_it_in_results(tmp_path, mon
         ("home", "contains your home folder"),
     ],
 )
-def test_parent_of_protected_folder_cannot_be_removed(tmp_path, monkeypatch, holds, reason):
+def test_parent_of_protected_folder_cannot_be_removed(
+    tmp_path, monkeypatch, holds, reason
+):
     from core.archive_install import can_remove_old_folder
 
     games = tmp_path / "Games"
@@ -3132,7 +3284,9 @@ def test_parent_of_protected_folder_cannot_be_removed(tmp_path, monkeypatch, hol
     for folder in (library, downloads, home):
         folder.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))  # expanduser("~") reads this on Windows
+    monkeypatch.setenv(
+        "USERPROFILE", str(home)
+    )  # expanduser("~") reads this on Windows
     guard = can_remove_old_folder(
         str(games), "", [str(library)], str(downloads), [], str(exe)
     )
@@ -3196,7 +3350,9 @@ def test_scratch_copy_honours_cancel(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("in_place", [True, False])
-def test_failed_game_row_update_restores_the_launch_target(tmp_path, monkeypatch, in_place):
+def test_failed_game_row_update_restores_the_launch_target(
+    tmp_path, monkeypatch, in_place
+):
     import sqlite3
 
     db = _isolated_db(tmp_path, monkeypatch)
@@ -3342,7 +3498,11 @@ def test_extract_tar_formats(tmp_path, compression):
 
     archive = _write_tar(
         tmp_path / f"Game{compression}",
-        [("Game/", b""), ("Game/game/script.rpy", b"label start:"), ("Game/readme.txt", b"hi")],
+        [
+            ("Game/", b""),
+            ("Game/game/script.rpy", b"label start:"),
+            ("Game/readme.txt", b"hi"),
+        ],
         compression,
     )
     staging = tmp_path / "staging"
@@ -3410,15 +3570,30 @@ def test_extract_tar_disk_full_reports_free_space(tmp_path, monkeypatch):
         [("Game/data", b"", {"kind": _tarfile.SYMTYPE, "linkname": "../../outside"})],
         [("Game/a.txt", b"", {"kind": _tarfile.LNKTYPE, "linkname": "../outside.txt"})],
         [("Game/a.txt", b"", {"kind": _tarfile.LNKTYPE, "linkname": "/etc/passwd"})],
-        [("Game/a.txt", b"", {"kind": _tarfile.LNKTYPE, "linkname": "Game/missing.txt"})],
+        [
+            (
+                "Game/a.txt",
+                b"",
+                {"kind": _tarfile.LNKTYPE, "linkname": "Game/missing.txt"},
+            )
+        ],
         [("Game/tty", b"", {"kind": _tarfile.CHRTYPE})],
         [("Game/disk", b"", {"kind": _tarfile.BLKTYPE})],
         [("Game/pipe", b"", {"kind": _tarfile.FIFOTYPE})],
         [("Game/a.txt", b"one"), ("Game/a.txt", b"two")],
     ],
     ids=[
-        "dotdot", "absolute", "symlink-home", "symlink-up", "hardlink-up",
-        "hardlink-abs", "hardlink-missing", "chardev", "blockdev", "fifo", "duplicate",
+        "dotdot",
+        "absolute",
+        "symlink-home",
+        "symlink-up",
+        "hardlink-up",
+        "hardlink-abs",
+        "hardlink-missing",
+        "chardev",
+        "blockdev",
+        "fifo",
+        "duplicate",
     ],
 )
 def test_extract_tar_rejects_unsafe_entries(tmp_path, entries):
@@ -3499,7 +3674,9 @@ def test_extract_tar_reports_progress_up_to_archive_size(tmp_path):
     size = os.path.getsize(archive)
     reports: list[tuple[int, int]] = []
     _ = extract_tar(
-        str(archive), str(tmp_path / "staging"), progress=lambda d, t: reports.append((d, t))
+        str(archive),
+        str(tmp_path / "staging"),
+        progress=lambda d, t: reports.append((d, t)),
     )
     assert reports
     done = [d for d, _t in reports]
@@ -3517,7 +3694,10 @@ def test_extract_tar_cancel_stops_inside_a_large_member(tmp_path):
     staging = tmp_path / "staging"
     with pytest.raises(InstallCancelled):
         _ = extract_tar(
-            str(archive), str(staging), progress=lambda _d, _t: cancel.set(), cancel=cancel
+            str(archive),
+            str(staging),
+            progress=lambda _d, _t: cancel.set(),
+            cancel=cancel,
         )
     partial = staging / "Game" / "archive.rpa"
     assert not partial.exists() or partial.stat().st_size < big
@@ -3540,14 +3720,18 @@ def test_install_tar_reports_missing_codec_before_staging(tmp_path, monkeypatch)
     monkeypatch.setitem(sys.modules, "lzma", None)
     lib = tmp_path / "lib"
     with pytest.raises(ArchiveInstallError, match=r"cannot read \.tar\.xz archives"):
-        _ = install_archive(str(archive), library_folder=str(lib), pattern="{title}", title="Game")
+        _ = install_archive(
+            str(archive), library_folder=str(lib), pattern="{title}", title="Game"
+        )
     assert not lib.exists() or not any(lib.iterdir())
 
 
 def test_uncompressed_size_for_tar(tmp_path):
     from core.archive_install import uncompressed_size
 
-    plain = _write_tar(tmp_path / "Game.tar", [("a.bin", b"x" * 1000), ("b.bin", b"y" * 500)])
+    plain = _write_tar(
+        tmp_path / "Game.tar", [("a.bin", b"x" * 1000), ("b.bin", b"y" * 500)]
+    )
     assert uncompressed_size(str(plain)) == 1500
     packed = _write_tar(tmp_path / "Game.tar.gz", [("a.bin", b"x" * 1000)], ".tar.gz")
     assert uncompressed_size(str(packed)) is None
@@ -3572,7 +3756,9 @@ def test_compressed_tar_needs_its_own_size_free(tmp_path, monkeypatch):
     monkeypatch.setattr(ai, "extract_tar", lambda *a, **k: called.append(a))
     lib = tmp_path / "lib"
     with pytest.raises(ArchiveInstallError, match="Not enough free space"):
-        _ = ai.install_archive(str(archive), library_folder=str(lib), pattern="{title}", title="Game")
+        _ = ai.install_archive(
+            str(archive), library_folder=str(lib), pattern="{title}", title="Game"
+        )
     assert called == []
     assert not any(name.startswith(ai.STAGING_PREFIX) for name in os.listdir(lib))
 
@@ -3660,11 +3846,19 @@ def test_find_download_offers_includes_tarballs(tmp_path, monkeypatch):
     assert game_id is not None
     db.update_game(int(game_id), {"latest_version": "0.8"})
     old = _time.time() - 60
-    for name in ("Eternum-0.8-linux.tar.bz2", "Eternum-0.8-linux.tar.bz2.crdownload", "Eternum-0.8.bz2"):
+    for name in (
+        "Eternum-0.8-linux.tar.bz2",
+        "Eternum-0.8-linux.tar.bz2.crdownload",
+        "Eternum-0.8.bz2",
+    ):
         path = downloads / name
         path.write_bytes(b"x" * 16)
         os.utime(path, (old, old))
     offers = find_download_offers()
-    assert [o["archive_path"] for o in offers] == [str(downloads / "Eternum-0.8-linux.tar.bz2")]
-    assert offers[0]["archive_version"] and ".tar" not in str(offers[0]["archive_version"])
+    assert [o["archive_path"] for o in offers] == [
+        str(downloads / "Eternum-0.8-linux.tar.bz2")
+    ]
+    assert offers[0]["archive_version"] and ".tar" not in str(
+        offers[0]["archive_version"]
+    )
     assert offers[0]["guessed_title"] == "Eternum"

@@ -73,9 +73,13 @@ def _current(conn: sqlite3.Connection, source: str, identity: str) -> bool:
     if source not in _CATALOG_TABLES:
         return True
     table, key = _CATALOG_TABLES[source]
-    return conn.execute(
-        f"SELECT 1 FROM {table} WHERE {key} = ? AND removed_at IS NOT NULL", (identity,)
-    ).fetchone() is None
+    return (
+        conn.execute(
+            f"SELECT 1 FROM {table} WHERE {key} = ? AND removed_at IS NOT NULL",
+            (identity,),
+        ).fetchone()
+        is None
+    )
 
 
 def _catalog_page(
@@ -159,7 +163,9 @@ def _catalog_page(
                 )
                 for target, value in rows:
                     # Older snapshots also hold links to removed rows.
-                    if (link := link_from_id(target, value)) and _current(conn, target, value):
+                    if (link := link_from_id(target, value)) and _current(
+                        conn, target, value
+                    ):
                         extra.append(link)
     except (sqlite3.Error, OSError, ValueError):
         return {}, []
@@ -192,7 +198,9 @@ def lc_partners() -> list[tuple[str, str, str]]:
     path = Path(database.DB_PATH).parent / CATALOG_FILE
     try:
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
-            return cast(list[tuple[str, str, str]], conn.execute(_LC_PARTNERS_SQL).fetchall())
+            return cast(
+                list[tuple[str, str, str]], conn.execute(_LC_PARTNERS_SQL).fetchall()
+            )
     except (sqlite3.Error, OSError, ValueError):
         return []
 
@@ -206,7 +214,9 @@ def catalog_installed() -> bool:
         return False
     try:
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
-            return conn.execute("SELECT 1 FROM lc_threads LIMIT 1").fetchone() is not None
+            return (
+                conn.execute("SELECT 1 FROM lc_threads LIMIT 1").fetchone() is not None
+            )
     except (sqlite3.Error, OSError, ValueError):
         return False
 
@@ -224,19 +234,24 @@ def premium_lc_threads(limit: int = 3) -> list[str]:
     path = Path(database.DB_PATH).parent / CATALOG_FILE
     try:
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
-            rows = cast(list[tuple[object]], conn.execute(
-                "SELECT thread_id FROM lc_threads WHERE removed_at IS NULL AND lower(tier) = 'premium' "
-                + "ORDER BY COALESCE(origin, '') = 'import', "
-                + "COALESCE(ts, 0) DESC, COALESCE(updated_at, '') DESC, thread_id DESC LIMIT ?",
-                (limit,),
-            ).fetchall())
+            rows = cast(
+                list[tuple[object]],
+                conn.execute(
+                    "SELECT thread_id FROM lc_threads WHERE removed_at IS NULL AND lower(tier) = 'premium' "
+                    + "ORDER BY COALESCE(origin, '') = 'import', "
+                    + "COALESCE(ts, 0) DESC, COALESCE(updated_at, '') DESC, thread_id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall(),
+            )
     except (sqlite3.Error, OSError, ValueError):
         return []
     return [str(thread_id) for (thread_id,) in rows]
 
 
 def lc_for_f95(thread_id: str) -> tuple[str, str] | None:
-    return next(((lc, tier) for f95, lc, tier in lc_partners() if f95 == thread_id), None)
+    return next(
+        ((lc, tier) for f95, lc, tier in lc_partners() if f95 == thread_id), None
+    )
 
 
 def f95_for_lc(thread_id: str) -> str | None:
@@ -260,9 +275,8 @@ def lookup_lc_partner(url: object) -> dict[str, str]:
             lc, tier = partner
             lc_url = f"https://lewdcorner.com/threads/{lc}/"
             if (
-                (tier.casefold() != "premium" or database.lc_plus_effective())
-                and not database.find_game_by_lc_url(lc_url)
-            ):
+                tier.casefold() != "premium" or database.lc_plus_effective()
+            ) and not database.find_game_by_lc_url(lc_url):
                 return {"lc_url": lc_url}
     return {}
 
@@ -278,29 +292,57 @@ def _catalog_thread_entries(
     try:
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
             conn.row_factory = sqlite3.Row
-            tables = {name for (name,) in cast(
-                list[tuple[str]], conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
-            )}
+            tables = {
+                name
+                for (name,) in cast(
+                    list[tuple[str]],
+                    conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    ).fetchall(),
+                )
+            }
             prefix_table = f"{source}_prefix_names"
-            names = dict(cast(
-                list[tuple[int, str]], conn.execute(f"SELECT id, name FROM {prefix_table}").fetchall()
-            )) if prefix_table in tables else {}
-            tag_names = dict(cast(
-                list[tuple[int, str]], conn.execute("SELECT id, name FROM f95_tag_names").fetchall()
-            )) if source == "f95" and "f95_tag_names" in tables else {}
+            names = (
+                dict(
+                    cast(
+                        list[tuple[int, str]],
+                        conn.execute(f"SELECT id, name FROM {prefix_table}").fetchall(),
+                    )
+                )
+                if prefix_table in tables
+                else {}
+            )
+            tag_names = (
+                dict(
+                    cast(
+                        list[tuple[int, str]],
+                        conn.execute("SELECT id, name FROM f95_tag_names").fetchall(),
+                    )
+                )
+                if source == "f95" and "f95_tag_names" in tables
+                else {}
+            )
             detail_table = f"{source}_thread_details"
             details = detail_table in tables
-            join = f"LEFT JOIN {detail_table} d ON d.thread_id = t.thread_id AND d.status = 'ok'" if details else ""
+            join = (
+                f"LEFT JOIN {detail_table} d ON d.thread_id = t.thread_id AND d.status = 'ok'"
+                if details
+                else ""
+            )
             fields = ", d.overview, d.language, d.external_ids" if details else ""
             if details and source == "lc":
                 fields += ", d.developer"
             for offset in range(0, len(ids), 500):
-                chunk = ids[offset:offset + 500]
+                chunk = ids[offset : offset + 500]
                 marks = ",".join("?" for _ in chunk)
-                rows = cast(list[sqlite3.Row], conn.execute(
-                    f"SELECT t.*{fields} FROM {source}_threads t {join} "
-                    + f"WHERE t.removed_at IS NULL AND t.thread_id IN ({marks})", chunk
-                ).fetchall())
+                rows = cast(
+                    list[sqlite3.Row],
+                    conn.execute(
+                        f"SELECT t.*{fields} FROM {source}_threads t {join} "
+                        + f"WHERE t.removed_at IS NULL AND t.thread_id IN ({marks})",
+                        chunk,
+                    ).fetchall(),
+                )
                 for row in rows:
                     data = {str(key): cast(object, row[key]) for key in row.keys()}
                     prefixes = _named_values(data.get("prefixes"), names)
@@ -309,9 +351,18 @@ def _catalog_thread_entries(
                             _named_lc_prefixes(data.get("prefixes"), names)
                         )
                     else:
-                        labels = [f95zone.normalize_prefix_label(prefix) for prefix in prefixes]
-                        engine = next((prefix for prefix, label in zip(prefixes, labels, strict=True)
-                                       if label not in f95zone.NON_ENGINE_PREFIXES), "")
+                        labels = [
+                            f95zone.normalize_prefix_label(prefix)
+                            for prefix in prefixes
+                        ]
+                        engine = next(
+                            (
+                                prefix
+                                for prefix, label in zip(prefixes, labels, strict=True)
+                                if label not in f95zone.NON_ENGINE_PREFIXES
+                            ),
+                            "",
+                        )
                         flags = f95zone.thread_prefix_flags(prefixes)
                     rating = data.get("rating")
                     entry = {
@@ -321,7 +372,9 @@ def _catalog_thread_entries(
                         "ts": data.get("ts"),
                         "coverImage": data.get("cover_url") or "",
                         "tags": ", ".join(_named_values(data.get("tags"), tag_names)),
-                        "rating": rating if isinstance(rating, (int, float)) and 0 < rating <= 5 else "",
+                        "rating": rating
+                        if isinstance(rating, (int, float)) and 0 < rating <= 5
+                        else "",
                         "engine": engine,
                         # No named prefix means no prefix data: None keeps the stored states.
                         "thread_completed": flags.completed if prefixes else None,
@@ -329,7 +382,9 @@ def _catalog_thread_entries(
                         "thread_abandoned": flags.abandoned if prefixes else None,
                         # When the builder last read the thread, so older catalog
                         # states never replace a newer page or feed read.
-                        "thread_states_seen_at": data.get("last_seen") if prefixes else None,
+                        "thread_states_seen_at": data.get("last_seen")
+                        if prefixes
+                        else None,
                         "overview": data.get("overview") or "",
                         "language": data.get("language") or "",
                         "external_links": _detail_links(data.get("external_ids")),
@@ -352,7 +407,9 @@ def _named_values(raw: object, names: dict[int, str]) -> list[str]:
         return []
     values: list[str] = []
     for item in cast(list[object], items):
-        if isinstance(item, int) or (isinstance(item, str) and item.isascii() and item.isdigit()):
+        if isinstance(item, int) or (
+            isinstance(item, str) and item.isascii() and item.isdigit()
+        ):
             name = names.get(int(item), "")
         else:
             name = item if isinstance(item, str) else ""
@@ -371,7 +428,9 @@ def _named_lc_prefixes(raw: object, names: dict[int, str]) -> list[lewdcorner.Lc
         return []
     prefixes: list[lewdcorner.LcPrefix] = []
     for item in cast(list[object], items):
-        if isinstance(item, int) or (isinstance(item, str) and item.isascii() and item.isdigit()):
+        if isinstance(item, int) or (
+            isinstance(item, str) and item.isascii() and item.isdigit()
+        ):
             prefix = lewdcorner.lc_prefix(names.get(int(item), ""), int(item))
         else:
             prefix = lewdcorner.lc_prefix(item)
@@ -394,12 +453,18 @@ def lc_thread_tiers(thread_ids: Sequence[str]) -> dict[str, str]:
     try:
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
             for offset in range(0, len(ids), 500):
-                chunk = ids[offset:offset + 500]
-                rows = cast(list[tuple[object, object]], conn.execute(
-                    "SELECT thread_id, tier FROM lc_threads WHERE removed_at IS NULL "
-                    + f"AND thread_id IN ({','.join('?' for _ in chunk)})", chunk,
-                ).fetchall())
-                tiers.update({str(thread_id): str(tier) for thread_id, tier in rows if tier})
+                chunk = ids[offset : offset + 500]
+                rows = cast(
+                    list[tuple[object, object]],
+                    conn.execute(
+                        "SELECT thread_id, tier FROM lc_threads WHERE removed_at IS NULL "
+                        + f"AND thread_id IN ({','.join('?' for _ in chunk)})",
+                        chunk,
+                    ).fetchall(),
+                )
+                tiers.update(
+                    {str(thread_id): str(tier) for thread_id, tier in rows if tier}
+                )
     except (sqlite3.Error, OSError, ValueError):
         return {}
     return tiers
@@ -409,7 +474,9 @@ def f95_thread_entries(thread_ids: Sequence[str]) -> dict[str, dict[str, object]
     return _catalog_thread_entries("f95", thread_ids)
 
 
-def combined_thread_entry(f95: dict[str, object], lc: dict[str, object]) -> dict[str, object]:
+def combined_thread_entry(
+    f95: dict[str, object], lc: dict[str, object]
+) -> dict[str, object]:
     entry = {**lc, **{key: value for key, value in f95.items() if value}}
     # F95 prefix data decides the thread states, also when it says "not set".
     for key in ("thread_completed", "thread_onhold", "thread_abandoned"):
@@ -432,9 +499,16 @@ def _detail_store_links(raw: object) -> list[StoreLink]:
             if not isinstance(entries, list):
                 continue
             for entry in cast(list[object], entries):
-                identity = cast(dict[str, object], entry).get("id") if isinstance(entry, dict) else entry
+                identity = (
+                    cast(dict[str, object], entry).get("id")
+                    if isinstance(entry, dict)
+                    else entry
+                )
                 if identity and (link := link_from_id(source, str(identity))):
-                    if not any((link["source"], link["id"]) == (old["source"], old["id"]) for old in links):
+                    if not any(
+                        (link["source"], link["id"]) == (old["source"], old["id"])
+                        for old in links
+                    ):
                         links.append(link)
     return links
 
@@ -453,7 +527,9 @@ def resolve_page(url: str, ids: Sequence[str] = ()) -> PageResolution:
         expanded = cast(list[StoreLink], entry.get("links", []))
         thread_game = database.find_game_by_lc_url(url)
         if thread_game is None and partner:
-            thread_game = database.find_game_by_f95_url(f"https://f95zone.to/threads/{partner}/")
+            thread_game = database.find_game_by_f95_url(
+                f"https://f95zone.to/threads/{partner}/"
+            )
             if thread_game:
                 matched = database.get_game(int(str(thread_game["id"])))
                 attach_lc = matched is not None and not matched.get("lc_url")
@@ -467,9 +543,16 @@ def resolve_page(url: str, ids: Sequence[str] = ()) -> PageResolution:
     unique = {(link["source"], link["id"]): link for link in supplied + expanded}
     links = list(unique.values())
     matches = (
-        [int(str(thread_game["id"]))] if thread_game else database.find_games_by_links(links)
+        [int(str(thread_game["id"]))]
+        if thread_game
+        else database.find_games_by_links(links)
     )
-    return {"ids": links, "catalog_entry": entry, "matches": matches, "attach_lc_available": attach_lc}
+    return {
+        "ids": links,
+        "catalog_entry": entry,
+        "matches": matches,
+        "attach_lc_available": attach_lc,
+    }
 
 
 def f95_thread_cover(thread_id: str) -> str:
@@ -512,12 +595,17 @@ def _thread_screenshots(table: str, thread_ids: Sequence[str]) -> dict[str, list
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
             for offset in range(0, len(ids), 500):
                 chunk = ids[offset : offset + 500]
-                rows = cast(list[tuple[object, object]], conn.execute(
-                    f"SELECT thread_id, screens FROM {table} WHERE thread_id IN ({','.join('?' for _ in chunk)})",
-                    chunk,
-                ).fetchall())
+                rows = cast(
+                    list[tuple[object, object]],
+                    conn.execute(
+                        f"SELECT thread_id, screens FROM {table} WHERE thread_id IN ({','.join('?' for _ in chunk)})",
+                        chunk,
+                    ).fetchall(),
+                )
                 for thread_id, screens in rows:
-                    found[str(thread_id)] = [url for url in _strings(screens) if url.startswith("https://")]
+                    found[str(thread_id)] = [
+                        url for url in _strings(screens) if url.startswith("https://")
+                    ]
     except (sqlite3.Error, OSError, ValueError):
         return {}
     return found
@@ -595,7 +683,11 @@ def _detail_links(raw: object) -> list[str]:
         if not isinstance(entries, list):
             continue
         for entry in cast(list[object], entries):
-            url = cast(dict[str, object], entry).get("url") if isinstance(entry, dict) else None
+            url = (
+                cast(dict[str, object], entry).get("url")
+                if isinstance(entry, dict)
+                else None
+            )
             if isinstance(url, str) and url not in urls:
                 urls.append(url)
     return urls
@@ -653,9 +745,13 @@ def screenshot_urls(url: str) -> dict[str, str]:
     try:
         parts = urlsplit(url)
         if parts.netloc in ("preview.f95zone.to", "attachments.f95zone.to"):
-            return {host: urlunsplit(parts._replace(netloc=domain)) for host, domain in (
-                ("thumb", "preview.f95zone.to"), ("full", "attachments.f95zone.to")
-            )}
+            return {
+                host: urlunsplit(parts._replace(netloc=domain))
+                for host, domain in (
+                    ("thumb", "preview.f95zone.to"),
+                    ("full", "attachments.f95zone.to"),
+                )
+            }
     except ValueError:
         pass
     return {"thumb": url, "full": url}

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M22: a restarted helper restores an older upload count; uploads after it must still count."""
+
 import pytest
 
 from core.downloads import torrent_settings
@@ -23,11 +24,26 @@ def make_job(sup: TorrentSupervisor, stage: str, seed_state: str = "") -> _Job:
     return job
 
 
-def status(sup: TorrentSupervisor, job: _Job, uploaded: int, state: str = "seeding") -> None:
-    sup._on_event({"event": "status", "torrents": [{  # pyright: ignore[reportPrivateUsage]
-        "id": job.id, "state": state, "size": 100, "downloaded": 100 if state == "seeding" else 30,
-        "down": 0, "up": 0, "peers": 1, "uploaded": uploaded,
-    }]})
+def status(
+    sup: TorrentSupervisor, job: _Job, uploaded: int, state: str = "seeding"
+) -> None:
+    sup._on_event(
+        {
+            "event": "status",
+            "torrents": [
+                {  # pyright: ignore[reportPrivateUsage]
+                    "id": job.id,
+                    "state": state,
+                    "size": 100,
+                    "downloaded": 100 if state == "seeding" else 30,
+                    "down": 0,
+                    "up": 0,
+                    "peers": 1,
+                    "uploaded": uploaded,
+                }
+            ],
+        }
+    )
 
 
 def helper_restart(sup: TorrentSupervisor) -> None:

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Database bug hunt fixes: settings, migration, thread and status races."""
+
 import json
 import sqlite3
 import struct
@@ -53,7 +54,9 @@ def test_folder_repair_does_not_undo_a_concurrent_save(monkeypatch):
 
 
 def test_folder_read_without_repair_writes_nothing():
-    database.update_settings({"library_folder": "/a", "library_folders": json.dumps(["/a"])})
+    database.update_settings(
+        {"library_folder": "/a", "library_folders": json.dumps(["/a"])}
+    )
     database.update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
     assert database.get_library_folders() == (["/a"], "/a")
     assert database.get_setting("sync_local_modified_at") == "2000-01-01T00:00:00Z"
@@ -139,10 +142,14 @@ def test_dated_read_fills_an_undated_version():
     game_id = database.add_game("Game", "", F95_A)
     _ = database.store_thread_update(game_id, "f95", F95_A, ("2.0", ""))
     assert _row(game_id, "f95_latest_at") == ("",)
-    _ = database.store_thread_update(game_id, "f95", F95_A, ("2.0", "2026-01-02T00:00:00Z"))
+    _ = database.store_thread_update(
+        game_id, "f95", F95_A, ("2.0", "2026-01-02T00:00:00Z")
+    )
     assert _row(game_id, "f95_latest_at") == ("2026-01-02T00:00:00Z",)
     # A dated version keeps its first date.
-    _ = database.store_thread_update(game_id, "f95", F95_A, ("2.0", "2026-03-04T00:00:00Z"))
+    _ = database.store_thread_update(
+        game_id, "f95", F95_A, ("2.0", "2026-03-04T00:00:00Z")
+    )
     assert _row(game_id, "f95_latest_at") == ("2026-01-02T00:00:00Z",)
 
 
@@ -154,7 +161,8 @@ def test_replacing_lc_only_thread_clears_finished_flag():
     _ = database.update_game(game_id, {"lc_url": "https://lewdcorner.com/threads/222/"})
     assert _row(game_id, "thread_completed") == (0,)
     _ = database.update_game(
-        game_id, {"lc_url": "https://lewdcorner.com/threads/333/", "thread_completed": True}
+        game_id,
+        {"lc_url": "https://lewdcorner.com/threads/333/", "thread_completed": True},
     )
     assert _row(game_id, "thread_completed") == (1,)
 
@@ -163,7 +171,9 @@ def test_removing_custom_status_resets_non_ascii_case_variant():
     database.update_custom_play_statuses(["Épilogue"])
     game_id = database.add_game("Game", "")
     with closing(database.get_connection()) as conn:
-        _ = conn.execute("UPDATE games SET play_status = 'Épilogue' WHERE id = ?", (game_id,))
+        _ = conn.execute(
+            "UPDATE games SET play_status = 'Épilogue' WHERE id = ?", (game_id,)
+        )
         conn.commit()
     database.update_custom_play_statuses(["épilogue"])
     assert _row(game_id, "play_status") == ("Épilogue",)

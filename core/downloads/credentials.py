@@ -6,6 +6,7 @@ backup/sync allowlists, so they never leave this device. They are stored as
 plain text, so core/database.py keeps wlib.db, its WAL files and its
 pre-migration copies owner-only.
 """
+
 from __future__ import annotations
 
 import sqlite3

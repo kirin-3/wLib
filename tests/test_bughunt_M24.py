@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """M24: a sequel number in the game title is not the listing's version."""
+
 import pytest
 
 from core.downloads import rpdl_match as m
@@ -12,7 +13,9 @@ def test_sequel_number_is_not_the_version():
 
 
 def test_sequel_number_listing_not_preselected_for_that_version():
-    out = m.rank([{"id": 1, "title": "Game-2-1.4-pc", "seeders": 5, "date": 1}], "Game 2", "2")
+    out = m.rank(
+        [{"id": 1, "title": "Game-2-1.4-pc", "seeders": 5, "date": 1}], "Game 2", "2"
+    )
     assert out["preselected_id"] is None
     assert out["results"][0]["version_match"] is False
 

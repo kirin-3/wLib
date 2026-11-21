@@ -40,7 +40,9 @@ def main() -> None:
             umu_run = importlib.import_module("umu.umu_run")
             installed = cast(
                 Callable[[object], bool],
-                getattr(importlib.import_module("umu.umu_util"), "has_runtime_installed"),
+                getattr(
+                    importlib.import_module("umu.umu_util"), "has_runtime_installed"
+                ),
             )
             write_marker = cast(
                 Callable[[object], None], getattr(umu_run, "write_install_marker")

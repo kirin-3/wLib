@@ -33,7 +33,9 @@ _RJ_RE = re.compile(r"\b((?:RJ|VJ)\d{6,8})\b")
 _STEAM_RE = re.compile(r"store\.steampowered\.com/app/(\d+)")
 _VNDB_RE = re.compile(r"vndb\.org/(v\d+)\b")
 _DEVELOPER_RE = re.compile(r"Developer\s*:\s*([^\n]+)")
-_IMG_RE = re.compile(r'<img [^>]*src="(https://www\.ryuugames\.com/wp-content/uploads/[^"]+)"')
+_IMG_RE = re.compile(
+    r'<img [^>]*src="(https://www\.ryuugames\.com/wp-content/uploads/[^"]+)"'
+)
 _TAG_RE = re.compile(r"<[^>]+>")
 _VERSION_RE = re.compile(r"\((V[^)]*)\)", re.I)
 _LANG_PREFIX_RE = re.compile(r"^\s*(?:\[[^\]]*\]\s*)+")
@@ -60,7 +62,9 @@ def parse_post(post: dict[str, object]) -> dict[str, object] | None:
     if not isinstance(post_id, int):
         return None
     categories = [
-        item for item in cast(list[object], post.get("categories") or []) if isinstance(item, int)
+        item
+        for item in cast(list[object], post.get("categories") or [])
+        if isinstance(item, int)
     ]
     if TUTORIAL_CATEGORY in categories:
         return None
@@ -86,7 +90,9 @@ def parse_post(post: dict[str, object]) -> dict[str, object] | None:
         "raw_title": raw_title,
         "developer": developer.group(1).strip() if developer else None,
         "version": version,
-        "categories": [CATEGORY_NAMES[item] for item in categories if item in CATEGORY_NAMES],
+        "categories": [
+            CATEGORY_NAMES[item] for item in categories if item in CATEGORY_NAMES
+        ],
         "rj_codes": _unique(_RJ_RE.findall(raw_title + "\n" + html)),
         "steam_ids": _unique(_STEAM_RE.findall(html)),
         "vndb_ids": _unique(_VNDB_RE.findall(html)),
@@ -173,5 +179,8 @@ class RyuugamesSource:
     def reset_sweep(self, ctx: SourceContext) -> None:
         ctx.state.put(self.name, "sweep_page", None)
         since = ctx.state.get(self.name, "sweep_modified_since")
-        if isinstance(since, str) and ctx.state.get(self.name, "modified_since") is None:
+        if (
+            isinstance(since, str)
+            and ctx.state.get(self.name, "modified_since") is None
+        ):
             ctx.state.put(self.name, "modified_since", since)

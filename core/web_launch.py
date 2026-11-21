@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Decide whether a launch target opens in the built-in web player or the system browser."""
+
 from __future__ import annotations
 
 import os

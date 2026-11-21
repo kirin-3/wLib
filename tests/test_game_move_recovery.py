@@ -42,7 +42,9 @@ def _game(root):
     return game_id
 
 
-def test_next_start_finishes_a_move_stopped_before_the_library_update(ctx, tmp_path, monkeypatch):
+def test_next_start_finishes_a_move_stopped_before_the_library_update(
+    ctx, tmp_path, monkeypatch
+):
     root = tmp_path / "Library" / "Game"
     game_id = _game(root)
     dest = tmp_path / "new"
@@ -104,7 +106,9 @@ def test_rename_record_without_the_rename_is_dropped(ctx, tmp_path):
 
 
 def test_rename_record_of_an_offline_drive_stays(ctx, tmp_path):
-    _ = gf.add_rename(1, str(tmp_path / "gone" / "Game"), str(tmp_path / "offline" / "Game"))
+    _ = gf.add_rename(
+        1, str(tmp_path / "gone" / "Game"), str(tmp_path / "offline" / "Game")
+    )
     _ = gf.sweep_leftovers(ctx.library_folders)
     assert len(gf.list_renames()) == 1
 

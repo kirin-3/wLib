@@ -32,9 +32,13 @@ MANIFEST_CACHE = "public, max-age=300"
 
 
 class Storage(Protocol):
-    def put_file(self, key: str, path: str, content_type: str, cache_control: str) -> None: ...
+    def put_file(
+        self, key: str, path: str, content_type: str, cache_control: str
+    ) -> None: ...
 
-    def put_bytes(self, key: str, data: bytes, content_type: str, cache_control: str) -> None: ...
+    def put_bytes(
+        self, key: str, data: bytes, content_type: str, cache_control: str
+    ) -> None: ...
 
     def list_keys(self, prefix: str) -> list[str]: ...
 
@@ -113,7 +117,9 @@ class R2Storage:
         call = cast(Callable[..., object], getattr(self._client, method))
         return call(Bucket=self._bucket, **kwargs)
 
-    def put_file(self, key: str, path: str, content_type: str, cache_control: str) -> None:
+    def put_file(
+        self, key: str, path: str, content_type: str, cache_control: str
+    ) -> None:
         with open(path, "rb") as handle:
             _ = self._call(
                 "put_object",
@@ -123,9 +129,15 @@ class R2Storage:
                 CacheControl=cache_control,
             )
 
-    def put_bytes(self, key: str, data: bytes, content_type: str, cache_control: str) -> None:
+    def put_bytes(
+        self, key: str, data: bytes, content_type: str, cache_control: str
+    ) -> None:
         _ = self._call(
-            "put_object", Key=key, Body=data, ContentType=content_type, CacheControl=cache_control
+            "put_object",
+            Key=key,
+            Body=data,
+            ContentType=content_type,
+            CacheControl=cache_control,
         )
 
     def list_keys(self, prefix: str) -> list[str]:

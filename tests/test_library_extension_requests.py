@@ -111,7 +111,9 @@ run().then(
 """
 
 
-@pytest.mark.parametrize("pause", ["refresh", "open-close", "open-tick", "import-close"])
+@pytest.mark.parametrize(
+    "pause", ["refresh", "open-close", "open-tick", "import-close"]
+)
 def test_new_extension_import_supersedes_pending_request(pause: str) -> None:
     node = shutil.which("node")
     if node is None or not (UI / "node_modules/vue-router/package.json").is_file():

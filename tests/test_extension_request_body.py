@@ -16,14 +16,18 @@ class _OneBody:
     def read(self, size: int = -1) -> bytes:
         chunk = self._data.read(size)
         if not chunk:
-            raise AssertionError("read past the request body (a real socket would wait)")
+            raise AssertionError(
+                "read past the request body (a real socket would wait)"
+            )
         return chunk
 
 
 def test_rejected_open_reads_its_body_once(monkeypatch):
     monkeypatch.setattr(server_module, "window_ref", None)
     body = b"abcd"
-    handler = server_module.ExtensionRequestHandler.__new__(server_module.ExtensionRequestHandler)
+    handler = server_module.ExtensionRequestHandler.__new__(
+        server_module.ExtensionRequestHandler
+    )
     handler.path = "/api/open?url=https%3A%2F%2Ff95zone.to%2Fthreads%2F1%2F"
     headers = Message()
     headers["X-wLib-Extension"] = "b" * 64  # not a paired token

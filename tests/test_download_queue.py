@@ -119,7 +119,9 @@ def make_queue(worker, clock, *workers, **kwargs):
 
 
 def add(queue, game_id, kind="host", **kwargs):
-    job = queue.add(kind, game_id, f"Game {game_id}", "1.0", {"host": "pixeldrain"}, **kwargs)
+    job = queue.add(
+        kind, game_id, f"Game {game_id}", "1.0", {"host": "pixeldrain"}, **kwargs
+    )
     queue.tick()
     return job.id
 
@@ -201,7 +203,12 @@ def test_lowered_number_keeps_running_jobs(worker, clock):
     assert [queue.get(job_id).state for job_id in ids[:3]] == [RUNNING] * 3
     update_setting(queue_settings.MAX_ACTIVE_KEY, "1")
     queue.apply_settings()
-    assert [queue.get(job_id).state for job_id in ids] == [RUNNING, RUNNING, RUNNING, QUEUED]
+    assert [queue.get(job_id).state for job_id in ids] == [
+        RUNNING,
+        RUNNING,
+        RUNNING,
+        QUEUED,
+    ]
     assert worker.stopped == []
     worker.finish(ids[0])
     worker.finish(ids[1])
@@ -310,7 +317,12 @@ def test_pause_all_and_resume_all(worker, clock):
     assert all(queue.get(job_id).state == PAUSED for job_id in ids)
     assert not [job for job in queue.jobs() if job.state == RUNNING]
     assert queue.resume_all() == 4
-    assert [queue.get(job_id).state for job_id in ids] == [RUNNING, RUNNING, QUEUED, QUEUED]
+    assert [queue.get(job_id).state for job_id in ids] == [
+        RUNNING,
+        RUNNING,
+        QUEUED,
+        QUEUED,
+    ]
 
 
 def test_pause_while_preparing_keeps_the_pause(worker, clock):
@@ -396,13 +408,17 @@ def test_upgrade_with_existing_torrents_and_no_rows(worker, clock):
     torrent = FakeWorker("torrent")
     torrent.orphans = [
         QueueJob(id="old", kind="torrent", game_id=1, state=PAUSED, created_at=5.0),
-        QueueJob(id="was-running", kind="torrent", game_id=2, state=RUNNING, created_at=6.0),
+        QueueJob(
+            id="was-running", kind="torrent", game_id=2, state=RUNNING, created_at=6.0
+        ),
         QueueJob(id="done", kind="torrent", game_id=3, state=READY, created_at=7.0),
     ]
     queue = make_queue(FakeWorker(), clock, torrent)
     queue.load()
     assert queue.get("old").state == PAUSED
-    assert queue.get("was-running").state == RUNNING and torrent.started == ["was-running"]
+    assert queue.get("was-running").state == RUNNING and torrent.started == [
+        "was-running"
+    ]
     assert queue.get("done").state == READY
     assert order(queue)[0] == "was-running"
 
@@ -565,7 +581,10 @@ def test_network_failure_retries_three_times_then_needs_the_user(worker, clock):
         ("link expired or removed", "removed"),
         ("transfer quota or rate limit reached", "quota"),
         ("Not enough disk space: 10 bytes needed", "disk"),
-        ("Open a browser with an up-to-date wLib extension to download in-app", "extension"),
+        (
+            "Open a browser with an up-to-date wLib extension to download in-app",
+            "extension",
+        ),
     ],
 )
 def test_other_failures_need_the_user_at_once(worker, clock, message, code):
@@ -603,14 +622,15 @@ def test_replacement_takes_the_failed_jobs_place(worker, clock):
         _ = queue.add("host", 3, "Game 3", "1.0", {}, replaces="missing")
 
 
-
 def test_same_mirror_again_keeps_the_partial_file(worker, clock):
     queue = make_queue(worker, clock)
     a = add(queue, 1)
     queue.get(a).source["part_file"] = "resume-abc.part"
     worker.fail(a, "link expired or removed")
     queue.tick()
-    new = queue.add("host", 1, "Game 1", "1.0", {"site": "f95", "host": "pixeldrain"}, replaces=a)
+    new = queue.add(
+        "host", 1, "Game 1", "1.0", {"site": "f95", "host": "pixeldrain"}, replaces=a
+    )
     assert worker.removed == [a] and worker.kept == [True]
     # Startup cleanup keeps the partial files that jobs name.
     assert new.source["part_file"] == "resume-abc.part"
@@ -629,7 +649,11 @@ def test_job_back_from_a_browser_check_waits_for_a_free_slot(worker, clock):
     assert queue.get(c).state == RUNNING  # The slot went to the next job.
     worker.states[a].phase = PHASE_RUNNING
     queue.tick()
-    assert [queue.get(job_id).state for job_id in (a, b, c)] == [QUEUED, RUNNING, RUNNING]
+    assert [queue.get(job_id).state for job_id in (a, b, c)] == [
+        QUEUED,
+        RUNNING,
+        RUNNING,
+    ]
     assert worker.stopped == [a] and order(queue)[0] == a
     worker.finish(b)
     queue.tick()
@@ -650,7 +674,6 @@ def test_failed_preparation_keeps_the_pause(worker, clock):
     assert queue.get(job_id).state == PAUSED and worker.started == []
     assert queue.resume(job_id)
     assert queue.get(job_id).state == RUNNING and worker.started == [job_id]
-
 
 
 def test_lasting_failure_while_paused_still_needs_the_user(worker, clock):
@@ -717,7 +740,9 @@ def test_resume_now_lasts_until_the_hold_ends(worker, clock):
 
 def test_battery_hold_and_settings_off(worker, clock):
     battery = [True]
-    queue = make_queue(worker, clock, running_games=lambda: [1], on_battery=lambda: battery[0])
+    queue = make_queue(
+        worker, clock, running_games=lambda: [1], on_battery=lambda: battery[0]
+    )
     update_setting(queue_settings.PAUSE_WHILE_PLAYING_KEY, "false")
     queue.apply_settings()
     a = add(queue, 7)
@@ -749,7 +774,13 @@ def test_forecast(worker, clock):
     worker.states[a].bytes_done = 30
     worker.states[b].bytes_total = 40
     forecast = queue.status()["queue"]["forecast"]
-    assert forecast == {"needed": 90, "free": 100, "unknown": 1, "fits": True, "missing": 0}
+    assert forecast == {
+        "needed": 90,
+        "free": 100,
+        "unknown": 1,
+        "fits": True,
+        "missing": 0,
+    }
     worker.states[b].bytes_total = 100
     forecast = queue.status()["queue"]["forecast"]
     assert forecast["fits"] is False and forecast["missing"] == 50

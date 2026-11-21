@@ -232,7 +232,14 @@ def host_tool_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
     variable is removed.
     """
     clean = dict(os.environ if environ is None else environ)
-    for var in ("APPIMAGE", "APPDIR", "ARGV0", "APPIMAGE_SILENT_INSTALL", "OWD", "APPIMAGE_EXTRACT_AND_RUN"):
+    for var in (
+        "APPIMAGE",
+        "APPDIR",
+        "ARGV0",
+        "APPIMAGE_SILENT_INSTALL",
+        "OWD",
+        "APPIMAGE_EXTRACT_AND_RUN",
+    ):
         _ = clean.pop(var, None)
     original = str(clean.pop("LD_LIBRARY_PATH_ORIG", "") or "").strip()
     if original:
@@ -302,7 +309,7 @@ def host_system_layout() -> tuple[bool, dict[str, str]]:
                 continue
         return os.path.isdir("/nix/store"), links
     script = (
-        '[ -d /nix/store ] && echo nix; '
+        "[ -d /nix/store ] && echo nix; "
         'for p in "$@"; do [ -L "$p" ] && printf "link %s %s\\n" "$p" "$(readlink "$p")"; done'
     )
     try:
@@ -322,7 +329,12 @@ def host_system_layout() -> tuple[bool, dict[str, str]]:
         parts = line.strip().split(" ", 2)
         if parts == ["nix"]:
             nixos = True
-        elif len(parts) == 3 and parts[0] == "link" and parts[1] in _SYSTEM_LINK_PATHS and parts[2]:
+        elif (
+            len(parts) == 3
+            and parts[0] == "link"
+            and parts[1] in _SYSTEM_LINK_PATHS
+            and parts[2]
+        ):
             host_links[parts[1]] = parts[2]
     return nixos, host_links
 
@@ -331,7 +343,9 @@ _X11_SOCKET_DIR = "/tmp/.X11-unix"
 
 
 def _is_x11_socket_name(name: str) -> bool:
-    return len(name) > 1 and name[0] == "X" and name[1:].isascii() and name[1:].isdigit()
+    return (
+        len(name) > 1 and name[0] == "X" and name[1:].isascii() and name[1:].isdigit()
+    )
 
 
 def host_x11_sockets() -> tuple[str, ...]:
@@ -392,7 +406,11 @@ def host_command(
         for key, value in env.items():
             if _is_sandbox_only_env_var(key):
                 continue
-            if os.environ.get(key) == value and key not in ("LD_PRELOAD", "SteamAppId", "SteamGameId"):
+            if os.environ.get(key) == value and key not in (
+                "LD_PRELOAD",
+                "SteamAppId",
+                "SteamGameId",
+            ):
                 continue
             argv.append(f"--env={key}={value}")
     argv.append("--")

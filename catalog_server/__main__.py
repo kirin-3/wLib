@@ -108,7 +108,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _ = commands.add_parser("status", help="show recent runs and source cursors")
     _ = commands.add_parser(
-        "check-f95-login", help="open F95 in the browser with the login cookie and report the account"
+        "check-f95-login",
+        help="open F95 in the browser with the login cookie and report the account",
     )
     _ = commands.add_parser(
         "check-lc-login",
@@ -154,7 +155,9 @@ def _status(folder: str) -> int:
                     "rows": catalog.count(name),
                     **state.source_status(name),
                     "state": state.items(name),
-                    "requests_last_hour": len(state.request_times(name, time.time() - 3600)),
+                    "requests_last_hour": len(
+                        state.request_times(name, time.time() - 3600)
+                    ),
                 }
                 for name in STEPS
             },
@@ -170,7 +173,8 @@ F95_HOME_URL = "https://f95zone.to/"
 LC_HOME_URL = "https://lewdcorner.com/"
 _LOGGED_IN_RE = re.compile(r'<html[^>]*\sdata-logged-in="true"')
 _ACCOUNT_NAME_RE = re.compile(
-    r'<a href="/account/"[^>]*>.*?<span class="p-navgroup-linkText">([^<]+)</span>', re.S
+    r'<a href="/account/"[^>]*>.*?<span class="p-navgroup-linkText">([^<]+)</span>',
+    re.S,
 )
 
 
@@ -186,7 +190,10 @@ class NetworkSettings:
         self.proxies: dict[str, str] = site_proxies_from_env()
         sites = set(browser_sites_from_env())
         # Thread pages and the Plus listings go the same way as their feed.
-        for feed, steps in (("f95", ("f95_threads",)), ("lc", ("lc_plus", "lc_threads"))):
+        for feed, steps in (
+            ("f95", ("f95_threads",)),
+            ("lc", ("lc_plus", "lc_threads")),
+        ):
             if feed in sites:
                 sites.update(steps)
         self.browser_sites: frozenset[str] = frozenset(sites)
@@ -208,14 +215,17 @@ class NetworkSettings:
             cookies.extend(lc_login_cookies(self.lc_cookie))
         return cookies
 
-    def transports(self, browser: BrowserTransport | None) -> dict[str, Transport] | None:
+    def transports(
+        self, browser: BrowserTransport | None
+    ) -> dict[str, Transport] | None:
         """The browser view per browser site: the login view for the feeds
         that need it, the guest view (no cookies) for everything else."""
         if browser is None:
             return None
         guest = browser.guest()
         return {
-            site: browser if site in LOGIN_SITES else guest for site in self.browser_sites
+            site: browser if site in LOGIN_SITES else guest
+            for site in self.browser_sites
         }
 
     def browser(self, given: BrowserTransport | None) -> BrowserTransport | None:
@@ -234,7 +244,9 @@ def _check_login(
     home_url: str,
     cookie_hint: str,
 ) -> int:
-    if browser is None:  # NetworkSettings needs the site in the browser sites for a cookie.
+    if (
+        browser is None
+    ):  # NetworkSettings needs the site in the browser sites for a cookie.
         return 2
     with _run_lock(folder) as acquired:
         if not acquired:
@@ -257,13 +269,19 @@ def _check_login(
         log.error("%s does not see a login; %s", site, cookie_hint)
         return 1
     name = _ACCOUNT_NAME_RE.search(html)
-    print(f"Logged in to {site} as {name.group(1).strip() if name else '(unknown name)'}")
+    print(
+        f"Logged in to {site} as {name.group(1).strip() if name else '(unknown name)'}"
+    )
     return 0
 
 
-def _check_f95_login(folder: str, settings: NetworkSettings, given: BrowserTransport | None) -> int:
+def _check_f95_login(
+    folder: str, settings: NetworkSettings, given: BrowserTransport | None
+) -> int:
     if settings.f95_cookie is None:
-        log.error("no F95 login: set WLIB_CATALOG_F95_COOKIE in /etc/wlib-catalog/f95.env")
+        log.error(
+            "no F95 login: set WLIB_CATALOG_F95_COOKIE in /etc/wlib-catalog/f95.env"
+        )
         return 2
     return _check_login(
         folder,
@@ -274,7 +292,9 @@ def _check_f95_login(folder: str, settings: NetworkSettings, given: BrowserTrans
     )
 
 
-def _check_lc_login(folder: str, settings: NetworkSettings, given: BrowserTransport | None) -> int:
+def _check_lc_login(
+    folder: str, settings: NetworkSettings, given: BrowserTransport | None
+) -> int:
     if settings.lc_cookie is None:
         log.error("no LC login: set WLIB_CATALOG_LC_COOKIE in /etc/wlib-catalog/lc.env")
         return 2
@@ -291,7 +311,9 @@ def _discord_report(
     webhook: str, skipped: Mapping[str, str], transport: Transport
 ) -> Callable[[RunResult], None]:
     def report(result: RunResult) -> None:
-        payload = build_report(result, sources=frozenset(SOURCE_TABLES), skipped=skipped)
+        payload = build_report(
+            result, sources=frozenset(SOURCE_TABLES), skipped=skipped
+        )
         _ = send_report(webhook, payload, transport)
 
     return report
@@ -339,7 +361,10 @@ def main(
     for site, proxy in sorted(settings.proxies.items()):
         log.info("%s requests go through the proxy %s", site, proxy)
     if settings.browser_sites:
-        log.info("%s requests go through the browser", ", ".join(sorted(settings.browser_sites)))
+        log.info(
+            "%s requests go through the browser",
+            ", ".join(sorted(settings.browser_sites)),
+        )
     if settings.f95_cookie is not None:
         log.info("f95 requests send the login cookie")
     if settings.lc_cookie is not None:
@@ -400,11 +425,14 @@ def main(
                 browser.close()
             catalog.close()
             state.close()
-    failed = [name for name, outcome in result.sources.items() if outcome.status == "error"]
+    failed = [
+        name for name, outcome in result.sources.items() if outcome.status == "error"
+    ]
     unswept = [
         name
         for name in until
-        if name in result.sources and not result.sources[name].sweep_completed
+        if name in result.sources
+        and not result.sources[name].sweep_completed
         and result.sources[name].status != "ok"
     ]
     return 1 if failed or unswept or result.publish_refused else 0

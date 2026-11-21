@@ -155,7 +155,7 @@ def _codebase_folder(codebase: str) -> str:
     value = codebase.strip()
     for prefix in ("file:///", "file://"):
         if value.lower().startswith(prefix):
-            value = value[len(prefix):]
+            value = value[len(prefix) :]
             break
     else:
         return ""
@@ -192,4 +192,3 @@ def _quote_for_leproc(arg: str) -> str:
     if arg and not any(char in arg for char in ' \t"'):
         return arg
     return subprocess.list2cmdline([arg])
-

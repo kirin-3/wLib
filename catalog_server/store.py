@@ -277,12 +277,16 @@ class CatalogStore:
         _ = self.conn.execute("PRAGMA journal_mode=WAL")
         _ = self.conn.executescript(CATALOG_SCHEMA)
         self._add_origin_columns()
-        columns = {str(row[1]) for row in _rows(self.conn.execute("PRAGMA table_info(f95_threads)"))}
+        columns = {
+            str(row[1])
+            for row in _rows(self.conn.execute("PRAGMA table_info(f95_threads)"))
+        }
         if "screens" not in columns:
             with self.conn:
                 _ = self.conn.execute("ALTER TABLE f95_threads ADD COLUMN screens TEXT")
         details = {
-            str(row[1]) for row in _rows(self.conn.execute("PRAGMA table_info(f95_thread_details)"))
+            str(row[1])
+            for row in _rows(self.conn.execute("PRAGMA table_info(f95_thread_details)"))
         }
         if "languages" not in details:
             with self.conn:
@@ -292,13 +296,19 @@ class CatalogStore:
                 # Rows from before the column have the older external_ids form; read them again.
                 _ = self.conn.execute("DELETE FROM f95_thread_details")
         lc_details = {
-            str(row[1]) for row in _rows(self.conn.execute("PRAGMA table_info(lc_thread_details)"))
+            str(row[1])
+            for row in _rows(self.conn.execute("PRAGMA table_info(lc_thread_details)"))
         }
         if "origin" not in lc_details:
             with self.conn:
-                _ = self.conn.execute("ALTER TABLE lc_thread_details ADD COLUMN origin TEXT")
+                _ = self.conn.execute(
+                    "ALTER TABLE lc_thread_details ADD COLUMN origin TEXT"
+                )
         with self.conn:
-            for table, columns in (("f95_thread_details", details), ("lc_thread_details", lc_details)):
+            for table, columns in (
+                ("f95_thread_details", details),
+                ("lc_thread_details", lc_details),
+            ):
                 if "kept_after_failure" not in columns:
                     _ = self.conn.execute(
                         f"ALTER TABLE {table} ADD COLUMN kept_after_failure INTEGER NOT NULL DEFAULT 0"
@@ -312,10 +322,14 @@ class CatalogStore:
                 for table, _key in tables:
                     columns = {
                         str(row[1])
-                        for row in _rows(self.conn.execute(f"PRAGMA table_info({table})"))
+                        for row in _rows(
+                            self.conn.execute(f"PRAGMA table_info({table})")
+                        )
                     }
                     if "origin" not in columns:
-                        _ = self.conn.execute(f"ALTER TABLE {table} ADD COLUMN origin TEXT")
+                        _ = self.conn.execute(
+                            f"ALTER TABLE {table} ADD COLUMN origin TEXT"
+                        )
 
     def close(self) -> None:
         self.conn.close()
@@ -357,7 +371,8 @@ class CatalogStore:
             _ = self.conn.executemany(
                 sql,
                 [
-                    [_json(row[column]) for column in columns] + [now, now, None, origin]
+                    [_json(row[column]) for column in columns]
+                    + [now, now, None, origin]
                     for row in rows
                 ],
             )
@@ -404,7 +419,10 @@ class CatalogStore:
         return marked
 
     def f95_newest_ts(self) -> int | None:
-        row = cast(tuple[int | None], self.conn.execute("SELECT MAX(ts) FROM f95_threads").fetchone())
+        row = cast(
+            tuple[int | None],
+            self.conn.execute("SELECT MAX(ts) FROM f95_threads").fetchone(),
+        )
         return row[0]
 
     def f95_details_queue(self, since_ts: int, limit: int) -> list[tuple[int, int]]:
@@ -460,7 +478,10 @@ class CatalogStore:
         return 1
 
     def lc_newest_ts(self) -> int | None:
-        row = cast(tuple[int | None], self.conn.execute("SELECT MAX(ts) FROM lc_threads").fetchone())
+        row = cast(
+            tuple[int | None],
+            self.conn.execute("SELECT MAX(ts) FROM lc_threads").fetchone(),
+        )
         return row[0]
 
     def lc_details_queue(self, since_ts: int, limit: int) -> list[tuple[int, int]]:
@@ -513,11 +534,18 @@ class CatalogStore:
                 _ = self.conn.execute(
                     "UPDATE lc_threads SET version = ?, tags = ? "
                     + "WHERE thread_id = ? AND tier = 'Premium' AND ts = ?",
-                    (version, json.dumps(list(tags), ensure_ascii=False), thread_id, thread_ts),
+                    (
+                        version,
+                        json.dumps(list(tags), ensure_ascii=False),
+                        thread_id,
+                        thread_ts,
+                    ),
                 )
         return 1
 
-    def mark_lc_pages_unread(self, thread_ids: Iterable[int], *, any_status: bool = False) -> int:
+    def mark_lc_pages_unread(
+        self, thread_ids: Iterable[int], *, any_status: bool = False
+    ) -> int:
         """Make the details step read these threads again as never read, when
         their details are imported from Atlas or LC refused the page before
         (or always, with `any_status`)."""
@@ -525,7 +553,11 @@ class CatalogStore:
         if not wanted:
             return 0
         marks = ", ".join(["?"] * len(wanted))
-        condition = "" if any_status else " AND (origin = ? OR status != 'ok' OR kept_after_failure = 1)"
+        condition = (
+            ""
+            if any_status
+            else " AND (origin = ? OR status != 'ok' OR kept_after_failure = 1)"
+        )
         with self.conn:
             return self.conn.execute(
                 f"UPDATE lc_thread_details SET thread_ts = NULL WHERE thread_id IN ({marks})"
@@ -533,7 +565,9 @@ class CatalogStore:
                 wanted if any_status else [*wanted, IMPORT_ORIGIN],
             ).rowcount
 
-    def lc_listing_state(self, thread_ids: Iterable[int]) -> dict[int, tuple[int | None, str, str | None]]:
+    def lc_listing_state(
+        self, thread_ids: Iterable[int]
+    ) -> dict[int, tuple[int | None, str, str | None]]:
         """`ts`, tier and origin of the stored LC threads among `thread_ids`."""
         wanted = list(thread_ids)
         if not wanted:
@@ -552,7 +586,9 @@ class CatalogStore:
         """The `Premium` threads among `thread_ids`."""
         return {
             thread_id
-            for thread_id, (_ts, tier, _origin) in self.lc_listing_state(thread_ids).items()
+            for thread_id, (_ts, tier, _origin) in self.lc_listing_state(
+                thread_ids
+            ).items()
             if tier == "Premium"
         }
 
@@ -600,13 +636,16 @@ class CatalogStore:
         existing = dict(
             cast(
                 list[tuple[int, str | None]],
-                self.conn.execute("SELECT thread_id, origin FROM lc_thread_details").fetchall(),
+                self.conn.execute(
+                    "SELECT thread_id, origin FROM lc_thread_details"
+                ).fetchall(),
             )
         )
         threads = {
             row[0]
             for row in cast(
-                list[tuple[int]], self.conn.execute("SELECT thread_id FROM lc_threads").fetchall()
+                list[tuple[int]],
+                self.conn.execute("SELECT thread_id FROM lc_threads").fetchall(),
             )
         }
         added = refreshed = 0
@@ -672,7 +711,9 @@ class CatalogStore:
         if source in DETAIL_TABLES:
             row = cast(
                 tuple[int],
-                self.conn.execute(f"SELECT COUNT(*) FROM {DETAIL_TABLES[source]}").fetchone(),
+                self.conn.execute(
+                    f"SELECT COUNT(*) FROM {DETAIL_TABLES[source]}"
+                ).fetchone(),
             )
             return row[0]
         table, _key = SOURCE_TABLES[source][0]
@@ -879,18 +920,22 @@ class StateStore:
         return dict(zip(keys, row, strict=True))
 
     def recent_runs(self, limit: int = 5) -> list[dict[str, object]]:
-        runs = _rows(self.conn.execute(
-            "SELECT id, started_at, finished_at, published FROM runs "
-            + "ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ))
+        runs = _rows(
+            self.conn.execute(
+                "SELECT id, started_at, finished_at, published FROM runs "
+                + "ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+        )
         result: list[dict[str, object]] = []
         for run_id, started_at, finished_at, published in runs:
-            sources = _rows(self.conn.execute(
-                "SELECT source, status, rows, requests, detail FROM run_sources "
-                + "WHERE run_id = ? ORDER BY source",
-                (run_id,),
-            ))
+            sources = _rows(
+                self.conn.execute(
+                    "SELECT source, status, rows, requests, detail FROM run_sources "
+                    + "WHERE run_id = ? ORDER BY source",
+                    (run_id,),
+                )
+            )
             result.append(
                 {
                     "id": run_id,

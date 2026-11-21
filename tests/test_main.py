@@ -124,9 +124,7 @@ def test_configure_ssl_certificates_drops_missing_configured_bundles(
         assert name not in os.environ
 
 
-def test_configure_ssl_certificates_uses_a_valid_requests_bundle(
-    monkeypatch, tmp_path
-):
+def test_configure_ssl_certificates_uses_a_valid_requests_bundle(monkeypatch, tmp_path):
     bundle = tmp_path / "corporate-ca.pem"
     bundle.write_text("certificate", encoding="utf-8")
     monkeypatch.delenv("SSL_CERT_FILE", raising=False)
@@ -576,8 +574,12 @@ def test_extension_server_starts_before_slow_webview_startup(monkeypatch):
         def set_window(self, _window):
             return None
 
-    FakeApi.controller_watcher.start.side_effect = lambda: order.append("watcher started")
-    FakeApi.controller_watcher.stop.side_effect = lambda: order.append("watcher stopped")
+    FakeApi.controller_watcher.start.side_effect = lambda: order.append(
+        "watcher started"
+    )
+    FakeApi.controller_watcher.stop.side_effect = lambda: order.append(
+        "watcher stopped"
+    )
 
     class FakeThread:
         def __init__(self, *, target, daemon):
@@ -1169,7 +1171,9 @@ def test_clear_webview_cache_path_removes_symlink_not_target(monkeypatch, tmp_pa
     monkeypatch.setattr(main.os.path, "isdir", lambda p: p == link_path)
     removed: list[str] = []
     monkeypatch.setattr(main.os, "remove", removed.append)
-    monkeypatch.setattr(main.shutil, "rmtree", lambda *a, **k: pytest.fail("rmtree called"))
+    monkeypatch.setattr(
+        main.shutil, "rmtree", lambda *a, **k: pytest.fail("rmtree called")
+    )
 
     main._clear_webview_cache_path(link_path)
 
@@ -1177,8 +1181,8 @@ def test_clear_webview_cache_path_removes_symlink_not_target(monkeypatch, tmp_pa
 
 
 def test_gaming_mode_start_url_for_production_and_dev():
-    for url in ('/tmp/ui/dist/index.html', 'http://localhost:5173'):
-        assert main.gaming_mode_start_url(url, True) == f'{url}?gamingMode=1'
+    for url in ("/tmp/ui/dist/index.html", "http://localhost:5173"):
+        assert main.gaming_mode_start_url(url, True) == f"{url}?gamingMode=1"
         assert main.gaming_mode_start_url(url, False) == url
 
 
@@ -1258,7 +1262,9 @@ def test_fatal_startup_error_uses_a_message_box_on_windows(monkeypatch):
 
     monkeypatch.setattr(main, "is_windows", lambda: True)
     monkeypatch.setattr(ctypes, "WinDLL", lambda name: _User32(), raising=False)
-    monkeypatch.setattr(main.shutil, "which", lambda _name: pytest.fail("no Linux tools"))
+    monkeypatch.setattr(
+        main.shutil, "which", lambda _name: pytest.fail("no Linux tools")
+    )
     main.show_fatal_startup_error("The data folder is read-only.")
     assert shown == [("The data folder is read-only.", "wLib cannot start")]
 
@@ -1308,7 +1314,9 @@ def test_main_reports_a_damaged_database_and_exits(monkeypatch):
     monkeypatch.setattr(main, "ensure_packaged_webview_cache_fresh", lambda: None)
     monkeypatch.setattr(main, "load_webview_module", lambda: MagicMock())
     monkeypatch.setattr(main, "log_renderer_diagnostics", lambda *_a, **_k: None)
-    monkeypatch.setattr(main, "collect_renderer_environment_snapshot", lambda dev_mode: {})
+    monkeypatch.setattr(
+        main, "collect_renderer_environment_snapshot", lambda dev_mode: {}
+    )
     monkeypatch.setattr(main, "collect_pywebview_module_snapshot", lambda _module: {})
     monkeypatch.setattr(main, "Api", damaged_api)
     monkeypatch.setattr(main.threading, "Thread", MagicMock())
@@ -1334,8 +1342,12 @@ def test_unusable_data_folder_reaches_the_startup_check(tmp_path):
     env = {**os.environ, "WLIB_DATA_DIR": str(blocker / "wlib")}
     code = "import main; print(main.data_dir_problem(main.APP_DATA_DIR))"
     result = subprocess.run(
-        [sys.executable, "-c", code], env=env, capture_output=True, text=True,
-        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), timeout=60,
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        timeout=60,
     )
     assert result.returncode == 0, result.stderr
     assert "cannot write to its data folder" in result.stdout

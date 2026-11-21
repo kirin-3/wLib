@@ -280,9 +280,7 @@ def test_unparseable_sync_timestamp_does_not_block_writes():
     assert_write_succeeds(lambda: add_game("Inserted", ""))
     assert_write_succeeds(lambda: update_setting("collections", "[]"))
     assert_write_succeeds(
-        lambda: replace_game_links(
-            game_id, "page", [{"url": "https://vndb.org/v1"}]
-        )
+        lambda: replace_game_links(game_id, "page", [{"url": "https://vndb.org/v1"}])
     )
     assert_write_succeeds(lambda: start_play_session(game_id, "1.0"))
     assert_write_succeeds(lambda: record_play_tick(game_id, session_id, 60, True))
@@ -322,12 +320,21 @@ def test_init_db_folds_itch_link_case_and_drops_duplicates():
         for external_id in ("creator/My-Game", "creator/my-game", "creator/Other"):
             conn.execute(
                 "INSERT INTO game_links (game_id, source, external_id, url, origin) VALUES (?, 'itch', ?, ?, 'page')",
-                (game_id, external_id, f"https://creator.itch.io/{external_id.split('/')[1]}"),
+                (
+                    game_id,
+                    external_id,
+                    f"https://creator.itch.io/{external_id.split('/')[1]}",
+                ),
             )
         conn.commit()
     init_db()
     with closing(get_connection()) as conn:
-        ids = sorted(row[0] for row in conn.execute("SELECT external_id FROM game_links WHERE source = 'itch'"))
+        ids = sorted(
+            row[0]
+            for row in conn.execute(
+                "SELECT external_id FROM game_links WHERE source = 'itch'"
+            )
+        )
     assert ids == ["creator/my-game", "creator/other"]
 
 
@@ -629,8 +636,13 @@ def test_removing_status_resets_game_changed_just_before_the_write(monkeypatch):
 
 def test_library_folder_read_and_repair_keep_legacy_text_coercion():
     with closing(get_connection()) as conn:
-        conn.execute("UPDATE settings SET value = ? WHERE key = 'library_folder'", (b"/old",))
-        conn.execute("UPDATE settings SET value = ? WHERE key = 'library_folders'", (b'["/other"]',))
+        conn.execute(
+            "UPDATE settings SET value = ? WHERE key = 'library_folder'", (b"/old",)
+        )
+        conn.execute(
+            "UPDATE settings SET value = ? WHERE key = 'library_folders'",
+            (b'["/other"]',),
+        )
         conn.commit()
 
     # The old setting reads stringified SQLite values before normalization.
@@ -1113,9 +1125,7 @@ def test_init_db_migrates_finished_version_without_backfill():
     conn.close()
     assert "finished_version" in columns
 
-    finished = {
-        game["title"]: game["finished_version"] for game in get_all_games()
-    }
+    finished = {game["title"]: game["finished_version"] for game in get_all_games()}
     assert finished == {"Completed Legacy": "", "Playing Legacy": ""}
 
 
@@ -1214,7 +1224,9 @@ def test_completed_status_change_without_stored_version_falls_back_to_incoming()
 
 def test_completed_status_change_honors_an_explicitly_cleared_version():
     """Clearing the installed version while completing must not restore the old one."""
-    game_id = add_game(title="Cleared Version", exe_path="/tmp/cleared.exe", version="0.5")
+    game_id = add_game(
+        title="Cleared Version", exe_path="/tmp/cleared.exe", version="0.5"
+    )
     assert game_id is not None
     update_game(game_id, {"play_status": "Playing"})
 
@@ -1813,7 +1825,10 @@ def test_screenshots_migration_and_decoding():
     conn = get_connection()
     conn.execute(
         "UPDATE games SET screenshots = ? WHERE id = ?",
-        ('["https://example.com/a.png", "", 7, " https://example.com/b.png "]', game_id),
+        (
+            '["https://example.com/a.png", "", 7, " https://example.com/b.png "]',
+            game_id,
+        ),
     )
     conn.commit()
     conn.close()
@@ -1823,9 +1838,7 @@ def test_screenshots_migration_and_decoding():
     ]
 
     conn = get_connection()
-    conn.execute(
-        "UPDATE games SET screenshots = ? WHERE id = ?", ("not json", game_id)
-    )
+    conn.execute("UPDATE games SET screenshots = ? WHERE id = ?", ("not json", game_id))
     conn.commit()
     conn.close()
     assert get_all_games()[0]["screenshots"] == []
@@ -1931,7 +1944,9 @@ def test_user_f95_tags_migration_and_update():
     init_db()
 
     assert get_all_games()[0]["user_f95_tags"] == ""
-    assert update_game(game_id, {"user_f95_tags": "sandbox"}) == {"user_f95_tags": "sandbox"}
+    assert update_game(game_id, {"user_f95_tags": "sandbox"}) == {
+        "user_f95_tags": "sandbox"
+    }
     assert get_all_games()[0]["user_f95_tags"] == "sandbox"
     assert "user_f95_tags" in SYNC_GAME_COLUMNS
 
@@ -2085,10 +2100,17 @@ def test_cover_cache_migration_guard_and_sync():
     init_db()
     game_id = add_game("Cached", "", "", cover_image="https://f95zone.to/old.png")
     before = get_setting("sync_local_modified_at")
-    assert database.set_game_cover_cache(game_id, "https://f95zone.to/old.png", "a" * 32 + ".png")
+    assert database.set_game_cover_cache(
+        game_id, "https://f95zone.to/old.png", "a" * 32 + ".png"
+    )
     assert get_setting("sync_local_modified_at") == before
-    update_game(game_id, {"cover_image_path": "https://f95zone.to/new.png", "cover_cache": "forbidden"})
-    assert not database.set_game_cover_cache(game_id, "https://f95zone.to/old.png", "stale.png")
+    update_game(
+        game_id,
+        {"cover_image_path": "https://f95zone.to/new.png", "cover_cache": "forbidden"},
+    )
+    assert not database.set_game_cover_cache(
+        game_id, "https://f95zone.to/old.png", "stale.png"
+    )
     assert get_game(game_id)["cover_cache"] == "a" * 32 + ".png"
     assert "cover_cache" not in SYNC_GAME_COLUMNS
     assert "cover_cache_url" not in SYNC_GAME_COLUMNS
@@ -2105,16 +2127,29 @@ def test_note_links_migration_validation_and_sync_time():
         conn.execute("ALTER TABLE games DROP COLUMN note_links")
         conn.commit()
     init_db()
-    assert next(game for game in get_all_games() if game["id"] == game_id)["note_links"] == []
+    assert (
+        next(game for game in get_all_games() if game["id"] == game_id)["note_links"]
+        == []
+    )
     update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
-    update_game(game_id, {"note_links": [
-        {"url": " https://example.com/guide ", "label": " " + "x" * 201 + " "},
-        {"url": "https://example.com/guide", "label": "duplicate"},
-        {"url": "file:///tmp/a"}, {"url": "javascript:alert(1)"}, {"url": "example.com"},
-        {"url": "https://bad host/"}, {"url": "https://example.com:bad/"},
-    ]})
+    update_game(
+        game_id,
+        {
+            "note_links": [
+                {"url": " https://example.com/guide ", "label": " " + "x" * 201 + " "},
+                {"url": "https://example.com/guide", "label": "duplicate"},
+                {"url": "file:///tmp/a"},
+                {"url": "javascript:alert(1)"},
+                {"url": "example.com"},
+                {"url": "https://bad host/"},
+                {"url": "https://example.com:bad/"},
+            ]
+        },
+    )
     game = next(game for game in get_all_games() if game["id"] == game_id)
-    assert game["note_links"] == [{"url": "https://example.com/guide", "label": "x" * 200}]
+    assert game["note_links"] == [
+        {"url": "https://example.com/guide", "label": "x" * 200}
+    ]
     assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
 
 
@@ -2141,7 +2176,12 @@ def test_performance_tool_migration_and_overrides():
     init_db()
     assert get_game(game_id)["gamemode"] == "default"
     assert get_game(game_id)["mangohud"] == "default"
-    for value, expected in [("on", "on"), ("off", "off"), ("default", "default"), ("unknown", "default")]:
+    for value, expected in [
+        ("on", "on"),
+        ("off", "off"),
+        ("default", "default"),
+        ("unknown", "default"),
+    ]:
         update_game(game_id, {"gamemode": value, "mangohud": value})
         assert get_game(game_id)["gamemode"] == expected
         assert get_game(game_id)["mangohud"] == expected
@@ -2149,7 +2189,13 @@ def test_performance_tool_migration_and_overrides():
 
 def test_gamescope_columns_migrate_as_default_and_empty():
     game_id = add_game("Older gamescope game", "/game")
-    columns = ("gamescope", "gamescope_resolution", "gamescope_scaler", "gamescope_filter", "gamescope_args")
+    columns = (
+        "gamescope",
+        "gamescope_resolution",
+        "gamescope_scaler",
+        "gamescope_filter",
+        "gamescope_args",
+    )
     with closing(get_connection()) as conn:
         for column in columns:
             conn.execute(f"ALTER TABLE games DROP COLUMN {column}")
@@ -2163,7 +2209,12 @@ def test_gamescope_columns_migrate_as_default_and_empty():
     assert get_setting("gamescope_window_mode") == "fullscreen"
     assert get_setting("gamescope_scaler") == "auto"
     assert get_setting("gamescope_filter") == "linear"
-    for key in ("gamescope_output_resolution", "gamescope_game_resolution", "gamescope_fps_limit", "gamescope_args"):
+    for key in (
+        "gamescope_output_resolution",
+        "gamescope_game_resolution",
+        "gamescope_fps_limit",
+        "gamescope_args",
+    ):
         assert get_setting(key) == ""
 
 
@@ -2220,7 +2271,9 @@ def test_init_db_skips_migrations_when_the_schema_is_current(monkeypatch):
     monkeypatch.setattr(database, "schema_fingerprint", lambda: fingerprint)
     calls = []
     real = database._migrate_schema
-    monkeypatch.setattr(database, "_migrate_schema", lambda conn: calls.append(1) or real(conn))
+    monkeypatch.setattr(
+        database, "_migrate_schema", lambda conn: calls.append(1) or real(conn)
+    )
     init_db()
     assert calls == []
     # Another wLib version that rewrote a trigger leaves a schema this one
@@ -2262,7 +2315,9 @@ def test_default_downloads_folder_follows_a_moved_windows_downloads(monkeypatch)
     import core.database as database
 
     monkeypatch.setattr(database, "is_windows", lambda: True)
-    monkeypatch.setattr(database, "windows_known_folder", lambda _folder: r"D:\Downloads")
+    monkeypatch.setattr(
+        database, "windows_known_folder", lambda _folder: r"D:\Downloads"
+    )
     assert database.default_downloads_folder() == r"D:\Downloads"
     monkeypatch.setattr(database, "windows_known_folder", lambda _folder: "")
     assert database.default_downloads_folder().endswith("Downloads")
@@ -2276,7 +2331,13 @@ def test_html_player_migration_and_normalization():
         conn.commit()
     init_db()
     assert get_game(game_id)["html_player"] == ""
-    for value, expected in [("builtin", "builtin"), ("browser", "browser"), (" Browser ", "browser"), ("firefox", ""), ("", "")]:
+    for value, expected in [
+        ("builtin", "builtin"),
+        ("browser", "browser"),
+        (" Browser ", "browser"),
+        ("firefox", ""),
+        ("", ""),
+    ]:
         update_game(game_id, {"html_player": value})
         assert get_game(game_id)["html_player"] == expected
 
@@ -2351,7 +2412,9 @@ def test_init_db_copies_the_database_before_a_migration(monkeypatch):
         ).fetchone() == ("Kept Game",)
 
     for fingerprint in (2, 3, 4, 5):
-        monkeypatch.setattr(database, "schema_fingerprint", lambda value=fingerprint: value)
+        monkeypatch.setattr(
+            database, "schema_fingerprint", lambda value=fingerprint: value
+        )
         init_db()
     # The rename above runs after the prune, so one more copy than the limit
     # can be present; the oldest ones are gone.
@@ -2498,7 +2561,9 @@ def test_lc_migration_and_identity():
     other = add_game("Other", "")
     with pytest.raises(sqlite3.IntegrityError, match="LewdCorner thread"):
         update_game(other, {"lc_url": old})
-    update_game(first, {"lc_url": "https://lewdcorner.com/threads/456/", "lc_mode": " OFF "})
+    update_game(
+        first, {"lc_url": "https://lewdcorner.com/threads/456/", "lc_mode": " OFF "}
+    )
     assert get_game(first)["lc_dismissed"] == "123"
     assert get_game(first)["lc_mode"] == "off"
     update_game(first, {"lc_url": ""})
@@ -2519,22 +2584,34 @@ def test_changing_the_lc_thread_drops_its_screenshots_only():
 
     lc_shot = "https://lewdcorner.com/attachments/a-png.1/"
     f95_shot = "https://attachments.f95zone.to/2024/01/a.png"
-    game = add_game("G", "", "https://f95zone.to/threads/5/", lc_url="https://lewdcorner.com/threads/21/",
-                    screenshots=[f95_shot, lc_shot])
+    game = add_game(
+        "G",
+        "",
+        "https://f95zone.to/threads/5/",
+        lc_url="https://lewdcorner.com/threads/21/",
+        screenshots=[f95_shot, lc_shot],
+    )
     update_game(game, {"lc_url": "https://lewdcorner.com/threads/21/"})
     assert shots(game) == [f95_shot, lc_shot]
     update_game(game, {"lc_url": "https://lewdcorner.com/threads/22/"})
     assert shots(game) == [f95_shot]
-    lc_only = add_game("L", "", lc_url="https://lewdcorner.com/threads/30/", screenshots=[lc_shot])
+    lc_only = add_game(
+        "L", "", lc_url="https://lewdcorner.com/threads/30/", screenshots=[lc_shot]
+    )
     update_game(lc_only, {"lc_url": ""})
     assert shots(lc_only) == []
-
 
 
 def test_site_versions_migrate_legacy_f95_games_once():
     f95 = add_game("F95", "", "https://f95zone.to/threads/123/")
     lc = add_game("LC", "", lc_url="https://lewdcorner.com/threads/456/")
-    columns = ("f95_latest_version", "f95_latest_at", "lc_latest_version", "lc_latest_at", "latest_site")
+    columns = (
+        "f95_latest_version",
+        "f95_latest_at",
+        "lc_latest_version",
+        "lc_latest_at",
+        "latest_site",
+    )
     with closing(get_connection()) as conn:
         conn.execute("DROP TRIGGER sync_games_update")
         for column in columns:
@@ -2543,14 +2620,18 @@ def test_site_versions_migrate_legacy_f95_games_once():
         conn.commit()
     init_db()
     init_db()
-    assert get_game(f95)["latest_version"] == get_game(f95)["f95_latest_version"] == "0.5"
+    assert (
+        get_game(f95)["latest_version"] == get_game(f95)["f95_latest_version"] == "0.5"
+    )
     assert get_game(f95)["latest_site"] == "f95"
     assert all(get_game(f95)[column] == "" for column in columns[1:-1])
     assert get_game(lc)["latest_version"] == "0.5"
     assert all(get_game(lc)[column] == "" for column in columns)
 
 
-@pytest.mark.parametrize("value", ["abandoned", "Abandoned", "ABANDONED", "archived", "Archived"])
+@pytest.mark.parametrize(
+    "value", ["abandoned", "Abandoned", "ABANDONED", "archived", "Archived"]
+)
 def test_normalize_play_status_maps_abandoned_and_archived_to_archived(value):
     assert normalize_play_status(value) == "Archived"
     assert normalize_play_status("On Hold", "abandoned") == "Archived"
@@ -2570,17 +2651,27 @@ def test_settings_reject_abandoned_and_archived_as_custom_status_names():
 def test_init_db_moves_abandoned_statuses_custom_list_and_presets_to_archived():
     ids = [add_game(title=f"Game {i}", exe_path="") for i in range(4)]
     with closing(get_connection()) as conn:
-        for game_id, status in zip(ids, ["Abandoned", "abandoned", "archived", "Playing"], strict=True):
-            conn.execute("UPDATE games SET play_status = ? WHERE id = ?", (status, game_id))
+        for game_id, status in zip(
+            ids, ["Abandoned", "abandoned", "archived", "Playing"], strict=True
+        ):
+            conn.execute(
+                "UPDATE games SET play_status = ? WHERE id = ?", (status, game_id)
+            )
         conn.executemany(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [
-                ("custom_play_statuses", json.dumps(["archived", "Backlog", "Abandoned"])),
+                (
+                    "custom_play_statuses",
+                    json.dumps(["archived", "Backlog", "Abandoned"]),
+                ),
                 (
                     "library_filter_presets",
                     json.dumps(
                         [
-                            {"name": "Dropped", "filterStatuses": ["Abandoned", "Playing", "archived"]},
+                            {
+                                "name": "Dropped",
+                                "filterStatuses": ["Abandoned", "Playing", "archived"],
+                            },
                             {"name": "Other", "filterStatuses": ["Playing"]},
                         ]
                     ),
@@ -2592,7 +2683,12 @@ def test_init_db_moves_abandoned_statuses_custom_list_and_presets_to_archived():
     init_db()
 
     statuses = {game["id"]: game["play_status"] for game in get_all_games()}
-    assert [statuses[game_id] for game_id in ids] == ["Archived", "Archived", "Archived", "Playing"]
+    assert [statuses[game_id] for game_id in ids] == [
+        "Archived",
+        "Archived",
+        "Archived",
+        "Playing",
+    ]
     assert json.loads(get_setting("custom_play_statuses")) == ["Backlog"]
     stored_presets = json.loads(get_setting("library_filter_presets"))
     assert stored_presets[0]["filterStatuses"] == ["Archived", "Playing"]
@@ -2644,23 +2740,38 @@ def test_thread_states_start_unknown_and_update_game_keeps_all_three_values():
 def test_older_catalog_states_never_replace_a_newer_read():
     from core.database import ThreadStates, thread_state_fields
 
-    game = {"thread_onhold": 0, "thread_abandoned": 1, "thread_states_at": "2025-11-19T10:00:00Z",
-            "play_status": "Playing"}
+    game = {
+        "thread_onhold": 0,
+        "thread_abandoned": 1,
+        "thread_states_at": "2025-11-19T10:00:00Z",
+        "play_status": "Playing",
+    }
     # The builder read the thread before the page read: ignored.
     stale = ThreadStates(False, False, "2025-11-18T05:16:36Z")
     assert thread_state_fields(game, stale) == ({}, False)
     # The builder read it after the page read: applied, with its time.
     newer = ThreadStates(False, False, "2025-11-20T05:00:00Z")
     assert thread_state_fields(game, newer) == (
-        {"thread_abandoned": 0, "thread_states_at": "2025-11-20T05:00:00Z"}, False
+        {"thread_abandoned": 0, "thread_states_at": "2025-11-20T05:00:00Z"},
+        False,
     )
     # A live read always applies and records when it happened.
-    fields, newly = thread_state_fields({**game, "thread_abandoned": 0}, ThreadStates(False, True))
+    fields, newly = thread_state_fields(
+        {**game, "thread_abandoned": 0}, ThreadStates(False, True)
+    )
     assert fields["thread_abandoned"] == 1 and newly is True
     assert fields["thread_states_at"] > "2025-11-19T10:00:00Z"
     # Without a stored time any catalog read applies; an unreadable time never does.
-    assert thread_state_fields({**game, "thread_states_at": None}, stale)[0]["thread_abandoned"] == 0
-    assert thread_state_fields(game, ThreadStates(False, False, "yesterday")) == ({}, False)
+    assert (
+        thread_state_fields({**game, "thread_states_at": None}, stale)[0][
+            "thread_abandoned"
+        ]
+        == 0
+    )
+    assert thread_state_fields(game, ThreadStates(False, False, "yesterday")) == (
+        {},
+        False,
+    )
 
 
 def test_update_game_keeps_only_readable_thread_state_times():
@@ -2674,8 +2785,16 @@ def test_update_game_keeps_only_readable_thread_state_times():
 def test_thread_states_reset_when_the_thread_they_came_from_changes():
     from core.database import ThreadStates, site_thread_states
 
-    read = {"thread_onhold": 0, "thread_abandoned": 0, "thread_states_at": "2025-11-19T10:00:00Z"}
-    unknown = {"thread_onhold": None, "thread_abandoned": None, "thread_states_at": None}
+    read = {
+        "thread_onhold": 0,
+        "thread_abandoned": 0,
+        "thread_states_at": "2025-11-19T10:00:00Z",
+    }
+    unknown = {
+        "thread_onhold": None,
+        "thread_abandoned": None,
+        "thread_states_at": None,
+    }
     states = lambda game_id: {key: get_game(game_id)[key] for key in read}  # noqa: E731
 
     lc_only = add_game("LC only", "", lc_url="https://lewdcorner.com/threads/1/")
@@ -2697,26 +2816,48 @@ def test_thread_states_reset_when_the_thread_they_came_from_changes():
     assert states(lc_only) == unknown
 
     # With an F95 thread, an LC change keeps the F95 states.
-    both = add_game("Both", "", f95_url="https://f95zone.to/threads/reset.13/",
-                    lc_url="https://lewdcorner.com/threads/5/")
+    both = add_game(
+        "Both",
+        "",
+        f95_url="https://f95zone.to/threads/reset.13/",
+        lc_url="https://lewdcorner.com/threads/5/",
+    )
     update_game(both, read)
     update_game(both, {"lc_url": "https://lewdcorner.com/threads/6/"})
     assert states(both) == read
 
     # LC states fill a game on both sites only while its states are unknown.
     f95, lc = ThreadStates(False, True), ThreadStates(True, False)
-    game = {"f95_url": "https://f95zone.to/threads/reset.13/", "thread_onhold": None, "thread_abandoned": None}
+    game = {
+        "f95_url": "https://f95zone.to/threads/reset.13/",
+        "thread_onhold": None,
+        "thread_abandoned": None,
+    }
     assert site_thread_states(game, None, lc) is lc
-    assert site_thread_states({**game, "thread_onhold": 0, "thread_abandoned": 1}, None, lc) is None
-    assert site_thread_states({**game, "thread_onhold": 0, "thread_abandoned": 1}, f95, lc) is f95
-    assert site_thread_states({**game, "f95_url": "", "thread_abandoned": 1}, None, lc) is lc
+    assert (
+        site_thread_states(
+            {**game, "thread_onhold": 0, "thread_abandoned": 1}, None, lc
+        )
+        is None
+    )
+    assert (
+        site_thread_states({**game, "thread_onhold": 0, "thread_abandoned": 1}, f95, lc)
+        is f95
+    )
+    assert (
+        site_thread_states({**game, "f95_url": "", "thread_abandoned": 1}, None, lc)
+        is lc
+    )
 
 
 def test_filter_presets_keep_known_thread_states():
     from core.database import normalize_filter_preset
 
     preset = normalize_filter_preset(
-        {"name": "Binge", "filterThreadStates": ["abandoned", "finished", "bogus", 3, "finished"]}
+        {
+            "name": "Binge",
+            "filterThreadStates": ["abandoned", "finished", "bogus", 3, "finished"],
+        }
     )
     assert preset is not None
     assert preset["filterThreadStates"] == ["finished", "abandoned"]
@@ -2743,7 +2884,9 @@ def test_lc_plus_mode_comes_from_the_old_switch_once(old, mode):
     with closing(get_connection()) as conn:
         conn.execute("DELETE FROM settings WHERE key IN ('lc_plus', 'lc_plus_mode')")
         if old is not None:
-            conn.execute("INSERT INTO settings (key, value) VALUES ('lc_plus', ?)", (old,))
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('lc_plus', ?)", (old,)
+            )
         conn.commit()
     init_db()
     assert get_setting("lc_plus_mode") == mode

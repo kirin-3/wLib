@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared tracked launch and play-session bookkeeping."""
+
 from __future__ import annotations
 
 import os
@@ -12,6 +13,7 @@ from core.database import normalize_launch_mode
 from core.gamescope import GamescopeOptions
 from core.launcher import Launcher
 from core.web_launch import resolve_web_player as resolve_web_player
+
 
 class _OptionalLaunchOptions(TypedDict, total=False):
     html_player: str
@@ -39,7 +41,12 @@ def request_from_game(game: Mapping[str, object]) -> dict[str, object]:
     mode = normalize_launch_mode(game.get("launch_mode"))
     from core.database import html_builtin_player_enabled
 
-    if resolve_web_player(path, mode, game.get("html_player"), html_builtin_player_enabled()) == "browser":
+    if (
+        resolve_web_player(
+            path, mode, game.get("html_player"), html_builtin_player_enabled()
+        )
+        == "browser"
+    ):
         raise ValueError("Browser games cannot be launched by the runner.")
     return {
         "exe_path": path,
@@ -138,7 +145,9 @@ def launch_tracked(
 
     def tool_enabled(name: str) -> bool:
         override = normalize_tool_override(stored_game.get(name))
-        return override == "on" or (override == "default" and get_setting(f"{name}_enabled") == "true")
+        return override == "on" or (
+            override == "default" and get_setting(f"{name}_enabled") == "true"
+        )
 
     gamescope_options: GamescopeOptions | None = None
     if tool_enabled("gamescope"):
@@ -151,10 +160,20 @@ def launch_tracked(
 
     from core.database import html_builtin_player_enabled
 
-    if request.get("require_tracked") and resolve_web_player(
-        target_path, launch_mode, stored_game.get("html_player"), html_builtin_player_enabled()
-    ) == "browser":
-        return {"success": False, "error": "Browser games cannot be launched by the runner."}
+    if (
+        request.get("require_tracked")
+        and resolve_web_player(
+            target_path,
+            launch_mode,
+            stored_game.get("html_player"),
+            html_builtin_player_enabled(),
+        )
+        == "browser"
+    ):
+        return {
+            "success": False,
+            "error": "Browser games cannot be launched by the runner.",
+        }
 
     from core.host_platform import is_linux
 
@@ -191,22 +210,26 @@ def launch_tracked(
             # it to exit and the UI to mark the game stopped. Nothing was
             # saved, so it carries no playtime.
             if is_final and on_tick is not None:
-                on_tick({
-                    "gameId": game_id,
-                    "delta": 0,
-                    "isFinal": True,
-                    "lastPlayedVersion": None,
-                    "sessionId": session_id,
-                })
+                on_tick(
+                    {
+                        "gameId": game_id,
+                        "delta": 0,
+                        "isFinal": True,
+                        "lastPlayedVersion": None,
+                        "sessionId": session_id,
+                    }
+                )
             raise
         if on_tick is not None:
-            on_tick({
-                "gameId": game_id,
-                "delta": max(int(delta), 0),
-                "isFinal": bool(is_final),
-                "lastPlayedVersion": last_played_version,
-                "sessionId": session_id,
-            })
+            on_tick(
+                {
+                    "gameId": game_id,
+                    "delta": max(int(delta), 0),
+                    "isFinal": bool(is_final),
+                    "lastPlayedVersion": last_played_version,
+                    "sessionId": session_id,
+                }
+            )
 
     def on_exit(delta: int, is_final: bool = True) -> None:
         nonlocal launch_ended
@@ -232,16 +255,28 @@ def launch_tracked(
 
             lock_fd = acquire_launch_lock(game_id)
             if lock_fd is None:
-                return {"success": False, "code": "already_running", "error": "Game is already running"}
+                return {
+                    "success": False,
+                    "code": "already_running",
+                    "error": "Game is already running",
+                }
 
         optional_options: _OptionalLaunchOptions = {}
         if stored_game.get("html_player"):
             optional_options["html_player"] = str(stored_game["html_player"])
         if gamescope_options is not None:
             optional_options["gamescope"] = gamescope_options
-        if request.get("check_web_media") and target_path.lower().endswith((".html", ".htm")) and resolve_web_player(
-            target_path, launch_mode, stored_game.get("html_player"), html_builtin_player_enabled()
-        ) == "builtin":
+        if (
+            request.get("check_web_media")
+            and target_path.lower().endswith((".html", ".htm"))
+            and resolve_web_player(
+                target_path,
+                launch_mode,
+                stored_game.get("html_player"),
+                html_builtin_player_enabled(),
+            )
+            == "builtin"
+        ):
             # Only HTML in the built-in player is checked; other launchers never see the option.
             optional_options["check_web_media"] = True
 
@@ -264,7 +299,11 @@ def launch_tracked(
             # Only passed when set, so launchers without the option keep working.
             **optional_options,
         )
-        if result.get("success") and result.get("tracks_playtime", True) and game_id is not None:
+        if (
+            result.get("success")
+            and result.get("tracks_playtime", True)
+            and game_id is not None
+        ):
             with session_lock:
                 # The final callback can run before launcher.launch returns.
                 exit_owns_lock = not launch_ended
@@ -289,4 +328,3 @@ def launch_tracked(
     finally:
         if not exit_owns_lock:
             release_lock()
-

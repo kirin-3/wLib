@@ -45,7 +45,9 @@ def test_catalog_fill_keeps_the_installed_version(lc_catalog, monkeypatch):
     _ = api._fill_thread_details_from_catalog()
     assert database.get_game(game)["version"] == "1.1"
 
-    lc_catalog.execute("UPDATE lc_threads SET version = '2.0', creator = 'New creator' WHERE thread_id = 23")
+    lc_catalog.execute(
+        "UPDATE lc_threads SET version = '2.0', creator = 'New creator' WHERE thread_id = 23"
+    )
     lc_catalog.commit()
     sha[0] = "second"
     _ = api._fill_thread_details_from_catalog()

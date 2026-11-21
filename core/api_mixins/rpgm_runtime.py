@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """RPG Maker RTP and dependency installs into Wine prefixes."""
+
 from __future__ import annotations
 
 import os
@@ -345,10 +346,16 @@ class RpgmRuntimeMixin(ApiBase):
 
         with self._status_lock:
             if self._prefix_tool_running():
-                return {"success": False, "error": "Close the open Wine prefix tool first."}
+                return {
+                    "success": False,
+                    "error": "Close the open Wine prefix tool first.",
+                }
             running_title = self.launcher.game_using_prefix(deps_prefix)
             if running_title:
-                return {"success": False, "error": f"Close {running_title} first: it is running on this Wine prefix."}
+                return {
+                    "success": False,
+                    "error": f"Close {running_title} first: it is running on this Wine prefix.",
+                }
             # winetricks verbs run wineserver -k/-w, which would break a parallel install.
             if (
                 self._deps_install_status["running"]
@@ -610,10 +617,16 @@ class RpgmRuntimeMixin(ApiBase):
         rtp_prefix = normalize_prefix(env.get("WINEPREFIX", ""))
         with self._status_lock:
             if self._prefix_tool_running():
-                return {"success": False, "error": "Close the open Wine prefix tool first."}
+                return {
+                    "success": False,
+                    "error": "Close the open Wine prefix tool first.",
+                }
             running_title = self.launcher.game_using_prefix(rtp_prefix)
             if running_title:
-                return {"success": False, "error": f"Close {running_title} first: it is running on this Wine prefix."}
+                return {
+                    "success": False,
+                    "error": f"Close {running_title} first: it is running on this Wine prefix.",
+                }
             if (
                 self._deps_install_status["running"]
                 or self._rtp_install_status["running"]

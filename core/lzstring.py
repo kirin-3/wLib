@@ -26,7 +26,9 @@ def _to_units(text: str) -> list[str]:
 
 def _from_units(units: str) -> str:
     # surrogatepass keeps lone surrogates (valid in JS strings) so they round-trip.
-    return units.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "surrogatepass")
+    return units.encode("utf-16-le", "surrogatepass").decode(
+        "utf-16-le", "surrogatepass"
+    )
 
 
 class _BitWriter:

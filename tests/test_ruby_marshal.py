@@ -93,7 +93,11 @@ def test_bignums_and_floats():
 
     assert math.isinf(_one(b"f\x08inf").value)
     neg_inf = _one(b"f\x09-inf")
-    assert isinstance(neg_inf, FloatNode) and math.isinf(neg_inf.value) and neg_inf.value < 0
+    assert (
+        isinstance(neg_inf, FloatNode)
+        and math.isinf(neg_inf.value)
+        and neg_inf.value < 0
+    )
     nan = _one(b"f\x08nan")
     assert isinstance(nan, FloatNode) and math.isnan(nan.value)
 
@@ -121,7 +125,9 @@ def test_strings_symbols_and_ivars():
     assert arr.items[0] is not arr.items[1]
 
     # UTF-8 symbol with I wrapper
-    utf8_sym_arr = _one(b"[\x07I:\x0e\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\x06:\x06ET;\x00")
+    utf8_sym_arr = _one(
+        b"[\x07I:\x0e\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\x06:\x06ET;\x00"
+    )
     assert isinstance(utf8_sym_arr, ArrayNode)
     assert isinstance(utf8_sym_arr.items[0], SymbolNode)
     assert utf8_sym_arr.items[0].text == "日本語"
@@ -408,8 +414,16 @@ def test_edited_scalars_encode_cleanly():
     arr2 = reloaded[0]
     assert isinstance(arr2, ArrayNode)
     assert isinstance(arr2.items[0], IntNode) and arr2.items[0].value == -1000
-    assert isinstance(arr2.items[1], FloatNode) and math.isinf(arr2.items[1].value) and arr2.items[1].value > 0
-    assert isinstance(arr2.items[2], FloatNode) and math.isinf(arr2.items[2].value) and arr2.items[2].value < 0
+    assert (
+        isinstance(arr2.items[1], FloatNode)
+        and math.isinf(arr2.items[1].value)
+        and arr2.items[1].value > 0
+    )
+    assert (
+        isinstance(arr2.items[2], FloatNode)
+        and math.isinf(arr2.items[2].value)
+        and arr2.items[2].value < 0
+    )
     assert isinstance(arr2.items[3], FloatNode) and math.isnan(arr2.items[3].value)
 
 
@@ -462,7 +476,12 @@ def test_projection_editability_rules():
         assert "editable" not in item, f"Expected read-only: {item}"
         assert item["id"] not in editable2
     # u blob has class and size only
-    assert items[1] == {"id": items[1]["id"], "t": "userdef", "class": "Tone", "size": 3}
+    assert items[1] == {
+        "id": items[1]["id"],
+        "t": "userdef",
+        "class": "Tone",
+        "size": 3,
+    }
     # binary str uses replacement characters
     assert "\ufffd" in cast(str, items[2]["v"])
     # bignum serialized as string so JS never loses precision

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Pixeldrain single-file download adapter."""
+
 from __future__ import annotations
 
 import base64
@@ -17,13 +18,19 @@ from core.downloads.transfer import DownloadError, FileInfo, open_range
 
 
 def urlopen(request: Request, timeout: int = 30) -> object:
-    return open_host(request, ("pixeldrain.com", "pixeldrain.net", "pixeldra.in"), timeout)
+    return open_host(
+        request, ("pixeldrain.com", "pixeldrain.net", "pixeldra.in"), timeout
+    )
 
 
 def _path(url: str) -> str:
     """The link's path on a Pixeldrain domain, or '' for any other URL."""
     parsed = urlsplit(url)
-    if parsed.scheme != "https" or (parsed.hostname or "").removeprefix("www.") not in ("pixeldrain.com", "pixeldrain.net", "pixeldra.in"):
+    if parsed.scheme != "https" or (parsed.hostname or "").removeprefix("www.") not in (
+        "pixeldrain.com",
+        "pixeldrain.net",
+        "pixeldra.in",
+    ):
         return ""
     return parsed.path
 
@@ -57,7 +64,12 @@ def classify_error(status: int, body: str = "") -> str:
     if status in (404, 410):
         return "link expired or removed"
     # 403 is Pixeldrain's hotlink/captcha limit for heavily downloaded files.
-    if status in (403, 429, 509) or "rate limit" in body.lower() or "quota" in body.lower() or "captcha" in body.lower():
+    if (
+        status in (403, 429, 509)
+        or "rate limit" in body.lower()
+        or "quota" in body.lower()
+        or "captcha" in body.lower()
+    ):
         return "transfer quota or rate limit reached"
     return "network error"
 
@@ -68,7 +80,13 @@ def verify_key(api_key: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9-]{8,128}", api_key):
         raise DownloadError("Enter a valid Pixeldrain API key")
     try:
-        with cast(HTTPResponse, urlopen(Request("https://pixeldrain.com/api/user", headers=_headers(api_key)), timeout=30)) as response:
+        with cast(
+            HTTPResponse,
+            urlopen(
+                Request("https://pixeldrain.com/api/user", headers=_headers(api_key)),
+                timeout=30,
+            ),
+        ) as response:
             account = cast(object, json.load(response))
     except HTTPError as exc:
         raise DownloadError(classify_error(exc.code)) from exc
@@ -87,12 +105,18 @@ def probe(url: str, api_key: str | None = None) -> FileInfo:
     file_id = _id(url)
     if not file_id:
         if _path(url).startswith("/d/"):
-            raise DownloadError("Pixeldrain folder links are not supported; open in browser")
+            raise DownloadError(
+                "Pixeldrain folder links are not supported; open in browser"
+            )
         raise DownloadError("unsupported Pixeldrain link")
-    headers = _headers(credentials.get(credentials.PIXELDRAIN_API_KEY) if api_key is None else api_key)
+    headers = _headers(
+        credentials.get(credentials.PIXELDRAIN_API_KEY) if api_key is None else api_key
+    )
     base = f"https://pixeldrain.com/api/file/{file_id}"
     try:
-        with cast(HTTPResponse, urlopen(Request(base + "/info", headers=headers), timeout=30)) as response:
+        with cast(
+            HTTPResponse, urlopen(Request(base + "/info", headers=headers), timeout=30)
+        ) as response:
             metadata = cast(object, json.load(response))
         if not isinstance(metadata, dict):
             raise DownloadError("file invalid")
@@ -102,9 +126,13 @@ def probe(url: str, api_key: str | None = None) -> FileInfo:
         name = metadata["name"]
         assert isinstance(name, str)
         size = metadata.get("size")
+
         def stream() -> BinaryIO:
             try:
-                return cast(BinaryIO, urlopen(Request(base + "?download", headers=headers), timeout=30))
+                return cast(
+                    BinaryIO,
+                    urlopen(Request(base + "?download", headers=headers), timeout=30),
+                )
             except HTTPError as exc:
                 raise DownloadError(classify_error(exc.code)) from exc
 
@@ -112,7 +140,10 @@ def probe(url: str, api_key: str | None = None) -> FileInfo:
             return open_range(
                 lambda extra: cast(
                     BinaryIO,
-                    urlopen(Request(base + "?download", headers={**headers, **extra}), timeout=30),
+                    urlopen(
+                        Request(base + "?download", headers={**headers, **extra}),
+                        timeout=30,
+                    ),
                 ),
                 offset,
             )

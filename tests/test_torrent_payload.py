@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """What a finished torrent holds (archive or game folder) and which torrents are refused."""
+
 import io
 import sys
 from pathlib import Path
@@ -23,12 +24,16 @@ def test_single_archive_with_readme_is_an_archive(tmp_path: Path) -> None:
 
 def test_single_tarball_with_readme_is_an_archive(tmp_path: Path) -> None:
     data = _files(tmp_path, "Game-1.0/Game-1.0-linux.tar.bz2", "Game-1.0/readme.txt")
-    assert find_payload(data) == ("archive", str(data / "Game-1.0" / "Game-1.0-linux.tar.bz2"))
+    assert find_payload(data) == (
+        "archive",
+        str(data / "Game-1.0" / "Game-1.0-linux.tar.bz2"),
+    )
 
 
 def test_game_folder_with_a_bare_bz2_stays_a_folder(tmp_path: Path) -> None:
     data = _files(tmp_path, "Game-1.0/Game-1.0.bz2")
     assert find_payload(data) == ("folder", str(data / "Game-1.0"))
+
 
 def test_multi_part_rar_installs_from_its_first_part(tmp_path: Path) -> None:
     data = _files(tmp_path, "Game.part1.rar", "Game.part2.rar", "Game.part3.rar")
@@ -43,7 +48,12 @@ def test_split_7z_installs_from_its_first_part(tmp_path: Path) -> None:
 
 
 def test_game_folder_with_its_own_zip_stays_a_folder(tmp_path: Path) -> None:
-    data = _files(tmp_path, "Game-1.0/Game.exe", "Game-1.0/lib/python.zip", "Game-1.0/game/script.rpy")
+    data = _files(
+        tmp_path,
+        "Game-1.0/Game.exe",
+        "Game-1.0/lib/python.zip",
+        "Game-1.0/game/script.rpy",
+    )
     assert find_payload(data) == ("folder", str(data / "Game-1.0"))
 
 
@@ -55,7 +65,12 @@ def test_two_separate_archives_are_a_folder(tmp_path: Path) -> None:
 def test_symlink_entries_are_refused() -> None:
     files: list[object] = [
         {b"path": [b"game.exe"], b"length": 1},
-        {b"path": [b"link"], b"length": 0, b"attr": b"l", b"symlink path": [b"..", b"..", b"etc"]},
+        {
+            b"path": [b"link"],
+            b"length": 0,
+            b"attr": b"l",
+            b"symlink path": [b"..", b"..", b"etc"],
+        },
     ]
     assert torrent_helper.unsafe_paths({b"name": b"Game", b"files": files})
 

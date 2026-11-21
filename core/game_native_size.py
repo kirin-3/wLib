@@ -4,6 +4,7 @@
 Read-only and best effort: any read error or unexpected shape means "no size",
 so a launch never fails because of it. No JavaScript is run.
 """
+
 from __future__ import annotations
 
 import json
@@ -92,7 +93,11 @@ def _mv_size(root: str, prefix: str) -> NativeSize:
         )
         width = _MANAGER_RE["width"].search(managers)
         height = _MANAGER_RE["height"].search(managers)
-        size = _size(int(width.group(1)), int(height.group(1))) if width and height else None
+        size = (
+            _size(int(width.group(1)), int(height.group(1)))
+            if width and height
+            else None
+        )
         if size:
             result = NativeSize(*size, f"{prefix}js/rpg_managers.js")
     for entry in _plugin_list(os.path.join(root, "js", "plugins.js")):
@@ -109,7 +114,9 @@ def _mv_size(root: str, prefix: str) -> NativeSize:
             continue
         params = cast(Mapping[str, object], raw_params)
         width_key, height_key = KNOWN_PLUGINS[name]
-        size = _size(_param_int(params.get(width_key)), _param_int(params.get(height_key)))
+        size = _size(
+            _param_int(params.get(width_key)), _param_int(params.get(height_key))
+        )
         if size:
             result = NativeSize(*size, f"{prefix}js/plugins.js ({name})")
     return result
@@ -145,7 +152,11 @@ def _size(width: object, height: object) -> tuple[int, int] | None:
 
 
 def _valid_side(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_SIDE
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 1 <= value <= MAX_SIDE
+    )
 
 
 def _read_text(path: str, limit: int) -> str | None:

@@ -11,7 +11,9 @@ from core.database import add_game, get_all_games, init_db
 
 FIXTURES = Path(__file__).parent / "fixtures" / "f95_lists"
 WATCHED_1 = "https://f95zone.to/watched/threads?tab=games&unread=0&sort=title&page=1"
-BOOKMARKS_1 = "https://f95zone.to/watched/threads?tab=bookmarks&bm=games&sort=title&page=1"
+BOOKMARKS_1 = (
+    "https://f95zone.to/watched/threads?tab=bookmarks&bm=games&sort=title&page=1"
+)
 
 
 def _page(name: str) -> str:
@@ -19,7 +21,10 @@ def _page(name: str) -> str:
 
 
 def _fixture_fetch(url: str) -> tuple[int, str, str]:
-    pages = {WATCHED_1: _page("watched_page1.html"), BOOKMARKS_1: _page("bookmarks_page1.html")}
+    pages = {
+        WATCHED_1: _page("watched_page1.html"),
+        BOOKMARKS_1: _page("bookmarks_page1.html"),
+    }
     return 200, url, pages.get(url, _page("past_end.html"))
 
 
@@ -41,19 +46,31 @@ def _use_reader(api: Api, fetch=_fixture_fetch, clock=None) -> f95_lists.Account
 def test_no_extension_and_outdated_extension_make_no_request(api: Api):
     result = api.start_f95_account_read()
     assert result["success"] is False and result["error_code"] == "no_extension"
-    conn = extension_bridge.BridgeConnection(send_text=lambda _text: pytest.fail("no request expected"))
+    conn = extension_bridge.BridgeConnection(
+        send_text=lambda _text: pytest.fail("no request expected")
+    )
     extension_bridge._register_connection(conn)  # pyright: ignore[reportPrivateUsage]
-    extension_bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True})  # pyright: ignore[reportPrivateUsage]
+    extension_bridge._handle_message(
+        conn, {"type": "hello", "protocol": 2, "can_fetch": True}
+    )  # pyright: ignore[reportPrivateUsage]
     result = api.start_f95_account_read()
     assert result["success"] is False and result["error_code"] == "extension_outdated"
     extension_bridge.reset_for_tests()
 
 
-def test_read_preview_import_and_update_check_for_added_ids_only(api: Api, monkeypatch: pytest.MonkeyPatch):
-    existing = add_game("Natsu", "/games/natsu/run.sh", "https://f95zone.to/threads/natsu.323748/")
+def test_read_preview_import_and_update_check_for_added_ids_only(
+    api: Api, monkeypatch: pytest.MonkeyPatch
+):
+    existing = add_game(
+        "Natsu", "/games/natsu/run.sh", "https://f95zone.to/threads/natsu.323748/"
+    )
     assert existing is not None
     checked: list[list[int]] = []
-    monkeypatch.setattr(api, "check_all_updates", lambda ids=None, *a, **k: checked.append(list(ids or [])) or {"success": True})
+    monkeypatch.setattr(
+        api,
+        "check_all_updates",
+        lambda ids=None, *a, **k: checked.append(list(ids or [])) or {"success": True},
+    )
     reader = _use_reader(api)
     started = api.start_f95_account_read()
     assert started["success"] is True
@@ -97,7 +114,9 @@ def test_busy_cancel_and_not_running(api: Api):
     assert requested == [WATCHED_1]
     assert get_all_games() == []
     not_running = api.cancel_f95_account_read()
-    assert not_running["success"] is False and not_running["error_code"] == "not_running"
+    assert (
+        not_running["success"] is False and not_running["error_code"] == "not_running"
+    )
 
 
 @pytest.mark.parametrize(
@@ -112,7 +131,11 @@ def test_read_errors_are_reported(api: Api, page: tuple[int, str, str], code: st
     started = api.start_f95_account_read()
     reader.join(5)
     status = api.get_f95_account_read_status()
-    assert status["success"] is False and status["error_code"] == code and status["state"] == "error"
+    assert (
+        status["success"] is False
+        and status["error_code"] == code
+        and status["state"] == "error"
+    )
     result = api.import_f95_account_lists(str(started["read_id"]))
     assert result["success"] is False and result["error_code"] == "not_found"
 
@@ -167,8 +190,13 @@ def test_wrong_read_id_and_database_error(api: Api, monkeypatch: pytest.MonkeyPa
 
     # The library did not change, so the same preview can be imported again.
     monkeypatch.setattr("core.f95_lists.apply_import", real_apply)
-    monkeypatch.setattr(api, "check_all_updates", lambda _ids, **_kwargs: {"success": True})
+    monkeypatch.setattr(
+        api, "check_all_updates", lambda _ids, **_kwargs: {"success": True}
+    )
     monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
     retried = api.import_f95_account_lists(str(started["read_id"]))
     assert retried["success"] is True and retried["added"] == 2
-    assert api.import_f95_account_lists(str(started["read_id"]))["error_code"] == "not_found"
+    assert (
+        api.import_f95_account_lists(str(started["read_id"]))["error_code"]
+        == "not_found"
+    )

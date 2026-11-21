@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Settings, diagnostics, pickers, catalog and app updates."""
+
 from __future__ import annotations
 
 import json
@@ -38,7 +39,9 @@ _ui_error_limiter = UiErrorLimiter()
 class SettingsMixin(ApiBase):
     @python_only
     def set_window(self, window: Window | None) -> None:
-        self.window: Window | None = hide_from_js(window) if window is not None else None
+        self.window: Window | None = (
+            hide_from_js(window) if window is not None else None
+        )
 
     def get_platform_capabilities(self) -> PlatformCapabilities:
         return resolve_platform_capabilities()
@@ -129,8 +132,10 @@ class SettingsMixin(ApiBase):
             **self._lc_plus_settings(get_setting_fn),
         }
 
-    def _lc_plus_settings(self, get_setting_fn: Callable[[str], object]) -> dict[str, object]:
-        """"Use LewdCorner", the LC Plus mode, and the effective and detected LC Plus state."""
+    def _lc_plus_settings(
+        self, get_setting_fn: Callable[[str], object]
+    ) -> dict[str, object]:
+        """ "Use LewdCorner", the LC Plus mode, and the effective and detected LC Plus state."""
         mode = lewdcorner.plus_mode(get_setting_fn(lewdcorner.LC_PLUS_MODE))
         detected = str(get_setting_fn(lewdcorner.LC_PLUS_DETECTED) or "")
         return {
@@ -139,12 +144,14 @@ class SettingsMixin(ApiBase):
             "lc_plus": lewdcorner.plus_effective(mode, detected),
             "lc_plus_mode": mode,
             "lc_plus_detected": detected if detected in ("plus", "standard") else "",
-            "lc_plus_detected_at": str(get_setting_fn(lewdcorner.LC_PLUS_DETECTED_AT) or ""),
+            "lc_plus_detected_at": str(
+                get_setting_fn(lewdcorner.LC_PLUS_DETECTED_AT) or ""
+            ),
             "lc_plus_check": self._lc_plus_check(),
         }
 
     def check_lc_plus(self) -> dict[str, object]:
-        """"Check now": detect the LC Plus tier and return the new LC Plus state."""
+        """ "Check now": detect the LC Plus tier and return the new LC Plus state."""
         from core import lewdcorner_plus
         from core.database import get_setting
 
@@ -160,7 +167,12 @@ class SettingsMixin(ApiBase):
                 "no_extension": "Open a browser with the wLib extension and its LewdCorner switch on",
                 "failed": "LewdCorner did not answer. Try again later",
             }
-            return {"success": False, "code": skipped, "error": errors.get(skipped, "Could not check LC Plus"), **status}
+            return {
+                "success": False,
+                "code": skipped,
+                "error": errors.get(skipped, "Could not check LC Plus"),
+                **status,
+            }
         return {
             "success": True,
             "running": skipped == "running",
@@ -287,12 +299,21 @@ class SettingsMixin(ApiBase):
         lc_plus_mode: str | None = None
         if lewdcorner.LC_PLUS_MODE in settings_map:
             raw_mode = settings_map[lewdcorner.LC_PLUS_MODE]
-            if not isinstance(raw_mode, str) or raw_mode.strip().lower() not in lewdcorner.LC_PLUS_MODES:
-                return {"success": False, "field": lewdcorner.LC_PLUS_MODE, "error": "LC Plus must be auto, yes or no"}
+            if (
+                not isinstance(raw_mode, str)
+                or raw_mode.strip().lower() not in lewdcorner.LC_PLUS_MODES
+            ):
+                return {
+                    "success": False,
+                    "field": lewdcorner.LC_PLUS_MODE,
+                    "error": "LC Plus must be auto, yes or no",
+                }
             lc_plus_mode = raw_mode.strip().lower()
         elif "lc_plus" in settings_map:
             # The old switch: on is Yes, off is Auto.
-            lc_plus_mode = "yes" if lewdcorner.setting_enabled(settings_map["lc_plus"]) else "auto"
+            lc_plus_mode = (
+                "yes" if lewdcorner.setting_enabled(settings_map["lc_plus"]) else "auto"
+            )
         # Checked first, so a bad gamescope value never leaves other settings half saved.
         from core import gamescope
 
@@ -302,17 +323,25 @@ class SettingsMixin(ApiBase):
                 continue
             raw_value = settings_map[gamescope_key]
             if gamescope_key == "gamescope_enabled":
-                gamescope_values[gamescope_key] = "true" if raw_value is True else "false"
+                gamescope_values[gamescope_key] = (
+                    "true" if raw_value is True else "false"
+                )
                 continue
             if isinstance(raw_value, bool) or not (
                 raw_value is None or isinstance(raw_value, (str, int))
             ):
-                return {"success": False, "field": gamescope_key, "error": f"Setting '{gamescope_key}' must be a string"}
+                return {
+                    "success": False,
+                    "field": gamescope_key,
+                    "error": f"Setting '{gamescope_key}' must be a string",
+                }
             text_value = "" if raw_value is None else str(raw_value)
             error = gamescope.settings_error(gamescope_key, text_value)
             if error:
                 return {"success": False, "field": gamescope_key, "error": error}
-            gamescope_values[gamescope_key] = gamescope.normalize_setting(gamescope_key, text_value)
+            gamescope_values[gamescope_key] = gamescope.normalize_setting(
+                gamescope_key, text_value
+            )
         # Checked first, so a bad torrent value never leaves other settings half saved.
         from core.downloads import torrent_settings
 
@@ -344,9 +373,15 @@ class SettingsMixin(ApiBase):
         queue_values: dict[str, str] = {}
         for queue_key in queue_settings.KEYS:
             if queue_key in settings_map:
-                clean = queue_settings.normalize_for_save(queue_key, settings_map[queue_key])
+                clean = queue_settings.normalize_for_save(
+                    queue_key, settings_map[queue_key]
+                )
                 if clean is None:
-                    return {"success": False, "field": queue_key, "error": "Enter a valid download setting"}
+                    return {
+                        "success": False,
+                        "field": queue_key,
+                        "error": "Enter a valid download setting",
+                    }
                 queue_values[queue_key] = clean
         from core.database import get_library_folders, normalize_library_folders
 
@@ -507,7 +542,9 @@ class SettingsMixin(ApiBase):
                 "web_player_devtools",
             ):
                 if tool_key in settings_map:
-                    update_setting_fn(tool_key, "true" if settings_map[tool_key] is True else "false")
+                    update_setting_fn(
+                        tool_key, "true" if settings_map[tool_key] is True else "false"
+                    )
             if "sandbox_new_games" in settings_map:
                 update_setting_fn(
                     "sandbox_new_games",
@@ -579,7 +616,9 @@ class SettingsMixin(ApiBase):
                 detect_lc_plus |= enabled and not was_lc
                 pending["lc_enabled"] = "1" if enabled else "0"
             if lc_plus_mode is not None:
-                fill_lc |= lewdcorner.plus_effective(lc_plus_mode, detected) and not lewdcorner.plus_effective(was_mode, detected)
+                fill_lc |= lewdcorner.plus_effective(
+                    lc_plus_mode, detected
+                ) and not lewdcorner.plus_effective(was_mode, detected)
                 detect_lc_plus |= lc_plus_mode == "auto" and was_mode != "auto"
                 pending[lewdcorner.LC_PLUS_MODE] = lc_plus_mode
                 # Kept for an older wLib that reads the old switch: "1" only for Yes.
@@ -597,7 +636,9 @@ class SettingsMixin(ApiBase):
                 self._schedule_steam_sync()
             if fill_lc or lc_changed:
                 threading.Thread(
-                    target=self._apply_lc_setting_change, kwargs={"turned_on": fill_lc}, daemon=True
+                    target=self._apply_lc_setting_change,
+                    kwargs={"turned_on": fill_lc},
+                    daemon=True,
                 ).start()
             if detect_lc_plus:
                 self._start_lc_plus_detection("settings")

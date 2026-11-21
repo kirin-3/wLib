@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Read the few `.torrent` facts the main process needs, without libtorrent."""
+
 from __future__ import annotations
 
 import hashlib
@@ -24,7 +25,9 @@ class TorrentMeta:
     info_hash_v2: str = ""
 
 
-def _decode(data: bytes, pos: int, depth: int, spans: dict[bytes, tuple[int, int]] | None) -> tuple[Value, int]:
+def _decode(
+    data: bytes, pos: int, depth: int, spans: dict[bytes, tuple[int, int]] | None
+) -> tuple[Value, int]:
     if depth > 64 or pos >= len(data):
         raise ValueError("bad bencode")
     ch = data[pos : pos + 1]
@@ -111,7 +114,9 @@ def parse_torrent(data: bytes) -> TorrentMeta:
             size, count = length, 1
         v2_hash = hashlib.sha256(data[start:stop]).hexdigest() if v2 else ""
         return TorrentMeta(
-            info_hash=v2_hash if v2_only else hashlib.sha1(data[start:stop]).hexdigest(),
+            info_hash=v2_hash
+            if v2_only
+            else hashlib.sha1(data[start:stop]).hexdigest(),
             name=name.decode("utf-8", "replace") if isinstance(name, bytes) else "",
             size=size,
             private=info.get(b"private") == 1,

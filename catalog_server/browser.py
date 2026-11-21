@@ -125,7 +125,9 @@ class BrowserTransport:
 
     def fetch(self, request: Request, *, with_cookies: bool) -> Response:
         if request.method != "GET" or request.body is not None:
-            raise ValueError(f"the browser only sends GET requests, not {request.method}")
+            raise ValueError(
+                f"the browser only sends GET requests, not {request.method}"
+            )
         try:
             page = self._session(request.proxy, with_cookies).fetch(request.url)
         except Exception as exc:  # noqa: BLE001 - every browser failure is retried

@@ -7,7 +7,9 @@ from core import extension_server as server_module
 
 
 def _handler(path):
-    handler = server_module.ExtensionRequestHandler.__new__(server_module.ExtensionRequestHandler)
+    handler = server_module.ExtensionRequestHandler.__new__(
+        server_module.ExtensionRequestHandler
+    )
     handler.path = path
     handler.headers = Message()
     handler.__dict__["wfile"] = BytesIO()
@@ -42,7 +44,10 @@ def test_evicted_url_gets_a_new_key():
     _ = keys.add("https://lewdcorner.com/attachments/c-png.3/")
     assert keys.get(first) is None
     again = keys.add("https://lewdcorner.com/attachments/a-png.1/")
-    assert again != first and keys.get(again) == "https://lewdcorner.com/attachments/a-png.1/"
+    assert (
+        again != first
+        and keys.get(again) == "https://lewdcorner.com/attachments/a-png.1/"
+    )
 
 
 def test_hash_of_a_known_url_does_not_open_the_image(tmp_path, monkeypatch):
@@ -52,7 +57,9 @@ def test_hash_of_a_known_url_does_not_open_the_image(tmp_path, monkeypatch):
     url = "https://lewdcorner.com/attachments/shot-png.1/"
     png = b"\x89PNG\r\n\x1a\nimage\x00\x00\x00\x00IEND\xaeB`\x82"
     fetched = []
-    monkeypatch.setattr(game_covers, "fetch_lc_image", lambda u, *, background: fetched.append(u) or png)
+    monkeypatch.setattr(
+        game_covers, "fetch_lc_image", lambda u, *, background: fetched.append(u) or png
+    )
     api = MagicMock()
     api.lc_image_keys = game_covers.LcImageKeys()
     api.cover_cache = game_covers.CoverCacheService()

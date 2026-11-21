@@ -33,7 +33,9 @@ def check_torrent_helper() -> int:
         proc.stdin.flush()
         event = json.loads(proc.stdout.readline() or "{}")
         if event.get("event") != "ready":
-            raise RuntimeError(f"torrent helper did not start: {event.get('message', event)}")
+            raise RuntimeError(
+                f"torrent helper did not start: {event.get('message', event)}"
+            )
         proc.stdin.close()
         if proc.wait(timeout=15) != 0:
             raise RuntimeError(f"torrent helper exited with code {proc.returncode}")
@@ -53,7 +55,9 @@ def check_archive_codecs() -> None:
     sample = b"wlib"
     for module in (bz2, gzip, lzma):
         if module.decompress(module.compress(sample)) != sample:
-            raise RuntimeError(f"{module.__name__} round trip failed during smoke check")
+            raise RuntimeError(
+                f"{module.__name__} round trip failed during smoke check"
+            )
     _ = tarfile.open
 
 
@@ -69,7 +73,9 @@ def wait_for_catalog_check(catalog: CatalogClient) -> None:
     deadline = time.monotonic() + CATALOG_WAIT_SECONDS
     while catalog.status().get("checking"):
         if time.monotonic() > deadline:
-            raise RuntimeError(f"catalog check still running after {CATALOG_WAIT_SECONDS} s")
+            raise RuntimeError(
+                f"catalog check still running after {CATALOG_WAIT_SECONDS} s"
+            )
         time.sleep(0.2)
 
 

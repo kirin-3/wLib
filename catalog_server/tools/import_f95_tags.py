@@ -29,7 +29,9 @@ def _extract_object(text: str, key: str) -> object:
     return decoded[0]
 
 
-def _prefixes(value: object, category: str | None = None) -> dict[str, dict[str, str | None]]:
+def _prefixes(
+    value: object, category: str | None = None
+) -> dict[str, dict[str, str | None]]:
     """Walk the nested prefix groups; leaves have an id and a name."""
     found: dict[str, dict[str, str | None]] = {}
     if isinstance(value, list):
@@ -64,7 +66,9 @@ def convert(text: str) -> dict[str, object]:
         for item in cast(list[object], raw_tags):
             if isinstance(item, dict):
                 entry = cast(dict[str, object], item)
-                if isinstance(entry.get("id"), int) and isinstance(entry.get("name"), str):
+                if isinstance(entry.get("id"), int) and isinstance(
+                    entry.get("name"), str
+                ):
                     tags[str(entry["id"])] = str(entry["name"])
     prefixes = _prefixes(_extract_object(text, "prefixes"))
     if not tags:
@@ -81,8 +85,12 @@ class Args(argparse.Namespace):
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
-    _ = parser.add_argument("source", help="saved latest_alpha page or its latestUpdates JSON")
+    parser = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0] if __doc__ else None
+    )
+    _ = parser.add_argument(
+        "source", help="saved latest_alpha page or its latestUpdates JSON"
+    )
     _ = parser.add_argument("--output", default=TAGS_FILE)
     args = parser.parse_args(argv, namespace=Args())
     with open(args.source, encoding="utf-8") as handle:

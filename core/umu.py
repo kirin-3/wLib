@@ -22,7 +22,12 @@ from http.client import HTTPResponse
 from pathlib import PurePosixPath
 from typing import TypedDict, cast, final
 
-from core.host_platform import get_data_dir, host_command, host_which, proton_compat_data_path
+from core.host_platform import (
+    get_data_dir,
+    host_command,
+    host_which,
+    proton_compat_data_path,
+)
 
 _log = logging.getLogger("wlib.umu")
 
@@ -251,7 +256,11 @@ def build_umu_invocation(
     # values from the launch arguments cannot apply. Say so in the log.
     proton_path = proton_path_value(selected)
     for key, kept, reason in (
-        ("PROTONPATH", proton_path, "select the Proton version in the game's settings instead"),
+        (
+            "PROTONPATH",
+            proton_path,
+            "select the Proton version in the game's settings instead",
+        ),
         ("PROTON_VERB", "waitforexitandrun", "wLib needs it to track playtime"),
     ):
         value = env.get(key)
