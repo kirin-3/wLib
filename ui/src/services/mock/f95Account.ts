@@ -4,8 +4,8 @@
 //
 // Demo: the read walks 2 Watched pages and 1 Bookmarks page. Set localStorage
 // "wlib-mock-f95-account" to an error code (no_extension, extension_outdated,
-// login_required, blocked, not_a_list) to see that error, or to "empty" to see
-// empty lists.
+// login_required, blocked, not_a_list) to see that error. Use "empty" for
+// empty lists, "missing_tags" for partial coverage or "catalog_off" for none.
 import type {
   F95AccountImportResponse,
   F95AccountPreview,
@@ -37,11 +37,11 @@ const mockMode = (): string => {
   }
 };
 
-const demoPreview = (empty: boolean): F95AccountPreview => {
-  if (empty) {
+const demoPreview = (mode: string): F95AccountPreview => {
+  if (mode === "empty") {
     return {
       lists: { watched: { found: 0, new: 0, existing: 0 }, bookmarks: { found: 0, new: 0, existing: 0 } },
-      total: 0, new: 0, existing: 0, entries: [],
+      total: 0, new: 0, existing: 0, without_tags: 0, catalog_off: false, entries: [],
     };
   }
   const entries = Array.from({ length: 27 }, (_, index) => {
@@ -53,9 +53,13 @@ const demoPreview = (empty: boolean): F95AccountPreview => {
       engine: "Ren'Py", prefixes: ["Ren'Py"], lists, in_library: id <= 4,
     };
   });
+  const newCount = 23;
+  const catalogOff = mode === "catalog_off";
   return {
     lists: { watched: { found: 25, new: 21, existing: 4 }, bookmarks: { found: 3, new: 3, existing: 0 } },
-    total: 27, new: 23, existing: 4, entries,
+    total: 27, new: newCount, existing: 4, entries,
+    without_tags: catalogOff ? newCount : mode === "missing_tags" ? 6 : 0,
+    catalog_off: catalogOff,
   };
 };
 
@@ -114,7 +118,7 @@ export class MockF95Account {
       const page = mode === "empty" ? undefined : PAGES[this.step];
       if (!page) {
         this.status = { success: true, read_id: readId, state: "done", progress: this.status.progress ?? {},
-          preview: demoPreview(mode === "empty") };
+          preview: demoPreview(mode) };
         return;
       }
       this.status = { ...this.status, progress: { list: page.list, list_label: page.label, page: page.page,
@@ -145,7 +149,8 @@ export class MockF95Account {
       return { success: false, mock: true, error: "No watched or bookmarked games were found.", error_code: "empty" };
     }
     this.status = { success: true, read_id: readId, state: "imported", progress: {} };
-    return { success: true, mock: true, added: preview.new, tagged: preview.existing, added_ids: [],
+    return { success: true, mock: true, added: preview.new, tagged: preview.existing,
+      without_tags: preview.without_tags ?? 0, added_ids: [],
       metadata_check: "none" };
   }
 }

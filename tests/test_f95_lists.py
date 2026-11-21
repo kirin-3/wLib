@@ -412,6 +412,31 @@ def test_preview_counts_games_on_both_lists_once():
         "bookmarks": {"found": 4, "new": 4, "existing": 0},
     }
     assert (preview["total"], preview["new"], preview["existing"]) == (12, 7, 5)
+    assert preview["without_tags"] == 7
+    assert preview["catalog_off"] is False
+
+
+@pytest.mark.parametrize(
+    ("missing_tags", "without_tags"), [("", 1), (" , ", 1), ("rpg", 0)]
+)
+def test_preview_looks_up_thread_tags_for_new_games_only(missing_tags, without_tags):
+    init_db()
+    assert add_game("Old", "", "https://f95zone.to/threads/1/") is not None
+    entries = [
+        _entry(1, ["watched"]),
+        _entry(2, ["bookmarks"]),
+        _entry(3, ["watched", "bookmarks"]),
+    ]
+
+    def lookup(ids: Sequence[str]) -> dict[str, dict[str, object]]:
+        assert list(ids) == ["2", "3"]
+        return {"2": {"tags": "3dcg"}, "3": {"tags": missing_tags}}
+
+    preview = f95_lists.build_preview(
+        ListReadResult(entries, {}), catalog_lookup=lookup
+    )
+    assert preview["without_tags"] == without_tags
+    assert preview["catalog_off"] is False
 
 
 def test_apply_adds_wishlisted_games_and_tags_existing_ones_only():
@@ -443,6 +468,7 @@ def test_apply_adds_wishlisted_games_and_tags_existing_ones_only():
     }
     result = f95_lists.apply_import(entries, catalog_lookup=lambda _ids: catalog)
     assert (result["added"], result["tagged"]) == (2, 1)
+    assert result["without_tags"] == 1
     after = _game(playing)
     assert after["tags"] == "3dcg, sandbox, Watched on F95"
     for key in (
@@ -487,8 +513,10 @@ def test_second_import_adds_no_duplicate_tags():
     entries = [_entry(1, ["watched", "bookmarks"])]
     first = f95_lists.apply_import(entries, catalog_lookup=_no_catalog)
     assert first["added"] == 1
+    assert first["without_tags"] == 1
     second = f95_lists.apply_import(entries, catalog_lookup=_no_catalog)
     assert (second["added"], second["tagged"]) == (0, 0)
+    assert second["without_tags"] == 0
     games = get_all_games()
     assert len(games) == 1
     assert games[0]["tags"] == "Watched on F95, Bookmarked on F95"

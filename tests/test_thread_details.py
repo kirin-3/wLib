@@ -119,6 +119,49 @@ def test_a_game_added_later_is_filled_without_a_new_snapshot(
     assert _row(game_id)["language"] == "English (MTL), Japanese"
 
 
+def test_catalog_fills_empty_f95_tags_once(rating_catalog, tmp_path, monkeypatch):
+    add_thread, sha = rating_catalog
+    imported, normal, absent, no_baseline = (_game(i) for i in range(1, 5))
+    _ = database.update_game(imported, {"tags": "Watched on F95", "f95_tags": ""})
+    _ = database.update_game(normal, {"tags": "3dcg", "f95_tags": "3dcg"})
+    _ = database.update_game(absent, {"tags": "Bookmarked on F95", "f95_tags": ""})
+    _ = database.update_game(no_baseline, {"tags": "mine"})
+    api = Api()
+    refreshed: list[bool] = []
+    monkeypatch.setattr(api, "_refresh_synced_library", lambda: refreshed.append(True))
+    assert api._fill_thread_details_from_catalog() == 0
+
+    for thread_id in (1, 2, 4):
+        add_thread(thread_id, None)
+    with sqlite3.connect(tmp_path / "catalog.db") as catalog:
+        _ = catalog.executemany(
+            "INSERT INTO f95_tag_names (id, name) VALUES (?, ?)",
+            [(1, "3dcg"), (2, "sandbox")],
+        )
+        _ = catalog.execute("UPDATE f95_threads SET tags = '[1, 2]'")
+    sha["value"] = "sha-2"
+
+    assert api._fill_thread_details_from_catalog() == 1
+    assert refreshed == [True]
+    game = _row(imported)
+    assert (game["tags"], game["f95_tags"]) == (
+        "3dcg, sandbox, Watched on F95",
+        "3dcg, sandbox",
+    )
+    assert _row(normal)["tags"] == "3dcg"
+    assert _row(absent)["tags"] == "Bookmarked on F95"
+    assert _row(absent)["f95_tags"] == ""
+    assert _row(no_baseline)["tags"] == "mine"
+    assert _row(no_baseline)["f95_tags"] is None
+
+    _ = database.update_game(
+        imported, {"tags": "3dcg, Watched on F95", "tags_user_edited": 1}
+    )
+    sha["value"] = "sha-3"
+    assert api._fill_thread_details_from_catalog() == 0
+    assert _row(imported)["tags"] == "3dcg, Watched on F95"
+
+
 def test_a_catalog_without_the_details_table_changes_nothing(
     rating_catalog, tmp_path, monkeypatch
 ):

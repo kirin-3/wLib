@@ -1305,6 +1305,35 @@ def test_thread_metadata_replaces_stored_non_engine_prefix():
     assert get_all_games()[0]["engine"] == "Ren'Py"
 
 
+def test_check_for_updates_fills_empty_f95_baseline_after_tag_edit(monkeypatch):
+    api = Api()
+    url = "https://f95zone.to/threads/demo.123/"
+    game_id = add_game("Demo", "", url, tags="Watched on F95")
+    assert game_id is not None
+    _ = update_game(game_id, {"f95_tags": "", "tags_user_edited": 1})
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_version",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "version": "1.1",
+            "engine": "Ren'Py",
+            "tags": ["3dcg", "rpg"],
+        },
+    )
+
+    result = api.check_for_updates(url)
+
+    assert result["success"] is True
+    assert result["metadata_updated"] == 1
+    game = get_all_games()[0]
+    assert (game["tags"], game["f95_tags"], game["tags_user_edited"]) == (
+        "3dcg, rpg, Watched on F95",
+        "3dcg, rpg",
+        1,
+    )
+
+
 def test_backfill_skips_tags_the_user_edited():
     marked = "https://f95zone.to/threads/marked.1/"
     plain = "https://f95zone.to/threads/plain.2/"
@@ -3370,6 +3399,63 @@ def test_bulk_page_fallback_stores_metadata_for_installed_game(monkeypatch):
     assert [(link["source"], link["id"]) for link in get_game_links(game_id)] == [
         ("steam", "123")
     ]
+
+
+@pytest.mark.parametrize(
+    ("baseline", "catalog_tags", "fallback_tags", "read_wishlist", "expected"),
+    [
+        ("", "3dcg, rpg", None, False, "3dcg, rpg"),
+        ("", "3dcg, rpg", ["sandbox"], False, "sandbox"),
+        ("", "3dcg, rpg", [], False, ""),
+        ("", "3dcg, rpg", None, True, "page tag"),
+        ("", "", None, False, ""),
+        ("3dcg", "3dcg, rpg", None, False, "3dcg"),
+        (None, "3dcg, rpg", None, False, None),
+    ],
+)
+def test_bulk_fills_empty_f95_tags_without_extra_page_reads(
+    monkeypatch, baseline, catalog_tags, fallback_tags, read_wishlist, expected
+):
+    api = Api()
+    url = "https://f95zone.to/threads/123/"
+    list_tag = "Watched on F95"
+    current = f"{baseline}, {list_tag}" if baseline else list_tag
+    game_id = add_game("Wishlist", "", url, tags=current)
+    assert game_id is not None
+    _ = update_game(
+        game_id,
+        {"f95_tags": baseline, "latest_version": "1.0" if read_wishlist else ""},
+    )
+    monkeypatch.setattr(
+        "core.game_lookup.f95_thread_entries",
+        lambda _ids: {"123": {"tags": catalog_tags}} if catalog_tags else {},
+    )
+    result: dict[str, object] = {"success": True, "version": "1.1"}
+    if fallback_tags is not None:
+        result.update(
+            tags=fallback_tags, thread_main_post_checked_at="2026-10-28T00:00:00"
+        )
+
+    def check_versions(urls, callback):
+        assert callback(urls[0], result)
+        return {urls[0]: result}
+
+    batch = MagicMock(side_effect=check_versions)
+    get_page = MagicMock(return_value={"success": True, "tags": ["page tag"]})
+    monkeypatch.setattr(api.scraper, "check_versions", batch)
+    monkeypatch.setattr(api.scraper, "get_thread_metadata", get_page)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+
+    assert api.check_all_updates([game_id])["success"] is True
+    status = api.get_update_status()
+    assert status["outcome"] == "completed"
+    assert "info_changed" not in status["results"][0]
+    assert batch.call_count == 1
+    assert batch.call_args.args[0] == [url]
+    assert get_page.call_count == int(read_wishlist)
+    game = get_all_games()[0]
+    assert game["f95_tags"] == expected
+    assert game["tags"] == (f"{expected}, {list_tag}" if expected else list_tag)
 
 
 def test_bulk_page_fallback_records_completion_for_wishlist_without_version_change(

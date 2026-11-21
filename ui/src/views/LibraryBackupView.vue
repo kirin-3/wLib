@@ -23,7 +23,9 @@ import {
 } from "@tabler/icons-vue";
 import { api } from "../services/api";
 import PathStatus from "../components/PathStatus.vue";
-import { F95AccountImport, f95AccountProgressText, f95AccountResultText } from "../utils/f95AccountImport";
+import {
+  F95AccountImport, f95AccountPreviewNote, f95AccountProgressText, f95AccountResultText,
+} from "../utils/f95AccountImport";
 import type {
   ExternalLibraryImportResponse,
   ExternalLibraryInspectResponse,
@@ -499,6 +501,7 @@ const importF95Lists = async () => {
   if (await f95Account.importLists()) window.dispatchEvent(new Event("wlib-refresh-library"));
 };
 const f95ProgressText = computed(() => f95AccountProgressText(f95Account.progress));
+const f95PreviewNote = computed(() => f95AccountPreviewNote(f95Account.preview));
 const f95ResultText = computed(() => (f95Account.result ? f95AccountResultText(f95Account.result) : ""));
 onBeforeUnmount(stopF95Poll);
 
@@ -958,6 +961,7 @@ const runImport = async () => {
               <span>New: {{ f95Account.preview.new }}</span>
               <span>Already in library: {{ f95Account.preview.existing }}</span>
             </div>
+            <p v-if="f95PreviewNote" class="f95-account-note">{{ f95PreviewNote }}</p>
           </template>
         </div>
       </section>
@@ -1072,7 +1076,8 @@ const runImport = async () => {
 }
 .f95-account-list strong { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-primary); }
 .f95-account-list svg { width: 1rem; height: 1rem; }
-.f95-account-empty { color: var(--text-secondary); font-size: 0.875rem; }
+.f95-account-empty,
+.f95-account-note { color: var(--text-secondary); font-size: 0.875rem; }
 .backup-passphrase-fields { display: grid; gap: .5rem; }
 .backup-passphrase-fields p { font-size: .875rem; color: var(--text-secondary); }
 .backup-page button:focus-visible, .backup-page input[type="checkbox"]:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }

@@ -282,6 +282,7 @@ class SyncMixin(ApiBase):
             "success": True,
             "added": result["added"],
             "tagged": result["tagged"],
+            "without_tags": result["without_tags"],
             "added_ids": added_ids,
             "metadata_check": metadata_check,
         }

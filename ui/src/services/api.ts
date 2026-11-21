@@ -1011,6 +1011,8 @@ export interface F95AccountPreview {
   total: number;
   new: number;
   existing: number;
+  without_tags?: number;
+  catalog_off?: boolean;
   entries: F95AccountPreviewEntry[];
 }
 
@@ -1032,6 +1034,7 @@ export interface F95AccountReadStatus extends F95AccountResponse {
 export interface F95AccountImportResponse extends F95AccountResponse {
   added?: number;
   tagged?: number;
+  without_tags?: number;
   added_ids?: number[];
   metadata_check?: "started" | "busy" | "none";
 }

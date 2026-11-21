@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from core import extension_bridge, f95_lists
+from core import database, extension_bridge, f95_lists
 from core.api import Api
 from core.database import add_game, get_all_games, init_db
 
@@ -29,12 +29,10 @@ def _fixture_fetch(url: str) -> tuple[int, str, str]:
 
 
 @pytest.fixture
-def api(monkeypatch: pytest.MonkeyPatch) -> Api:
+def api() -> Api:
     init_db()
     extension_bridge.reset_for_tests()
-    instance = Api()
-    monkeypatch.setattr("core.game_lookup.f95_thread_entries", lambda _ids: {})
-    return instance
+    return Api()
 
 
 def _use_reader(api: Api, fetch=_fixture_fetch, clock=None) -> f95_lists.AccountReader:
@@ -88,6 +86,57 @@ def test_read_preview_import_and_update_check_for_added_ids_only(
     assert result["metadata_check"] == "started"
     again = api.import_f95_account_lists(str(started["read_id"]))
     assert again["success"] is False and again["error_code"] == "not_found"
+
+
+@pytest.mark.parametrize(
+    ("catalog", "catalog_off", "without_tags"),
+    [("missing", False, 2), ("off", True, 2), ("full", False, 0)],
+)
+def test_account_preview_and_import_report_missing_thread_tags(
+    api: Api,
+    monkeypatch: pytest.MonkeyPatch,
+    catalog: str,
+    catalog_off: bool,
+    without_tags: int,
+):
+    from catalog_server.store import CATALOG_SCHEMA
+
+    if catalog != "missing":
+        with sqlite3.connect(Path(database.DB_PATH).with_name("catalog.db")) as conn:
+            _ = conn.executescript(CATALOG_SCHEMA)
+            _ = conn.execute("INSERT INTO f95_tag_names (id, name) VALUES (1, '3dcg')")
+            _ = conn.executemany(
+                "INSERT INTO f95_threads "
+                "(thread_id, title, tags, url, first_seen, last_seen) "
+                "VALUES (?, 'T', '[1]', 'u', '', '')",
+                [(123456,), (323748,)],
+            )
+    if catalog_off:
+        _ = database.update_setting("catalog_enabled", "0")
+    monkeypatch.setattr(
+        api, "check_all_updates", lambda *_args, **_kwargs: {"success": True}
+    )
+
+    reader = _use_reader(api)
+    started = api.start_f95_account_read()
+    reader.join(5)
+    preview = api.get_f95_account_read_status()["preview"]
+    assert isinstance(preview, dict)
+    assert (preview["without_tags"], preview["catalog_off"]) == (
+        without_tags,
+        catalog_off,
+    )
+
+    result = api.import_f95_account_lists(str(started["read_id"]))
+
+    assert (result["success"], result["added"], result["without_tags"]) == (
+        True,
+        2,
+        without_tags,
+    )
+    assert [game["f95_tags"] for game in get_all_games()] == [
+        "3dcg" if catalog == "full" else ""
+    ] * 2
 
 
 def test_busy_cancel_and_not_running(api: Api):

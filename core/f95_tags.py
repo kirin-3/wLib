@@ -7,10 +7,10 @@ baseline also has. A current tag is user-added when it is not in the
 baseline, or when it is a kept user tag. A baseline tag that is not current
 was removed by the user. Tags compare without case and outer spaces.
 
-Only the refresh merge may add F95 tags to a game's tags, and it never adds
-back a baseline tag the user removed. A kept user tag counts only while it
-is also a current tag, so a stale entry is harmless as long as no other
-writer adds a tag to `tags` on the user's behalf.
+Refresh and empty-list fills share the same merge, which preserves baseline
+tag removals. A kept user tag counts only while it is also a current tag, so
+a stale entry is harmless as long as no other writer adds a tag to `tags` on
+the user's behalf.
 """
 
 from __future__ import annotations
@@ -85,3 +85,19 @@ def merge_f95_tags(
         tag for tag in current_tags if _key(tag) in added and _key(tag) in f95_keys
     ]
     return _clean(merged), f95_tags, new_kept
+
+
+def fill_empty_f95_tags(
+    current: Sequence[str],
+    baseline: Sequence[str] | None,
+    f95: Sequence[str],
+    kept: Sequence[str] = (),
+) -> tuple[list[str], list[str], list[str]] | None:
+    """Give a game its first thread tags when its recorded list is empty."""
+    if baseline is None or baseline:
+        return None
+    f95_tags = _clean(f95)
+    if not f95_tags:
+        return None
+    tags, _, new_kept = merge_f95_tags(current, baseline, f95_tags, False, kept)
+    return tags, f95_tags, new_kept

@@ -8,6 +8,7 @@ import type { F95AccountClient } from "./f95AccountImport.ts";
 import {
   F95AccountImport,
   f95AccountErrorMessage,
+  f95AccountPreviewNote,
   f95AccountProgressText,
   f95AccountResultText,
 } from "./f95AccountImport.ts";
@@ -53,10 +54,40 @@ test("the tab reads, previews and imports against the mocks", async () => {
   assert.equal(state.phase, "preview");
   assert.deepEqual(state.preview?.lists.watched, { found: 25, new: 21, existing: 4 });
   assert.equal(state.preview?.total, 27);
+  assert.equal(f95AccountPreviewNote(state.preview), "");
   assert.equal(state.canImport, true);
   assert.equal(await state.importLists(), true);
   assert.equal(state.phase, "done");
   assert.equal(f95AccountResultText(state.result ?? {}), "23 added, 4 tagged");
+});
+
+test("a preview with missing thread tags gives the count and ways to fill them", async () => {
+  const state = new F95AccountImport(mockClient("missing_tags"));
+  await state.start();
+  await pollUntilDone(state);
+  assert.match(f95AccountPreviewNote(state.preview), /6 new games have no F95 tags yet/);
+  assert.match(f95AccountPreviewNote(state.preview), /catalog or an update check/);
+  assert.match(f95AccountPreviewNote(state.preview), /Maintenance > "Refresh F95 info"/);
+  assert.equal(await state.importLists(), true);
+  assert.equal(state.result?.without_tags, 6);
+});
+
+test("a preview names the disabled catalog", async () => {
+  const state = new F95AccountImport(mockClient("catalog_off"));
+  await state.start();
+  await pollUntilDone(state);
+  assert.match(f95AccountPreviewNote(state.preview), /23 new games have no F95 tags yet/);
+  assert.match(f95AccountPreviewNote(state.preview), /The game catalog is off/);
+});
+
+test("the result appends the missing-tag count only when positive", () => {
+  assert.equal(
+    f95AccountResultText({ added: 7, tagged: 5, without_tags: 4 }),
+    '7 added, 5 tagged. 4 games have no F95 tags yet. Use Maintenance > "Refresh F95 info" in the library to add them now.',
+  );
+  assert.match(f95AccountResultText({ added: 1, without_tags: 1 }), /1 game has no F95 tags yet/);
+  assert.equal(f95AccountResultText({ added: 7, tagged: 5, without_tags: 0 }), "7 added, 5 tagged");
+  assert.equal(f95AccountResultText({ added: 7, tagged: 5 }), "7 added, 5 tagged");
 });
 
 test("a failed save keeps the preview so Import can be retried", async () => {
@@ -130,6 +161,7 @@ test("the tab styles use only theme tokens, so light and dark themes both work",
   const source = readFileSync(new URL("../views/LibraryBackupView.vue", import.meta.url), "utf8");
   const style = source.slice(source.indexOf("<style scoped>"));
   const rules = style.split("}").filter((rule) => rule.includes(".f95-account"));
+  assert.match(style, /\.f95-account-note\s*\{\s*color: var\(--text-secondary\)/);
   assert.ok(rules.length > 0);
   for (const rule of rules) {
     assert.doesNotMatch(rule, /#[0-9a-f]{3,8}\b|rgb\(|hsl\(/i, rule);

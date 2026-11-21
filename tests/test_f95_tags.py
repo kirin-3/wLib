@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-from core.f95_tags import merge_f95_tags, split_tags
+import pytest
+
+from core.f95_tags import fill_empty_f95_tags, merge_f95_tags, split_tags
 
 
 def _merge3(
@@ -152,6 +154,63 @@ def test_split_tags_keeps_null_and_cleans_values():
     assert split_tags(None) is None
     assert split_tags("") == []
     assert split_tags(" a , ,A, b ") == ["a", "b"]
+
+
+def test_fill_empty_f95_tags_keeps_list_tag():
+    assert fill_empty_f95_tags(["Watched on F95"], [], ["3dcg", "sandbox"]) == (
+        ["3dcg", "sandbox", "Watched on F95"],
+        ["3dcg", "sandbox"],
+        [],
+    )
+
+
+def test_fill_empty_f95_tags_after_user_removed_list_tags():
+    assert fill_empty_f95_tags([], [], ["3dcg", "rpg"]) == (
+        ["3dcg", "rpg"],
+        ["3dcg", "rpg"],
+        [],
+    )
+
+
+def test_fill_empty_f95_tags_records_overlapping_user_tag():
+    assert fill_empty_f95_tags(["rpg", "Bookmarked on F95"], [], ["3dcg", "rpg"]) == (
+        ["3dcg", "rpg", "Bookmarked on F95"],
+        ["3dcg", "rpg"],
+        ["rpg"],
+    )
+
+
+@pytest.mark.parametrize(
+    ("baseline", "thread_tags"),
+    [(None, ["3dcg"]), (["3dcg"], ["3dcg", "sandbox"]), ([], []), ([], [" "])],
+)
+def test_fill_empty_f95_tags_leaves_other_states_alone(baseline, thread_tags):
+    assert fill_empty_f95_tags(["Watched on F95"], baseline, thread_tags) is None
+
+
+@pytest.mark.parametrize("baseline", ["", "  ", None, "3dcg"])
+def test_fill_empty_f95_tags_for_url_only_fills_empty_baselines(baseline: str | None):
+    from core.api import Api
+    from core.database import add_game, get_game, init_db, update_game
+
+    init_db()
+    url = "https://f95zone.to/threads/24/"
+    game_id = add_game("Game", "", url, tags="rpg, Watched on F95")
+    other_id = add_game("Other", "", "https://f95zone.to/threads/25/", tags="mine")
+    assert game_id is not None and other_id is not None
+    _ = update_game(game_id, {"f95_tags": baseline})
+    _ = update_game(other_id, {"f95_tags": ""})
+
+    changed = Api()._fill_empty_f95_tags_for_url(url, ["3dcg", "rpg"])  # pyright: ignore[reportPrivateUsage]
+    game = get_game(game_id) or {}
+    assert (get_game(other_id) or {})["f95_tags"] == ""
+    values = game["tags"], game["f95_tags"], game["user_f95_tags"]
+    if baseline in ("", "  "):
+        assert changed == [game_id]
+        assert values == ("3dcg, rpg, Watched on F95", "3dcg, rpg", "rpg")
+    else:
+        assert changed == []
+        assert values == ("rpg, Watched on F95", baseline, "")
 
 
 # The F95 account import adds "Watched on F95"; "Refresh F95 info" must keep it.

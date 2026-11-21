@@ -19,6 +19,7 @@ from typing import Literal, cast
 from urllib.parse import urlsplit
 
 from core import extension_bridge
+from core.f95_tags import split_tags
 from core.f95zone import (
     NON_ENGINE_PREFIXES,
     extract_thread_id,
@@ -450,9 +451,33 @@ def read_lists(
 # --- preview and apply ----------------------------------------------------
 
 
-def build_preview(result: ListReadResult) -> dict[str, object]:
+CatalogLookup = Callable[[Sequence[str]], Mapping[str, Mapping[str, object]]]
+
+
+def _catalog_entries(
+    thread_ids: Sequence[str], lookup: CatalogLookup | None
+) -> Mapping[str, Mapping[str, object]]:
+    if not thread_ids:
+        return {}
+    if lookup is None:
+        from core.game_lookup import f95_thread_entries
+
+        lookup = f95_thread_entries
+    return lookup(thread_ids)
+
+
+def _catalog_tags(catalog: Mapping[str, object]) -> list[str]:
+    value = catalog.get("tags")
+    if not isinstance(value, (str, int, float)):
+        return []
+    return split_tags(value) or []
+
+
+def build_preview(
+    result: ListReadResult, catalog_lookup: CatalogLookup | None = None
+) -> dict[str, object]:
     """Counts per list and in total, with new and existing games."""
-    from core.database import find_matching_game_row, get_connection
+    from core.database import find_matching_game_row, get_connection, get_setting
 
     existing_ids: set[str] = set()
     with closing(get_connection()) as conn:
@@ -470,14 +495,24 @@ def build_preview(result: ListReadResult) -> dict[str, object]:
             "new": len(on_list) - existing,
             "existing": existing,
         }
-    existing_total = sum(
-        1 for entry in result.entries if entry.thread_id in existing_ids
+    new_ids = [
+        entry.thread_id
+        for entry in result.entries
+        if entry.thread_id not in existing_ids
+    ]
+    catalog_off = get_setting("catalog_enabled") == "0"
+    catalog: Mapping[str, Mapping[str, object]] = (
+        {} if catalog_off else _catalog_entries(new_ids, catalog_lookup)
     )
     return {
         "lists": per_list,
         "total": len(result.entries),
-        "new": len(result.entries) - existing_total,
-        "existing": existing_total,
+        "new": len(new_ids),
+        "existing": len(result.entries) - len(new_ids),
+        "without_tags": sum(
+            1 for thread_id in new_ids if not _catalog_tags(catalog.get(thread_id, {}))
+        ),
+        "catalog_off": catalog_off,
         "entries": [
             {**entry.to_json(), "in_library": entry.thread_id in existing_ids}
             for entry in result.entries
@@ -499,7 +534,7 @@ def _catalog_values(
         "developer": text("developer") or entry.developer,
         "engine": text("engine") or entry.engine,
         "cover_image": text("coverImage"),
-        "tags": text("tags"),
+        "tags": ", ".join(_catalog_tags(catalog)),
         "rating": text("rating"),
         "thread_completed": completed if isinstance(completed, bool) else None,
     }
@@ -508,21 +543,17 @@ def _catalog_values(
 def apply_import(
     entries: Sequence[ListEntry],
     *,
-    catalog_lookup: Callable[[Sequence[str]], Mapping[str, Mapping[str, object]]]
-    | None = None,
+    catalog_lookup: CatalogLookup | None = None,
 ) -> dict[str, object]:
     """Add new games as wishlisted, tag every game with its lists and seed
     the two tag colors once, all in one transaction (rolled back on error)."""
     from core import database
 
-    if catalog_lookup is None:
-        from core.game_lookup import f95_thread_entries
-
-        catalog_lookup = f95_thread_entries
-    catalog = catalog_lookup([entry.thread_id for entry in entries]) if entries else {}
+    catalog = _catalog_entries([entry.thread_id for entry in entries], catalog_lookup)
 
     added_ids: list[int] = []
     tagged_ids: list[int] = []
+    without_tags = 0
     with closing(database.get_connection()) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -554,6 +585,8 @@ def apply_import(
                     thread_completed=cast(bool | None, values["thread_completed"]),
                 )
                 added_ids.append(game_id)
+                if not values["tags"]:
+                    without_tags += 1
             colors_seeded = database.seed_tag_colors_once(
                 cursor, LIST_TAG_COLORS_SEEDED_KEY, LIST_TAG_COLORS
             )
@@ -564,6 +597,7 @@ def apply_import(
     return {
         "added": len(added_ids),
         "tagged": len(tagged_ids),
+        "without_tags": without_tags,
         "added_ids": added_ids,
         "tagged_ids": tagged_ids,
         "colors_seeded": colors_seeded,

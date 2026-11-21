@@ -20,6 +20,7 @@ from core.database import (
     is_archived,
     normalize_launch_mode,
 )
+from core.f95_tags import fill_empty_f95_tags, split_tags
 from core.f95zone import NON_ENGINE_PREFIXES, extract_thread_id, normalize_prefix_label
 from core.f95zone import normalize_thread_url as _normalize_thread_url
 from core.host_platform import (
@@ -1155,6 +1156,37 @@ class ApiBase:
     def _is_missing_text(self, value: object) -> bool:
         return not isinstance(value, str) or not value.strip()
 
+    def _fill_empty_f95_tags_for_url(self, url: str, tags: object) -> list[int]:
+        normalized_url = normalize_thread_url(url)
+        thread_tags = split_tags(self._normalize_tags_csv(tags))
+        if not normalized_url or not thread_tags:
+            return []
+
+        changed: list[int] = []
+        with closing(database.get_connection()) as conn, conn:
+            _ = conn.execute("BEGIN IMMEDIATE")
+            rows = cast(
+                list[tuple[int, object, object, object]],
+                conn.execute(
+                    "SELECT id, tags, f95_tags, user_f95_tags FROM games WHERE f95_url = ? AND trim(f95_tags) = ''",
+                    (normalized_url,),
+                ).fetchall(),
+            )
+            for game_id, current, baseline, kept in rows:
+                merged = fill_empty_f95_tags(
+                    split_tags(current) or [],
+                    split_tags(baseline),
+                    thread_tags,
+                    split_tags(kept) or [],
+                )
+                if merged is not None:
+                    _ = conn.execute(
+                        "UPDATE games SET tags = ?, f95_tags = ?, user_f95_tags = ? WHERE id = ?",
+                        (*(", ".join(value) for value in merged), game_id),
+                    )
+                    changed.append(game_id)
+        return changed
+
     def _backfill_missing_metadata_for_url(
         self, url: str, metadata: Mapping[str, object]
     ) -> int:
@@ -1182,12 +1214,13 @@ class ApiBase:
 
         from core.database import get_connection
 
-        updated_rows = 0
+        updated_ids: set[int] = set()
         with closing(get_connection()) as conn:
             conn.row_factory = sqlite3.Row
+            _ = conn.execute("BEGIN IMMEDIATE")
             cursor = conn.cursor()
             _ = cursor.execute(
-                "SELECT id, engine, tags, tags_user_edited, f95_tags, cover_image_path, developer FROM games WHERE f95_url = ?",
+                "SELECT id, engine, tags, tags_user_edited, cover_image_path, developer FROM games WHERE f95_url = ?",
                 (normalized_url,),
             )
             games = cast(list[sqlite3.Row], cursor.fetchall())
@@ -1210,7 +1243,6 @@ class ApiBase:
                 ):
                     fields["engine"] = engine_value
                 tags_user_edited = bool(cast(object, game["tags_user_edited"]))
-                baseline = cast(object, game["f95_tags"])
                 if (
                     tags_value
                     and not tags_user_edited
@@ -1219,26 +1251,6 @@ class ApiBase:
                     fields["tags"] = tags_value
                     # The tags came from F95, so they are the F95 baseline too.
                     fields["f95_tags"] = tags_value
-                elif (
-                    tags_value
-                    and not tags_user_edited
-                    and baseline is not None
-                    and not str(baseline).strip()
-                ):
-                    # An empty F95 baseline (the F95 account import adds games
-                    # with no catalog tags) makes every current tag user-added:
-                    # put the thread's tags first and keep those.
-                    from core.f95_tags import merge_f95_tags, split_tags
-
-                    merged, _, kept = merge_f95_tags(
-                        split_tags(tags_current) or [],
-                        [],
-                        split_tags(tags_value) or [],
-                        False,
-                    )
-                    fields["tags"] = ", ".join(merged)
-                    fields["f95_tags"] = tags_value
-                    fields["user_f95_tags"] = ", ".join(kept)
                 if cover_value and self._is_missing_text(cover_current):
                     fields["cover_image_path"] = cover_value
                 developer_current = str(cast(object, game["developer"]) or "").strip()
@@ -1251,14 +1263,17 @@ class ApiBase:
                     _ = cursor.execute(
                         f"UPDATE games SET {set_clause} WHERE id = ?", values
                     )
-                    updated_rows += 1
+                    updated_ids.add(game_id)
 
-            if updated_rows:
-                conn.commit()
+            conn.commit()
 
-        if updated_rows:
+        if tags_value:
+            updated_ids.update(
+                self._fill_empty_f95_tags_for_url(normalized_url, tags_value)
+            )
+        if updated_ids:
             self.cover_cache.wake()
-        return updated_rows
+        return len(updated_ids)
 
     def _store_f95_rating_for_url(
         self, url: str, metadata: Mapping[str, object]
@@ -1410,6 +1425,8 @@ class ApiBase:
                 "lc_url",
                 "lc_mode",
                 "tags_user_edited",
+                "f95_tags",
+                "user_f95_tags",
                 BASELINE_COLUMN,
                 *THREAD_DETAIL_FIELDS,
                 *LC_FILL_FIELDS,
@@ -1456,12 +1473,13 @@ class ApiBase:
             f95_entries = f95_thread_entries([f95 for f95 in f95_ids if f95])
             for game, f95_id, lc_id in zip(games, f95_ids, lc_ids, strict=True):
                 f95 = details.get(int(f95_id)) if f95_id.isdigit() else None
+                f95_entry = f95_entries.get(f95_id, {})
                 combined = dict(f95 or {})
                 game_changed = False
                 lc_entry = lc_entries.get(lc_id)
                 game_id = int(str(game["id"]))
                 if lc_entry:
-                    entry = combined_thread_entry(f95_entries.get(f95_id, {}), lc_entry)
+                    entry = combined_thread_entry(f95_entry, lc_entry)
                     for key in THREAD_DETAIL_FIELDS:
                         if not combined.get(key) and entry.get(key):
                             combined[key] = entry[key]
@@ -1503,11 +1521,31 @@ class ApiBase:
                             game_changed = True
 
                 updates = merge_thread_details(game, combined) if combined else {}
+                baseline = game.get("f95_tags")
+                if (
+                    f95_entry
+                    and "tags" not in updates
+                    and isinstance(baseline, str)
+                    and not baseline.strip()
+                ):
+                    merged = fill_empty_f95_tags(
+                        split_tags(game.get("tags")) or [],
+                        [],
+                        split_tags(f95_entry.get("tags")) or [],
+                        split_tags(game.get("user_f95_tags")) or [],
+                    )
+                    if merged is not None:
+                        tags, f95_tags, kept = merged
+                        updates.update(
+                            tags=", ".join(tags),
+                            f95_tags=", ".join(f95_tags),
+                            user_f95_tags=", ".join(kept),
+                        )
                 # F95 data decides for a game on both sites. A game that becomes
                 # newly abandoned here is reported once, as a toast.
                 states = database.site_thread_states(
                     game,
-                    database.thread_states_from(f95_entries.get(f95_id, {})),
+                    database.thread_states_from(f95_entry),
                     database.thread_states_from(lc_entry) if lc_entry else None,
                 )
                 state_fields, newly_abandoned = database.thread_state_fields(
@@ -1937,6 +1975,7 @@ class ApiBase:
 
         ryuu_games: list[tuple[dict[str, object], str]] = []
         lc_games: dict[int, dict[str, object]] = {}
+        empty_f95_tag_ids: set[int] = set()
         lc_enabled = lewdcorner.setting_enabled(get_setting("lc_enabled"))
         for game in all_games_raw:
             game_id = game.get("id")
@@ -1964,6 +2003,9 @@ class ApiBase:
                 or not url.strip()
             ):
                 continue
+            baseline = game.get("f95_tags")
+            if not refresh_info and isinstance(baseline, str) and not baseline.strip():
+                empty_f95_tag_ids.add(game_id)
             games_with_url.append(
                 {
                     "id": game_id,
@@ -2127,6 +2169,7 @@ class ApiBase:
                     newly_abandoned = bool(lc_result and lc_result.newly_abandoned)
                     abandoned_ids: list[int] = []
                     thread_metadata: dict[str, object] | None = None
+                    catalog_entry = f95_catalog.get(extract_thread_id(url), {})
                     # Previous rating of each game whose rating a page read changed.
                     rating_previous: dict[int, dict[str, object]] = {}
                     wishlisted = not str(game.get("exe_path") or "").strip()
@@ -2158,7 +2201,7 @@ class ApiBase:
                                 game["id"],
                                 url,
                                 remote_version,
-                                f95_catalog.get(extract_thread_id(url), {}),
+                                catalog_entry,
                                 fallback_states=lc_result.states if lc_result else None,
                                 page_read=database.thread_states_from(result_dict)
                                 is not None,
@@ -2179,6 +2222,7 @@ class ApiBase:
                         page_metadata = any(
                             key in result_dict
                             for key in (
+                                "thread_main_post_checked_at",
                                 "thread_completed",
                                 "screenshots",
                                 "store_links",
@@ -2265,6 +2309,18 @@ class ApiBase:
                         except Exception:
                             pass  # A failed thread read keeps the current info.
                         info_previous.update(rating_previous.get(game["id"], {}))
+
+                    if (
+                        game["id"] in empty_f95_tag_ids
+                        and not self._update_cancelled_now()
+                    ):
+                        tag_source = catalog_entry
+                        if thread_metadata and thread_metadata.get("success"):
+                            tag_source = thread_metadata
+                        elif "thread_main_post_checked_at" in result_dict:
+                            tag_source = result_dict
+                        if tags := tag_source.get("tags"):
+                            _ = self._fill_empty_f95_tags_for_url(url, tags)
 
                     note = ""
                     if lc_result:

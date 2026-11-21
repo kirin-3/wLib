@@ -51,8 +51,24 @@ export function f95AccountProgressText(progress: F95AccountReadProgress | undefi
   return `${progress.list_label}, page ${progress.page}. Found ${found}${total} games.`;
 }
 
+const ADD_F95_TAGS_NOW = 'Use Maintenance > "Refresh F95 info" in the library to add them now';
+
+export function f95AccountPreviewNote(preview: F95AccountPreview | null): string {
+  const count = preview?.without_tags ?? 0;
+  if (count <= 0) return "";
+  const games = count === 1 ? "new game has" : "new games have";
+  const later = preview?.catalog_off
+    ? "The game catalog is off. An update check can add these tags later, or the catalog can add them after you turn it on."
+    : "The catalog or an update check can add these tags later.";
+  return `${count} ${games} no F95 tags yet. ${later} ${ADD_F95_TAGS_NOW}.`;
+}
+
 export function f95AccountResultText(result: F95AccountImportResponse): string {
-  return `${result.added ?? 0} added, ${result.tagged ?? 0} tagged`;
+  const summary = `${result.added ?? 0} added, ${result.tagged ?? 0} tagged`;
+  const count = result.without_tags ?? 0;
+  if (count <= 0) return summary;
+  const games = count === 1 ? "game has" : "games have";
+  return `${summary}. ${count} ${games} no F95 tags yet. ${ADD_F95_TAGS_NOW}.`;
 }
 
 export class F95AccountImport {
