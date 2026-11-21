@@ -3504,6 +3504,9 @@ def test_umu_cheat_engine_joins_and_sandbox_skips(tmp_path, monkeypatch):
         "core.launcher.game_sandbox.build_bwrap_argv",
         lambda command, **kwargs: ["bwrap", *command],
     )
+    # The fake bwrap never writes the start marker, and time.sleep is a no-op
+    # here: the real wait would spin for 5 s and record millions of poll calls.
+    monkeypatch.setattr("core.launcher._sandbox_start_failure", lambda *_a, **_k: None)
     result = Launcher().launch(
         str(exe),
         proton_version="/fake/proton",

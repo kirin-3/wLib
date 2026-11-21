@@ -72,6 +72,32 @@ def _no_f95_rate_limit_cooldown(monkeypatch):
     monkeypatch.setattr(core.scraper, "_f95_cooldown_until", 0.0)
 
 
+@pytest.fixture(autouse=True)
+def _mock_process_groups_are_gone(monkeypatch):
+    """A mock pid is no real process group.
+
+    Launcher tests pass a bare MagicMock as the game process. Its pid converts
+    to 1, so the playtime thread's killpg(pid, 0) hits init, gets
+    PermissionError, reads the game as still running, and never ends. Such
+    threads outlive their test and spin (recording every mock call) whenever
+    a later test makes time.sleep a no-op; the suite then grows to many GB.
+    The thread keeps the killpg it read at start, so this guard outlives the
+    test too. Real pids still reach the real killpg.
+    """
+    from unittest.mock import NonCallableMock
+
+    real_killpg = getattr(os, "killpg", None)
+    if real_killpg is None:
+        return
+
+    def killpg(pid: object, sig: int) -> None:
+        if isinstance(pid, NonCallableMock):
+            raise ProcessLookupError(3, "No such process")
+        real_killpg(pid, sig)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(os, "killpg", killpg)
+
+
 PAIRED_EXTENSION_TOKEN = "a" * 64
 
 

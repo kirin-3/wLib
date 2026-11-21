@@ -127,9 +127,15 @@ def test_configure_ssl_certificates_drops_missing_configured_bundles(
 def test_configure_ssl_certificates_uses_a_valid_requests_bundle(monkeypatch, tmp_path):
     bundle = tmp_path / "corporate-ca.pem"
     bundle.write_text("certificate", encoding="utf-8")
-    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    # setenv first so monkeypatch restores all three after the test:
+    # configure_ssl_certificates() writes them to os.environ directly, and
+    # delenv of an unset name records nothing. A leaked SSL_CERT_FILE that
+    # names this fake bundle breaks every later ssl.create_default_context().
+    for name in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+        monkeypatch.setenv(name, "")
+    monkeypatch.delenv("SSL_CERT_FILE")
     monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(bundle))
-    monkeypatch.delenv("CURL_CA_BUNDLE", raising=False)
+    monkeypatch.delenv("CURL_CA_BUNDLE")
 
     assert main.configure_ssl_certificates() == str(bundle)
 
