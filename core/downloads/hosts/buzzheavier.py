@@ -9,13 +9,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlsplit
 from urllib.request import Request
 
-from core.downloads.network import open_host
+from core.downloads.network import cloudflare_refusal, open_host
 
 from core.downloads.transfer import DownloadError, FileInfo, open_range
 
 
-def urlopen(request: Request, timeout: int = 30) -> object:
-    return open_host(request, ("buzzheavier.com", "bzzhr.to"), timeout)
+def urlopen(request: Request, timeout: int = 30, user_agent: str = "") -> object:
+    return open_host(request, ("buzzheavier.com", "bzzhr.to"), timeout, user_agent)
 
 
 def matches(url: str) -> bool:
@@ -37,15 +37,21 @@ def classify_error(status: int, body: str = "") -> str:
     return "network error"
 
 
-def probe(url: str, share_url: str = "") -> FileInfo:
+def probe(url: str, share_url: str = "", user_agent: str = "") -> FileInfo:
     if not matches(url) or not matches(share_url):
         raise DownloadError("unsupported Buzzheavier link")
     try:
         response = cast(
             HTTPResponse,
-            urlopen(Request(url, headers={"Referer": share_url}), timeout=30),
+            urlopen(
+                Request(url, headers={"Referer": share_url}),
+                timeout=30,
+                user_agent=user_agent,
+            ),
         )
     except HTTPError as exc:
+        if cloudflare_refusal(exc):
+            raise DownloadError("blocked by a challenge") from exc
         raise DownloadError(
             classify_error(
                 exc.code, "cf-mitigated" if exc.headers.get("cf-mitigated") else ""
@@ -66,7 +72,9 @@ def probe(url: str, share_url: str = "") -> FileInfo:
             lambda extra: cast(
                 BinaryIO,
                 urlopen(
-                    Request(url, headers={"Referer": share_url, **extra}), timeout=30
+                    Request(url, headers={"Referer": share_url, **extra}),
+                    timeout=30,
+                    user_agent=user_agent,
                 ),
             ),
             offset,

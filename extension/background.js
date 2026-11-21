@@ -840,12 +840,12 @@ async function bridgeGetCanFetch(origin = "https://f95zone.to/*") {
 function bridgeGetVersion() {
     try {
         if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
-            return String(chrome.runtime.getManifest().version || "1.2.13");
+            return String(chrome.runtime.getManifest().version || "1.2.14");
         }
     } catch (error) {
         console.warn("wLib extension: version read failed.", error);
     }
-    return "1.2.13";
+    return "1.2.14";
 }
 
 // Firefox suspends an idle event page after 30 seconds, and WebSocket traffic
@@ -1293,6 +1293,9 @@ function finishResolve(entry, result) {
     const answer = {type:'resolve_result', id:entry.id, ok:result.ok === true};
     for (const field of ['url','host','error','needs_permission','share_url']) {
         if (typeof result[field] === 'string') answer[field] = result[field];
+    }
+    if (answer.ok && typeof navigator !== 'undefined' && typeof navigator.userAgent === 'string') {
+        answer.user_agent = navigator.userAgent;
     }
     sendResolveMessage(answer);
     // A late copy of this URL (Zen and Firefox can load it twice) is closed

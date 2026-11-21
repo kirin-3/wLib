@@ -22,7 +22,7 @@ def _manager(tmp_path, monkeypatch, probes):
     from core.downloads.manager import DownloadManager
     from core.downloads.pacing import SpeedLimiter
 
-    def probe(url):
+    def probe(url, **_kwargs):
         probes.append(url)
         return FileInfo("update.zip", 4, lambda: io.BytesIO(b"PK\x03\x04"))
 

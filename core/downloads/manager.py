@@ -65,6 +65,16 @@ def _resolve_failure(error: str) -> str:
     return f"Could not resolve the link ({error or 'unknown error'}); try another mirror or open it in the browser"
 
 
+def _valid_user_agent(value: object) -> str:
+    if (
+        isinstance(value, str)
+        and 1 <= len(value) <= 512
+        and all(0x20 <= ord(ch) <= 0x7E for ch in value)
+    ):
+        return value
+    return ""
+
+
 def _failure_text(exc: BaseException) -> str:
     if isinstance(exc, DownloadError):
         return str(exc)
@@ -102,9 +112,10 @@ class _Job:
         self.archive_path = ""
         self.part_name = ""
         self.can_continue = host in RESUMABLE_HOSTS
-        # The resolved file-host address: memory only, never logged or saved.
+        # The resolved file-host address and browser User-Agent: memory only, never logged or saved.
         self.url = ""
         self.share_url = ""
+        self.user_agent = ""
         self.signals = _Signals()
         self.thread: threading.Thread | None = None
         self.samples: deque[tuple[float, int]] = deque()
@@ -219,7 +230,7 @@ class DownloadManager:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is not None:
-                job.url = job.share_url = ""
+                job.url = job.share_url = job.user_agent = ""
 
     def busy(self, job_id: str) -> bool:
         with self._lock:
@@ -297,9 +308,11 @@ class DownloadManager:
         if not isinstance(url, str) or not url:
             raise DownloadError("file invalid")
         share = result.get("share_url")
+        user_agent = _valid_user_agent(result.get("user_agent"))
         with self._lock:
             job.url = url
             job.share_url = share if isinstance(share, str) else ""
+            job.user_agent = user_agent
 
     def _prepare(self, job: _Job, resolve: Resolve, signals: _Signals) -> None:
         try:
@@ -314,17 +327,18 @@ class DownloadManager:
 
     def _probe(self, job: _Job, signals: _Signals) -> FileInfo:
         url = job.url
+        user_agent = job.user_agent
         if pixeldrain.matches(url):
-            return pixeldrain.probe(url)
+            return pixeldrain.probe(url, user_agent=user_agent)
         if urlsplit(url).hostname in MEGA_HOSTS:
             with self._lock:
                 job.stage = "verifying"
-            info = mega.probe(url, signals.cancel)
+            info = mega.probe(url, signals.cancel, user_agent=user_agent)
             with self._lock:
                 job.stage = "downloading"
             return info
         if buzzheavier.matches(url):
-            return buzzheavier.probe(url, job.share_url)
+            return buzzheavier.probe(url, job.share_url, user_agent=user_agent)
         raise DownloadError("unsupported host; open in browser")
 
     def _run(self, job: _Job, resolve: Resolve | None, signals: _Signals) -> None:

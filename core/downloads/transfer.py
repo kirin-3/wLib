@@ -24,6 +24,7 @@ from core.archive_formats import (
     looks_like_archive,
     split_archive_name,
 )
+from core.downloads.network import cloudflare_refusal
 from core.downloads.pacing import SpeedLimiter
 from core.host_platform import get_data_subdir
 
@@ -124,11 +125,14 @@ def open_range(
     `open_request(headers)` sends the host's request with the extra headers.
     A 206 answer whose Content-Range starts at `offset` is the rest of the
     file; anything else (a plain 200) is closed and reported as unsupported.
-    HTTP 429 fails with the same rate-limit message as a full request.
+    HTTP 429 fails with the same rate-limit message as a full request;
+    Cloudflare 1010 fails with the challenge message.
     """
     try:
         stream = open_request({"Range": f"bytes={offset}-"})
     except HTTPError as exc:
+        if cloudflare_refusal(exc):
+            raise DownloadError("blocked by a challenge") from exc
         if exc.code == 429:
             exc.close()
             raise DownloadError("transfer quota or rate limit reached") from exc

@@ -13,13 +13,16 @@ from urllib.parse import urlsplit
 from urllib.request import Request
 
 from core.downloads import credentials
-from core.downloads.network import open_host
+from core.downloads.network import cloudflare_refusal, open_host
 from core.downloads.transfer import DownloadError, FileInfo, open_range
 
 
-def urlopen(request: Request, timeout: int = 30) -> object:
+def urlopen(request: Request, timeout: int = 30, user_agent: str = "") -> object:
     return open_host(
-        request, ("pixeldrain.com", "pixeldrain.net", "pixeldra.in"), timeout
+        request,
+        ("pixeldrain.com", "pixeldrain.net", "pixeldra.in"),
+        timeout,
+        user_agent,
     )
 
 
@@ -89,6 +92,8 @@ def verify_key(api_key: str) -> str:
         ) as response:
             account = cast(object, json.load(response))
     except HTTPError as exc:
+        if cloudflare_refusal(exc):
+            raise DownloadError("blocked by a challenge") from exc
         raise DownloadError(classify_error(exc.code)) from exc
     except (URLError, OSError, ValueError) as exc:
         raise DownloadError("network error") from exc
@@ -101,7 +106,7 @@ def verify_key(api_key: str) -> str:
     return username
 
 
-def probe(url: str, api_key: str | None = None) -> FileInfo:
+def probe(url: str, api_key: str | None = None, user_agent: str = "") -> FileInfo:
     file_id = _id(url)
     if not file_id:
         if _path(url).startswith("/d/"):
@@ -115,7 +120,12 @@ def probe(url: str, api_key: str | None = None) -> FileInfo:
     base = f"https://pixeldrain.com/api/file/{file_id}"
     try:
         with cast(
-            HTTPResponse, urlopen(Request(base + "/info", headers=headers), timeout=30)
+            HTTPResponse,
+            urlopen(
+                Request(base + "/info", headers=headers),
+                timeout=30,
+                user_agent=user_agent,
+            ),
         ) as response:
             metadata = cast(object, json.load(response))
         if not isinstance(metadata, dict):
@@ -131,9 +141,15 @@ def probe(url: str, api_key: str | None = None) -> FileInfo:
             try:
                 return cast(
                     BinaryIO,
-                    urlopen(Request(base + "?download", headers=headers), timeout=30),
+                    urlopen(
+                        Request(base + "?download", headers=headers),
+                        timeout=30,
+                        user_agent=user_agent,
+                    ),
                 )
             except HTTPError as exc:
+                if cloudflare_refusal(exc):
+                    raise DownloadError("blocked by a challenge") from exc
                 raise DownloadError(classify_error(exc.code)) from exc
 
         def resume(offset: int) -> BinaryIO | None:
@@ -143,6 +159,7 @@ def probe(url: str, api_key: str | None = None) -> FileInfo:
                     urlopen(
                         Request(base + "?download", headers={**headers, **extra}),
                         timeout=30,
+                        user_agent=user_agent,
                     ),
                 ),
                 offset,
@@ -156,6 +173,8 @@ def probe(url: str, api_key: str | None = None) -> FileInfo:
             resume_key=f"pixeldrain:{file_id}",
         )
     except HTTPError as exc:
+        if cloudflare_refusal(exc):
+            raise DownloadError("blocked by a challenge") from exc
         raise DownloadError(classify_error(exc.code)) from exc
     except (URLError, OSError, ValueError) as exc:
         raise DownloadError("network error") from exc

@@ -18,15 +18,15 @@ from urllib.parse import urlsplit
 from urllib.request import Request
 
 from core.downloads import credentials
-from core.downloads.network import open_host
+from core.downloads.network import cloudflare_refusal, open_host
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from core.downloads.transfer import DownloadError, FileInfo
 
 
-def urlopen(request: Request, timeout: int = 30) -> object:
-    return open_host(request, ("mega.co.nz", "mega.nz"), timeout)
+def urlopen(request: Request, timeout: int = 30, user_agent: str = "") -> object:
+    return open_host(request, ("mega.co.nz", "mega.nz"), timeout, user_agent)
 
 
 def _decode(value: str) -> bytes:
@@ -172,7 +172,10 @@ class MegaDecryptor:
 
 
 def _request(
-    command: dict[str, object], sid: str = "", cancel: Event | None = None
+    command: dict[str, object],
+    sid: str = "",
+    cancel: Event | None = None,
+    user_agent: str = "",
 ) -> object:
     """Send one API command, solving MEGA's hashcash challenge once if asked."""
     payload = json.dumps([command]).encode()
@@ -181,13 +184,17 @@ def _request(
     for attempt in range(2):
         try:
             request = Request(url, data=payload, headers=headers)
-            with cast(HTTPResponse, urlopen(request, timeout=30)) as response:
+            with cast(
+                HTTPResponse, urlopen(request, timeout=30, user_agent=user_agent)
+            ) as response:
                 result = cast(object, json.load(response))
             if isinstance(result, list):
                 items = cast(list[object], result)
                 return items[0] if len(items) == 1 else items
             return result
         except HTTPError as exc:
+            if cloudflare_refusal(exc):
+                raise DownloadError("blocked by a challenge") from exc
             challenge = exc.headers.get("X-Hashcash")
             if attempt == 0 and exc.code == 402 and challenge:
                 headers["X-Hashcash"] = solve_hashcash(challenge, cancel=cancel)
@@ -203,12 +210,17 @@ def _request(
 
 
 def _api(
-    file_id: str, cancel: Event | None = None, sid: str | None = None
+    file_id: str,
+    cancel: Event | None = None,
+    sid: str | None = None,
+    user_agent: str = "",
 ) -> dict[str, object]:
     # ssl=2 asks for an https download URL; MEGA hands out http ones otherwise.
     # A session id makes MEGA count the transfer against the signed-in account.
     session = credentials.get(credentials.MEGA_SESSION) if sid is None else sid
-    result = _request({"a": "g", "g": 1, "ssl": 2, "p": file_id}, session, cancel)
+    result = _request(
+        {"a": "g", "g": 1, "ssl": 2, "p": file_id}, session, cancel, user_agent
+    )
     if result == ESID and session:
         raise DownloadError("MEGA session expired; sign in again in Settings")
     if isinstance(result, int):
@@ -355,9 +367,9 @@ def logout(sid: str) -> None:
         pass
 
 
-def probe(url: str, cancel: Event | None = None) -> FileInfo:
+def probe(url: str, cancel: Event | None = None, user_agent: str = "") -> FileInfo:
     file_id, raw_key = parse_link(url)
-    result = _api(file_id, cancel)
+    result = _api(file_id, cancel, user_agent=user_agent)
     encrypted = result.get("at")
     file_url = result.get("g")
     size = result.get("s")
@@ -395,8 +407,13 @@ def probe(url: str, cancel: Event | None = None) -> FileInfo:
 
     def stream() -> BinaryIO:
         try:
-            return cast(BinaryIO, urlopen(Request(file_url), timeout=30))
+            return cast(
+                BinaryIO,
+                urlopen(Request(file_url), timeout=30, user_agent=user_agent),
+            )
         except HTTPError as exc:
+            if cloudflare_refusal(exc):
+                raise DownloadError("blocked by a challenge") from exc
             raise DownloadError(classify_error(exc.code)) from exc
 
     return FileInfo(name, size, stream, MegaDecryptor(raw_key))

@@ -255,6 +255,270 @@ def test_host_redirects_reject_unrelated_servers():
     assert not allowed("https://pixeldrain.com:8443/file", ("pixeldrain.com",))
 
 
+def test_open_host_sets_user_agent_only_when_present_and_missing(monkeypatch):
+    from urllib.request import Request
+
+    from core.downloads import network
+
+    sent: list[Request] = []
+
+    class FakeOpener:
+        def open(self, request: Request, timeout: int = 30) -> io.BytesIO:
+            sent.append(request)
+            return io.BytesIO(b"ok")
+
+    monkeypatch.setattr(network, "build_opener", lambda *_args: FakeOpener())
+
+    network.open_host(
+        Request("https://buzzheavier.com/file"),
+        ("buzzheavier.com",),
+        user_agent="Mozilla/5.0 TestBrowser/1.0",
+    )
+    network.open_host(
+        Request("https://buzzheavier.com/file"),
+        ("buzzheavier.com",),
+        user_agent="",
+    )
+    network.open_host(
+        Request("https://buzzheavier.com/file", headers={"User-Agent": "Explicit/1.0"}),
+        ("buzzheavier.com",),
+        user_agent="Mozilla/5.0 TestBrowser/1.0",
+    )
+
+    assert sent[0].get_header("User-agent") == "Mozilla/5.0 TestBrowser/1.0"
+    assert sent[1].get_header("User-agent") is None
+    assert sent[2].get_header("User-agent") == "Explicit/1.0"
+
+
+def test_cloudflare_refusal_detects_1010_and_closes_bounded_read():
+    from core.downloads.network import cloudflare_refusal
+
+    class BoundedBody(io.BytesIO):
+        def __init__(self, data: bytes):
+            super().__init__(data)
+            self.sizes: list[int | None] = []
+
+        def read(self, size: int | None = -1) -> bytes:
+            self.sizes.append(size)
+            return super().read(size)
+
+    body_1010 = BoundedBody(b"  error code: 1010\n" + b"x" * 1024)
+    exc_1010 = HTTPError("https://host/file", 403, "Forbidden", Message(), body_1010)
+    assert cloudflare_refusal(exc_1010) is True
+    assert body_1010.sizes == [512]
+    assert body_1010.closed is True
+
+    body_other = BoundedBody(b"<html>Access denied</html>")
+    exc_other = HTTPError("https://host/file", 403, "Forbidden", Message(), body_other)
+    assert cloudflare_refusal(exc_other) is False
+    assert body_other.sizes == [512]
+    assert body_other.closed is True
+
+    exc_empty = HTTPError(
+        "https://host/file", 403, "Forbidden", Message(), io.BytesIO()
+    )
+    assert cloudflare_refusal(exc_empty) is False
+    exc_none = HTTPError("https://host/file", 403, "Forbidden", Message(), None)
+    assert cloudflare_refusal(exc_none) is False
+
+    body_404 = BoundedBody(b"error code: 1010")
+    exc_404 = HTTPError("https://host/file", 404, "Not Found", Message(), body_404)
+    assert cloudflare_refusal(exc_404) is False
+    assert body_404.sizes == []
+
+
+def _http_1010(url: str = "https://host/file") -> HTTPError:
+    return HTTPError(url, 403, "Forbidden", Message(), io.BytesIO(b"error code: 1010"))
+
+
+def test_cloudflare_1010_raises_challenge_on_every_host(monkeypatch):
+    import base64
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from core.downloads.hosts import mega
+
+    # Buzzheavier probe
+    monkeypatch.setattr(
+        buzzheavier,
+        "urlopen",
+        lambda req, **_: (_ for _ in ()).throw(_http_1010(req.full_url)),
+    )
+    with pytest.raises(DownloadError, match="^blocked by a challenge$"):
+        buzzheavier.probe(
+            "https://buzzheavier.com/download", "https://buzzheavier.com/share"
+        )
+
+    # Pixeldrain probe
+    monkeypatch.setattr(
+        pixeldrain,
+        "urlopen",
+        lambda req, **_: (_ for _ in ()).throw(_http_1010(req.full_url)),
+    )
+    with pytest.raises(DownloadError, match="^blocked by a challenge$"):
+        pixeldrain.probe("https://pixeldrain.com/u/abc", api_key="")
+
+    # Pixeldrain stream
+    def pixeldrain_stream_1010(req, **_):
+        if req.full_url.endswith("/info"):
+            return io.BytesIO(json.dumps({"name": "game.zip", "size": 10}).encode())
+        raise _http_1010(req.full_url)
+
+    monkeypatch.setattr(pixeldrain, "urlopen", pixeldrain_stream_1010)
+    info = pixeldrain.probe("https://pixeldrain.com/u/abc", api_key="")
+    with pytest.raises(DownloadError, match="^blocked by a challenge$"):
+        info.stream_factory()
+
+    # MEGA _request (via probe)
+    raw_key = bytes(range(32))
+    encoded_key = base64.urlsafe_b64encode(raw_key).rstrip(b"=").decode("ascii")
+    mega_url = f"https://mega.nz/file/abc#{encoded_key}"
+    monkeypatch.setattr(
+        mega,
+        "urlopen",
+        lambda req, **_: (_ for _ in ()).throw(_http_1010(req.full_url)),
+    )
+    with pytest.raises(DownloadError, match="^blocked by a challenge$"):
+        mega.probe(mega_url)
+
+    # MEGA file stream
+    key, _, _ = mega._key_parts(raw_key)
+    attrs = b'MEGA{"n":"game.zip"}'
+    attrs += b"\0" * (-len(attrs) % 16)
+    enc_attrs = (
+        Cipher(algorithms.AES(key), modes.CBC(b"\0" * 16)).encryptor().update(attrs)
+    )
+    at_b64 = base64.urlsafe_b64encode(enc_attrs).rstrip(b"=").decode("ascii")
+
+    class _JsonResp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def mega_stream_1010(req, **_):
+        if "g.api.mega.co.nz" in req.full_url:
+            return _JsonResp(
+                json.dumps(
+                    [{"at": at_b64, "g": "https://gfs.mega.co.nz/dl/file", "s": 10}]
+                ).encode()
+            )
+        raise _http_1010(req.full_url)
+
+    monkeypatch.setattr(mega, "urlopen", mega_stream_1010)
+    mega_info = mega.probe(mega_url)
+    with pytest.raises(DownloadError, match="^blocked by a challenge$"):
+        mega_info.stream_factory()
+
+
+def test_every_host_request_carries_user_agent_including_range(monkeypatch):
+    import base64
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from core.downloads import network
+    from core.downloads.hosts import mega
+
+    ua = "Mozilla/5.0 (X11; Linux x86_64) TestBrowser/120.0"
+
+    class _Resp(io.BytesIO):
+        def __init__(
+            self, body: bytes, status: int = 200, headers: Message | None = None
+        ):
+            super().__init__(body)
+            self.status = status
+            self.headers = headers if headers is not None else Message()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            self.close()
+            return False
+
+    # Pixeldrain: /info, ?download, Range resume
+    pd_requests = []
+
+    class _PdOpener:
+        def open(self, req, timeout=30):
+            pd_requests.append(req)
+            if req.full_url.endswith("/info"):
+                return _Resp(json.dumps({"name": "game.zip", "size": 100}).encode())
+            if req.get_header("Range"):
+                hdrs = Message()
+                hdrs["Content-Range"] = "bytes 20-99/100"
+                return _Resp(b"rest", status=206, headers=hdrs)
+            return _Resp(b"PK\x03\x04")
+
+    monkeypatch.setattr(network, "build_opener", lambda *_args: _PdOpener())
+    pd_info = pixeldrain.probe(
+        "https://pixeldrain.com/u/abc", api_key="", user_agent=ua
+    )
+    pd_info.stream_factory().close()
+    assert pd_info.resume_factory is not None
+    resumed = pd_info.resume_factory(20)
+    assert resumed is not None
+    resumed.close()
+    assert len(pd_requests) == 3
+    assert [r.get_header("User-agent") for r in pd_requests] == [ua, ua, ua]
+    assert pd_requests[2].get_header("Range") == "bytes=20-"
+
+    # Buzzheavier: probe and Range resume
+    bz_requests = []
+
+    class _BzOpener:
+        def open(self, req, timeout=30):
+            bz_requests.append(req)
+            hdrs = Message()
+            if req.get_header("Range"):
+                hdrs["Content-Range"] = "bytes 10-99/100"
+                return _Resp(b"rest", status=206, headers=hdrs)
+            hdrs["Content-Disposition"] = 'attachment; filename="game.zip"'
+            hdrs["Content-Length"] = "100"
+            return _Resp(b"PK\x03\x04", status=200, headers=hdrs)
+
+    monkeypatch.setattr(network, "build_opener", lambda *_args: _BzOpener())
+    bz_info = buzzheavier.probe(
+        "https://buzzheavier.com/download",
+        "https://buzzheavier.com/share",
+        user_agent=ua,
+    )
+    assert bz_info.resume_factory is not None
+    bz_resumed = bz_info.resume_factory(10)
+    assert bz_resumed is not None
+    bz_resumed.close()
+    bz_info.stream_factory().close()
+    assert len(bz_requests) == 2
+    assert [r.get_header("User-agent") for r in bz_requests] == [ua, ua]
+    assert bz_requests[1].get_header("Range") == "bytes=10-"
+
+    # MEGA: API _request and file stream
+    raw_key = bytes(range(32))
+    encoded_key = base64.urlsafe_b64encode(raw_key).rstrip(b"=").decode("ascii")
+    key, _, _ = mega._key_parts(raw_key)
+    attrs = b'MEGA{"n":"game.zip"}'
+    attrs += b"\0" * (-len(attrs) % 16)
+    enc_attrs = (
+        Cipher(algorithms.AES(key), modes.CBC(b"\0" * 16)).encryptor().update(attrs)
+    )
+    at_b64 = base64.urlsafe_b64encode(enc_attrs).rstrip(b"=").decode("ascii")
+    mega_requests = []
+
+    class _MegaOpener:
+        def open(self, req, timeout=30):
+            mega_requests.append(req)
+            if "g.api.mega.co.nz" in req.full_url:
+                return _Resp(
+                    json.dumps(
+                        [{"at": at_b64, "g": "https://gfs.mega.co.nz/dl/file", "s": 10}]
+                    ).encode()
+                )
+            return _Resp(b"0123456789")
+
+    monkeypatch.setattr(network, "build_opener", lambda *_args: _MegaOpener())
+    mega_info = mega.probe(f"https://mega.nz/file/abc#{encoded_key}", user_agent=ua)
+    mega_info.stream_factory().close()
+    assert len(mega_requests) == 2
+    assert [r.get_header("User-agent") for r in mega_requests] == [ua, ua]
+
+
 def test_mega_requests_https_urls_and_maps_file_errors(monkeypatch):
     from core.downloads.hosts import mega
 
@@ -267,7 +531,8 @@ def test_mega_requests_https_urls_and_maps_file_errors(monkeypatch):
         def __exit__(self, *_):
             return False
 
-    def fake_open(request, timeout=30):
+    def fake_open(request, timeout=30, user_agent=""):
+        del timeout, user_agent
         requests.append(json.loads(request.data))
         return Response(json.dumps([{"e": -16}]).encode())
 
@@ -468,6 +733,35 @@ def test_open_range_accepts_only_a_matching_partial_answer():
     assert open_range(lambda headers: Answer(206, "bytes 0-99/100"), 10) is None
 
 
+def test_open_range_1010_fails_as_challenge_without_starting_over(tmp_path):
+    from core.downloads.transfer import _resume_part, open_range
+
+    data = b"PK\x03\x04" + b"a" * 100
+    full_opened = []
+
+    def resume(offset):
+        return open_range(
+            lambda _headers: (_ for _ in ()).throw(_http_1010("https://host/file")),
+            offset,
+        )
+
+    def stream():
+        full_opened.append(0)
+        return io.BytesIO(data)
+
+    info = FileInfo(
+        "game.zip", len(data), stream, resume_factory=resume, resume_key="host:file-1"
+    )
+    part = _resume_part(tmp_path, info)
+    assert part is not None
+    part.write_bytes(data[:40])
+    with pytest.raises(DownloadError, match="^blocked by a challenge$"):
+        transfer(info, "job", Event(), lambda *_: None, directory=tmp_path)
+    assert full_opened == []
+    # Like a 429, the partial file stays for a manual retry.
+    assert part.read_bytes() == data[:40]
+
+
 # --- file-host jobs in the download queue (HostWorker) ----------------------
 
 import threading  # noqa: E402
@@ -578,7 +872,7 @@ def test_job_added_without_a_free_slot_resolves_at_once_and_transfers_later(
     gate = threading.Event()
     data = b"PK\x03\x04" + b"a" * 400
     _, queue = _host_queue(
-        tmp_path, monkeypatch, lambda url: _resumable_info(data, gate, [])
+        tmp_path, monkeypatch, lambda url, **_: _resumable_info(data, gate, [])
     )
     update_setting(queue_settings.MAX_ACTIVE_KEY, "1")
     queue.apply_settings()
@@ -609,7 +903,7 @@ def test_resolve_needs_the_user_then_continues(tmp_path, monkeypatch):
     _, queue = _host_queue(
         tmp_path,
         monkeypatch,
-        lambda url: FileInfo("update.zip", 4, lambda: io.BytesIO(b"PK\x03\x04")),
+        lambda url, **_: FileInfo("update.zip", 4, lambda: io.BytesIO(b"PK\x03\x04")),
     )
     job_id = _add_host(queue, 1, resolve)
     assert waiting.wait(2)
@@ -640,7 +934,9 @@ def test_paused_resumable_transfer_continues_from_its_partial_file(
     opened = []
     data = b"PK\x03\x04" + bytes(range(256)) * 8
     manager, queue = _host_queue(
-        tmp_path, monkeypatch, lambda url: _resumable_info(data, gate, opened, hold=256)
+        tmp_path,
+        monkeypatch,
+        lambda url, **_: _resumable_info(data, gate, opened, hold=256),
     )
     job_id = _add_host(queue, 1)
     assert _until(queue, lambda: queue.get(job_id).bytes_done >= 256)
@@ -688,7 +984,7 @@ def test_same_mirror_replacing_a_running_download_resumes_its_file(
     data = b"PK\x03\x04" + bytes(range(256)) * 8
     probes = []
 
-    def probe(url):
+    def probe(url, **_):
         probes.append(url)
         if len(probes) > 1:
             # Let the replaced transfer release its partial file first.
@@ -722,7 +1018,7 @@ def test_paused_mega_like_transfer_leaves_no_partial_file(tmp_path, monkeypatch)
     opened = []
     data = b"PK\x03\x04" + bytes(range(256)) * 8
 
-    def probe(url):
+    def probe(url, **_):
         opened.append(0)
         return FileInfo(
             "game.zip",
@@ -749,7 +1045,7 @@ def test_can_continue_follows_the_host(tmp_path, monkeypatch):
     gate = threading.Event()
     data = b"PK\x03\x04" + b"a" * 100
     manager, queue = _host_queue(
-        tmp_path, monkeypatch, lambda url: _resumable_info(data, gate, [])
+        tmp_path, monkeypatch, lambda url, **_: _resumable_info(data, gate, [])
     )
     worker = HostWorker(manager)
     # Before the probe: by host.
@@ -774,7 +1070,7 @@ def test_network_failure_keeps_the_resumable_partial_for_the_retry(
     offsets = []
     attempts = []
 
-    def probe(url):
+    def probe(url, **_):
         attempts.append(1)
         fail = 700 if len(attempts) == 1 else None
         return _resumable(
@@ -902,7 +1198,9 @@ def test_remove_deletes_the_partial_file_and_the_finished_archive(
     data = b"PK\x03\x04" + bytes(range(256)) * 8
     opened = []
     manager, queue = _host_queue(
-        tmp_path, monkeypatch, lambda url: _resumable_info(data, gate, opened, hold=256)
+        tmp_path,
+        monkeypatch,
+        lambda url, **_: _resumable_info(data, gate, opened, hold=256),
     )
     job_id = _add_host(queue, 1)
     assert _until(queue, lambda: queue.get(job_id).bytes_done >= 256)
@@ -927,21 +1225,115 @@ def test_no_saved_row_or_log_line_holds_the_link(tmp_path, monkeypatch, capsys, 
 
     caplog.set_level(logging.DEBUG)
     masked = "https://f95zone.to/dl/SECRETMASKED/"
+    ua = "Mozilla/5.0 SECRETUSERAGENT/1.0"
     data = b"PK\x03\x04" + b"a" * 100
-    _, queue = _host_queue(
+    manager, queue = _host_queue(
         tmp_path,
         monkeypatch,
-        lambda url: FileInfo("game.zip", len(data), lambda: io.BytesIO(data)),
+        lambda url, **_: FileInfo("game.zip", len(data), lambda: io.BytesIO(data)),
     )
 
     def resolve(progress, cancel):
-        return {"ok": True, "url": PIXELDRAIN_URL, "share_url": masked}
+        return {
+            "ok": True,
+            "url": PIXELDRAIN_URL,
+            "share_url": masked,
+            "user_agent": ua,
+        }
 
     job_id = _add_host(queue, 1, resolve)
     assert _until(queue, lambda: queue.get(job_id).state == "ready")
+    snapshot = json.dumps(manager.snapshot(job_id))
+    source = json.dumps(queue.get(job_id).source)
     rows = json.dumps(list_download_jobs())
     status = json.dumps(queue.status())
     captured = capsys.readouterr()
-    text = rows + status + captured.out + captured.err + caplog.text
-    for secret in ("SECRETFILEID", "SECRETMASKED", "pixeldrain.com/u", "f95zone.to/dl"):
+    text = snapshot + source + rows + status + captured.out + captured.err + caplog.text
+    for secret in (
+        "SECRETFILEID",
+        "SECRETMASKED",
+        "SECRETUSERAGENT",
+        "pixeldrain.com/u",
+        "f95zone.to/dl",
+    ):
         assert secret not in text
+
+
+@pytest.mark.parametrize(
+    ("raw_ua", "expected"),
+    [
+        (
+            "Mozilla/5.0 (X11; Linux x86_64) Browser/1.0",
+            "Mozilla/5.0 (X11; Linux x86_64) Browser/1.0",
+        ),
+        (None, ""),
+        ("Mozilla/5.0\r\nX-Injected: 1", ""),
+        ("A" * 600, ""),
+        ("Mozilla/5.0\u00e9", ""),
+        ("", ""),
+        ("A" * 512, "A" * 512),
+    ],
+)
+def test_manager_validates_and_forwards_resolved_user_agent(
+    tmp_path, monkeypatch, raw_ua, expected
+):
+    seen_ua: list[str] = []
+    data = b"PK\x03\x04" + b"a" * 20
+
+    def probe(url, *, user_agent=""):
+        seen_ua.append(user_agent)
+        return FileInfo("game.zip", len(data), lambda: io.BytesIO(data))
+
+    _, queue = _host_queue(tmp_path, monkeypatch, probe)
+
+    def resolve(_progress, _cancel):
+        result = {"ok": True, "url": PIXELDRAIN_URL}
+        if raw_ua is not None:
+            result["user_agent"] = raw_ua
+        return result
+
+    job_id = _add_host(queue, 1, resolve)
+    assert _until(queue, lambda: queue.get(job_id).state == "ready")
+    assert seen_ua == [expected]
+
+
+def test_manager_clears_and_replaces_user_agent_after_drop_address(
+    tmp_path, monkeypatch
+):
+    seen_ua: list[str] = []
+    data = b"PK\x03\x04" + b"a" * 20
+
+    def probe(url, *, user_agent=""):
+        seen_ua.append(user_agent)
+        if len(seen_ua) == 1:
+            raise DownloadError("blocked by a challenge")
+        return FileInfo("game.zip", len(data), lambda: io.BytesIO(data))
+
+    def relink(_job):
+        return lambda _progress, _cancel: {
+            "ok": True,
+            "url": PIXELDRAIN_URL,
+            "user_agent": "SecondBrowser/2.0",
+        }
+
+    manager, queue = _host_queue(tmp_path, monkeypatch, probe, relink=relink)
+    job_id = _add_host(
+        queue,
+        1,
+        lambda _p, _c: {
+            "ok": True,
+            "url": PIXELDRAIN_URL,
+            "user_agent": "FirstBrowser/1.0",
+        },
+    )
+    assert _until(queue, lambda: queue.get(job_id).state == "attention")
+    assert seen_ua == ["FirstBrowser/1.0"]
+
+    # Explicit drop_address clears the stored User-Agent along with the address.
+    manager.drop_address(job_id)
+    assert manager._jobs[job_id].user_agent == ""
+
+    # Retrying after a challenge relinks and resolves with the new User-Agent.
+    assert queue.retry(job_id)
+    assert _until(queue, lambda: queue.get(job_id).state == "ready")
+    assert seen_ua == ["FirstBrowser/1.0", "SecondBrowser/2.0"]

@@ -54,7 +54,7 @@ Allows the extension to decorate a supported page based on library ownership.
     "playStatus": "Playing",
     "wishlisted": false,
     "app_version": "0.4.8",
-    "extension_version": "1.2.13"
+    "extension_version": "1.2.14"
   }
   ```
 - **Contract Notes:**
@@ -132,7 +132,7 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Protocol (JSON text messages):** the current extension sends protocol 2; the app also accepts protocol 1 for older clients.
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 2, "extension_version": "1.2.13", "can_fetch": true, "can_fetch_lists": true, "can_fetch_lc": true, "can_resolve": true, "can_resolve_lc": true, "can_fetch_lc_images": true}
+  {"type": "hello", "protocol": 2, "extension_version": "1.2.14", "can_fetch": true, "can_fetch_lists": true, "can_fetch_lc": true, "can_resolve": true, "can_resolve_lc": true, "can_fetch_lc_images": true}
   {"type": "status", "can_fetch": false, "can_fetch_lc": true, "can_resolve_lc": false, "can_fetch_lc_images": true}
   {"type": "ping"}
   // app -> ext
@@ -187,7 +187,7 @@ Each returns a small static HTML completion page with `Cache-Control: no-store` 
 
 ## Installed Extension Files
 
-The bundled manifest is `1.2.13` and targets wLib `0.4.8`.
+The bundled manifest is `1.2.14` and targets wLib `0.4.8`.
 
 Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 
@@ -267,8 +267,8 @@ Extensions implementing download resolution send `can_resolve: true` in their
 "...", "url": "https://f95zone.to/dl/…", "host": "mega" }`. Progress is
 `{ "type": "resolve_progress", "id": "...", "stage": "opened" }` or
 `stage: "needs_user"`. The final response is `{ "type": "resolve_result",
-"id": "...", "ok": true, "url": "...", "host": "..." }`; failures use
-`ok: false` and `error`, and a missing optional site permission is indicated by
+"id": "...", "ok": true, "url": "...", "host": "...", "user_agent": "..." }` (the optional `user_agent` field carries `navigator.userAgent` on successful results only, so wLib can send the browser's User-Agent to file hosts; older extensions omit it); failures use
+`ok: false` and `error` (with no `user_agent`), and a missing optional site permission is indicated by
 `needs_permission`. Buzzheavier results also include `share_url` for the file request's Referer. The app sends `{ "type": "resolve_cancel", "id": "..." }` to cancel a pending resolve. Addresses retain their fragments. Resolve requests are
 serialized and time out after 30 seconds, extended to five minutes when user
 interaction is needed. Some browsers (Zen, Firefox) load the URL again in another tab: the extension

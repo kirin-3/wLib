@@ -28,7 +28,10 @@ def test_pixeldrain_range_rate_limit_keeps_partial_for_manual_retry(
     partial_data = b"PK\x03\x04" + b"a" * 36
     ranges: list[str | None] = []
 
-    def open_request(request: Request, timeout: int = 30) -> io.BytesIO:
+    def open_request(
+        request: Request, timeout: int = 30, user_agent: str = ""
+    ) -> io.BytesIO:
+        del timeout, user_agent
         if request.full_url.endswith("/info"):
             return io.BytesIO(json.dumps({"name": "game.zip", "size": 100}).encode())
         byte_range = request.get_header("Range")

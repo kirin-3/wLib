@@ -3,11 +3,24 @@
 
 from __future__ import annotations
 
-from http.client import HTTPMessage, HTTPResponse
+from http.client import HTTPException, HTTPMessage, HTTPResponse
 from typing import IO, cast, final, override
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+
+def cloudflare_refusal(exc: HTTPError) -> bool:
+    """True when Cloudflare refused the client signature (HTTP 403, error code: 1010)."""
+    if exc.code != 403:
+        return False
+    try:
+        raw = exc.read(512)
+    except (OSError, ValueError, HTTPException):
+        return False
+    finally:
+        exc.close()
+    return raw.strip().startswith(b"error code: 1010")
 
 
 def allowed(url: str, domains: tuple[str, ...]) -> bool:
@@ -44,10 +57,15 @@ class _Redirect(HTTPRedirectHandler):
 
 
 def open_host(
-    request: Request, domains: tuple[str, ...], timeout: int = 30
+    request: Request,
+    domains: tuple[str, ...],
+    timeout: int = 30,
+    user_agent: str = "",
 ) -> HTTPResponse:
     if not allowed(request.full_url, domains):
         raise URLError("unrelated host refused")
+    if user_agent and not request.has_header("User-agent"):
+        request.add_header("User-Agent", user_agent)
     return cast(
         HTTPResponse, build_opener(_Redirect(domains)).open(request, timeout=timeout)
     )

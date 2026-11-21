@@ -266,3 +266,32 @@ test('LC exit waits for the user and presses Continue once per answer', async ()
     assert.equal(clickCount, 1);
     assert.equal(sent.some(message=>JSON.stringify(message).includes('form-owned-fixture')), false);
 });
+
+test('finishResolve includes navigator.userAgent only on successful results', () => {
+    const messages = [];
+    const chrome = {runtime:{onMessage:{addListener(){}}},windows:{remove:async()=>{}}};
+    const ua = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36';
+    const context = vm.createContext({
+        chrome, console, URL, AbortController, setTimeout, clearTimeout,
+        navigator: {userAgent: ua}, output: messages,
+    });
+    vm.runInContext(source('background.js'), context);
+    vm.runInContext(`
+        bridgeSocket = {readyState:1, send: value => output.push(JSON.parse(value))};
+        finishResolve(
+            {id:'ok-1', url:'https://f95zone.to/dl/1/?x', site:'f95', tabId:9, windowId:7, duplicates:new Set(), finished:false},
+            {ok:true, url:'https://buzzheavier.com/dl/file', host:'buzzheavier', share_url:'https://buzzheavier.com/abc'}
+        );
+        finishResolve(
+            {id:'fail-1', url:'https://f95zone.to/dl/2/?x', site:'f95', tabId:10, windowId:8, duplicates:new Set(), finished:false},
+            {ok:false, error:'timed out'}
+        );
+    `, context);
+    assert.equal(messages.length, 2);
+    assert.equal(messages[0].id, 'ok-1');
+    assert.equal(messages[0].ok, true);
+    assert.equal(messages[0].user_agent, ua);
+    assert.equal(messages[1].id, 'fail-1');
+    assert.equal(messages[1].ok, false);
+    assert.equal('user_agent' in messages[1], false);
+});
