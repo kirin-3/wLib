@@ -45,6 +45,7 @@ from core.game_saves import (
     loose_save_files,
 )
 from core.host_platform import host_command, host_which, is_flatpak, no_console_window
+from core.versions import has_update, normalize_version
 
 _WINDOWS_RESERVED_NAMES = {
     "CON",
@@ -4028,12 +4029,6 @@ def install_archive(
         raise
 
 
-def _normalize_version(version: object) -> str:
-    """Treat v0.8, 0.8 and "V 0.8 " as equal; mirrors normalizeVersion() in the UI."""
-    value = "".join(str(version or "").split()).lower()
-    return re.sub(r"^v(?=\d)", "", value)
-
-
 def _squash_key(value: str) -> str:
     # Keep letters and digits from every script. Dropping non-ASCII characters
     # made every non-Latin title compare equal to every other one.
@@ -4150,13 +4145,7 @@ def find_download_offers(*, now: float | None = None) -> list[dict[str, object]]
                 continue
             installed = str(game.get("version") or "")
             latest = str(game.get("latest_version") or "")
-            if not latest.strip():
-                continue
-            if _normalize_version(latest) == _normalize_version(installed):
-                continue
-            # A skipped update is treated as no update everywhere else.
-            skipped = _normalize_version(str(game.get("skipped_version") or ""))
-            if skipped and skipped == _normalize_version(latest):
+            if not has_update(installed, latest, game.get("skipped_version")):
                 continue
             key = _squash_key(str(game.get("title") or ""))
             if not key:
@@ -4224,9 +4213,9 @@ def find_download_offers(*, now: float | None = None) -> list[dict[str, object]]
         if not games:
             continue
         for game in games:
-            if guessed_version and _normalize_version(
+            if guessed_version and normalize_version(
                 guessed_version
-            ) == _normalize_version(str(game["version"])):
+            ) == normalize_version(game["version"]):
                 continue
             offers.append(
                 {

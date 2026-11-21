@@ -36,7 +36,7 @@ from core.game_tools import game_tool_folder
 from core.bridge_exposure import hide_from_js
 from core.launcher import Launcher, launch_env_overrides, proton_compat_data_path
 from core.scraper import Scraper
-from core.versions import actionable_remote_version, normalize_version
+from core.versions import actionable_remote_version, has_update, normalize_version
 from core.app_version import APP_VERSION
 from core.api_mixins.types import (
     ProgressStatus,
@@ -1046,14 +1046,8 @@ class ApiBase:
         remote_version: object,
         skipped_version: object = "",
     ) -> bool:
-        # Same rule as hasAvailableUpdate() in ui/src/utils/libraryGames.ts: an
-        # unknown installed version counts as an update.
-        remote = normalize_version(remote_version)
-        return (
-            bool(remote)
-            and normalize_version(current_version) != remote
-            and normalize_version(skipped_version) != remote
-        )
+        # Mirrored by hasNewerVersion() in ui/src/utils/versionOrder.ts.
+        return has_update(current_version, remote_version, skipped_version)
 
     def _is_actionable_remote_version(self, version: object | None) -> bool:
         return actionable_remote_version(version)

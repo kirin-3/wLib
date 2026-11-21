@@ -159,11 +159,38 @@ def test_feed_badges_keep_prefix_ids():
         ),
         (("0.6", "2026-11-10T00:00:00Z"), ("0.5", ""), ("0.6", "f95")),
         (("0.5", ""), ("0.6", "2026-11-10T00:00:00Z"), ("0.6", "lc")),
-        (("0.5", ""), ("0.6", ""), ("0.5", "f95")),
+        (("0.5", ""), ("0.6", ""), ("0.6", "lc")),
         (
             ("0.5", "2026-11-10T00:00:00Z"),
             ("0.6", "2026-11-10T00:00:00Z"),
-            ("0.5", "f95"),
+            ("0.6", "lc"),
+        ),
+        (
+            ("0.7", "2026-10-13T14:00:00Z"),
+            ("0.6", "2026-10-13T00:00:00Z"),
+            ("0.7", "f95"),
+        ),
+        (
+            ("v1.3.0", "2026-09-19T00:00:00Z"),
+            ("1.2.1", "2026-09-24T00:00:00Z"),
+            ("v1.3.0", "f95"),
+        ),
+        (
+            ("v1.1.0sn", "2024-08-01T00:00:00Z"),
+            ("v1.0.8", "2025-04-01T00:00:00Z"),
+            ("v1.1.0sn", "f95"),
+        ),
+        (("0.5", "2026-11-01T00:00:00Z"), ("0.6", ""), ("0.6", "lc")),
+        (
+            ("0.8k", "2026-11-01T00:00:00Z"),
+            ("0.75", "2026-11-10T00:00:00Z"),
+            ("0.75", "lc"),
+        ),
+        (("0.8k", ""), ("0.75", ""), ("0.8k", "f95")),
+        (
+            ("v1.1a/UNCEN 3.1", ""),
+            ("1.1a(UNCEN 3.1) Final", "2026-11-10T00:00:00Z"),
+            ("v1.1a/UNCEN 3.1", "both"),
         ),
     ],
 )
@@ -191,6 +218,24 @@ def test_store_thread_update_combines_sites_and_preserves_time():
         )
         is None
     )
+
+
+def test_store_thread_update_keeps_higher_f95_version():
+    from core import database
+
+    database.init_db()
+    f95 = "https://f95zone.to/threads/123/"
+    game_id = database.add_game("Game", "", f95, lc_url=URL, lc_mode="on")
+    assert database.store_thread_update(
+        game_id, "f95", f95, ("v1.3.0", "2026-09-19T00:00:00Z")
+    )
+    assert database.store_thread_update(
+        game_id, "lc", URL, ("1.2.1", "2026-09-24T00:00:00Z")
+    )
+    stored = database.get_game(game_id)
+    assert stored is not None
+    assert (stored["latest_version"], stored["latest_site"]) == ("v1.3.0", "f95")
+    assert stored["lc_latest_version"] == "1.2.1"
 
 
 def test_feed_parser_uses_saved_responses():

@@ -3,6 +3,9 @@ import type { GameRecord, LaunchTarget } from "../services/api.ts";
 import type { SortDir, SortField, ThreadStateFilter } from "./libraryViewState.ts";
 import { getPlayStatusMeta, normalizePlayStatus } from "./playStatus.ts";
 import { automaticTags } from "./threadDetails.ts";
+import { hasNewerVersion, normalizeVersion } from "./versionOrder.ts";
+
+export { normalizeVersion } from "./versionOrder.ts";
 
 // One shared collator: `localeCompare` with options builds a new one on every
 // call, which made sorting a 2000-game library take tens of milliseconds.
@@ -95,16 +98,6 @@ export const cycleFilterValue = (
   return { included: nextIncluded, excluded: nextExcluded };
 };
 
-// "v0.8", "0.8" and "V 0.8 " are the same version. Keep in sync with
-// normalize_version() in core/versions.py. String() matches the Python mirror, which
-// coerces whatever a hand-edited or imported library row holds instead of
-// throwing on a non-string value.
-export const normalizeVersion = (version: string | null | undefined): string =>
-  String(version || "")
-    .replace(/\s+/g, "")
-    .toLowerCase()
-    .replace(/^v(?=\d)/, "");
-
 export const isWishlisted = (game: Pick<GameRecord, "exe_path">): boolean =>
   !String(game.exe_path || "").trim();
 
@@ -117,8 +110,7 @@ export const hasAvailableUpdate = (
     return false;
   // Archived games keep their found update hidden, like a skipped one.
   if (isArchived(game)) return false;
-  const remote = normalizeVersion(game.latest_version);
-  return !!remote && remote !== normalizeVersion(game.version) && !isUpdateSkipped(game);
+  return hasNewerVersion(game.version, game.latest_version, game.skipped_version);
 };
 
 /** Whether a game has the Archived play status (or the former "Abandoned"). */

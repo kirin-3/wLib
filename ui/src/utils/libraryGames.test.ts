@@ -67,6 +67,25 @@ test("updates ignore whitespace, include unknown installed versions, and disappe
   );
 });
 
+test("available updates use version order when it can be determined", () => {
+  const game = { exe_path: "/games/demo.sh" };
+  assert.equal(hasAvailableUpdate({ ...game, version: "1.3.0", latest_version: "1.2.1" }), false);
+  assert.equal(hasAvailableUpdate({ ...game, version: "1.2.1", latest_version: "1.3.0" }), true);
+  assert.equal(hasAvailableUpdate({
+    ...game,
+    version: "v1.1a/UNCEN 3.1",
+    latest_version: "1.1a(UNCEN 3.1) Final",
+  }), false);
+  assert.equal(hasAvailableUpdate({ ...game, version: "0.8k", latest_version: "0.75" }), true);
+  assert.equal(hasAvailableUpdate({ ...game, latest_version: "1.0" }), true);
+  assert.equal(hasAvailableUpdate({
+    ...game,
+    version: "0.9",
+    latest_version: "1.0",
+    skipped_version: "1.0 Final",
+  }), true);
+});
+
 test("games without an executable are wishlisted and have no update indicator", () => {
   assert.equal(isWishlisted({ exe_path: "  " }), true);
   assert.equal(isWishlisted({ exe_path: "/games/demo.sh" }), false);

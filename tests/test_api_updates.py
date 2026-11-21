@@ -3723,6 +3723,15 @@ def test_has_update_version_comparison(current, remote, skipped, expected):
     assert Api()._has_update(current, remote, skipped) is expected
 
 
+@pytest.mark.parametrize(
+    ("installed", "latest", "expected"),
+    [("1.3.0", "1.2.1", False), ("1.2.1", "1.3.0", True)],
+)
+def test_version_check_fields_respects_version_order(installed, latest, expected):
+    game = {"version": installed, "exe_path": "/games/game.exe"}
+    assert Api()._version_check_fields(game, latest)["has_update"] is expected
+
+
 def _write_archive(path, files):
     with zipfile.ZipFile(str(path), "w") as archive:
         for name, data in files.items():

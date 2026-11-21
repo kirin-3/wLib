@@ -11,7 +11,7 @@ from typing import Literal, NamedTuple, cast, final, override
 from urllib.parse import urlsplit
 
 from core.f95zone import ThreadPrefixFlags, normalize_prefix_label, thread_prefix_flags
-from core.versions import normalize_version
+from core.versions import compare_versions, normalize_version
 
 LC_HOSTS = frozenset({"lewdcorner.com", "www.lewdcorner.com"})
 _THREAD_PATH = re.compile(r"^/threads/(?:[^/]+\.)?([0-9]+)(?:/.*)?$", re.IGNORECASE)
@@ -258,8 +258,13 @@ def pick_latest(
         return (lc[0], "lc") if lc and normalize_version(lc[0]) else ("", "")
     if not lc or not normalize_version(lc[0]):
         return f95[0], "f95"
-    if normalize_version(f95[0]) == normalize_version(lc[0]):
+    order = compare_versions(f95[0], lc[0])
+    if order == 0:
         return f95[0], "both"
+    if order == 1:
+        return f95[0], "f95"
+    if order == -1:
+        return lc[0], "lc"
     return (lc[0], "lc") if lc[1] > f95[1] else (f95[0], "f95")
 
 

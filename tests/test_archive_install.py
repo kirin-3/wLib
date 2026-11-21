@@ -1003,6 +1003,9 @@ def test_find_download_offers_match_and_filters(tmp_path, monkeypatch):
     # A game with no pending update never produces offers.
     quiet_id = db.add_game("Quiet Game", "/games/Quiet/1.0/Game.exe", version="1.0")
     assert quiet_id is not None
+    newer_id = db.add_game("Newer Game", "/games/Newer/1.3.0/Game.exe", version="1.3.0")
+    assert newer_id is not None
+    db.update_game(int(newer_id), {"latest_version": "1.2.1"})
 
     def _touch(name, age=60):
         p = downloads / name
@@ -1018,6 +1021,7 @@ def test_find_download_offers_match_and_filters(tmp_path, monkeypatch):
     _touch("Unrelated-9.9.zip")
     _touch("Game-1.0.part2.rar")
     _touch("Quiet-Game-2.0.zip")
+    _touch("Newer-Game-1.2.1.zip")
     offers = find_download_offers()
     assert [o["archive_path"] for o in offers] == [str(match)]
 
