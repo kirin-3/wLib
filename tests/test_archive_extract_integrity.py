@@ -230,3 +230,25 @@ def test_tar_symlink_to_nothing_without_symlink_rights_is_left_out(
     staging = tmp_path / "staging"
     assert extract_tar(str(archive), str(staging)) == 2
     assert not os.path.lexists(staging / "game" / "gone")
+
+
+def _bad_second_header(raw: bytes) -> bytes:
+    """Break the header checksum of the second member (after a 1-block file)."""
+    data = bytearray(raw)
+    data[1024 + 148] ^= 0x01  # chksum field of the header at offset 1024
+    return bytes(data)
+
+
+@pytest.mark.parametrize(
+    ("suffix", "compress"),
+    [(".tar", bytes), (".tar.gz", gzip.compress), (".tar.xz", lzma.compress)],
+)
+def test_tar_with_a_bad_later_header_fails(
+    tmp_path: Path, suffix: str, compress: Callable[[bytes], bytes]
+) -> None:
+    raw = _tar_bytes([("Game.exe", "file", b"x" * 100), ("assets.dat", "file", b"y")])
+    archive = tmp_path / f"bad{suffix}"
+    # The compressed stream itself is valid; only the tar header is broken.
+    _ = archive.write_bytes(compress(_bad_second_header(raw)))
+    with pytest.raises(ArchiveInstallError, match="checksum|header"):
+        _ = extract_tar(str(archive), str(tmp_path / "staging"))

@@ -24,7 +24,7 @@ import zipfile
 import zlib
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
-from typing import cast, override
+from typing import Self, cast, override
 
 from core.archive_formats import ARCHIVE_SUFFIXES, TAR_COMPRESSION_MODULES
 from core.archive_formats import archive_family as _archive_family
@@ -1356,6 +1356,34 @@ def _disk_full(exc: BaseException) -> bool:
 _DISK_FULL_MESSAGE = "Not enough free space: the library drive filled up while the archive was extracted."
 
 
+# The parameter of TarInfo.fromtarfile hides the module name inside it.
+_TarHeaderError = tarfile.HeaderError
+_TarReadError = tarfile.ReadError
+
+
+class _StrictTarInfo(tarfile.TarInfo):
+    """Fail on a broken member header instead of ending the archive there.
+
+    After the first member, tarfile takes a header with a bad checksum or a
+    cut-off header as the end of the archive, so the extraction would report
+    success with only the earlier members. Zero blocks and the end of the
+    data still end the archive normally.
+    """
+
+    @classmethod
+    @override
+    def fromtarfile(cls, tarfile: tarfile.TarFile) -> Self:
+        try:
+            return super().fromtarfile(tarfile)
+        except _TarHeaderError as exc:
+            # The subclasses are not in the type stubs.
+            if type(exc).__name__ in ("InvalidHeaderError", "TruncatedHeaderError"):
+                raise _TarReadError(
+                    f"Archive has a broken member header: {exc}"
+                ) from exc
+            raise
+
+
 def extract_tar(
     archive_path: str,
     staging_dir: str,
@@ -1405,7 +1433,9 @@ def extract_tar(
             unpacked = _tar_decompressor(reader, magic)
             source: io.IOBase = unpacked if unpacked is not None else reader
             tar_mode = "r|" if unpacked is not None else "r|*"
-            with tarfile.open(fileobj=source, mode=tar_mode) as tf:
+            with tarfile.open(
+                fileobj=source, mode=tar_mode, tarinfo=_StrictTarInfo
+            ) as tf:
                 for member in tf:
                     _check_cancel(cancel)
                     name = member.name

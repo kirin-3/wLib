@@ -4,13 +4,21 @@
 import hashlib
 import json
 from unittest.mock import MagicMock
+from urllib.error import HTTPError
 from urllib.parse import urlparse
 
 import pytest
 
 from core import database
 from core.library_backup import build_sync_backup
-from core.library_sync import GoogleDriveLocation, SyncConflict, SyncManager
+from core.library_sync import (
+    RESTORE_ATTEMPTS,
+    DriveRestoreFailed,
+    GoogleDriveLocation,
+    SyncConflict,
+    SyncError,
+    SyncManager,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -40,6 +48,12 @@ class FakeDrive:
     def __init__(self, monkeypatch, content):
         self.revisions = [("r0", content)]
         self.uploads = 0
+        # Revisions marked keepForever. Drive serves an earlier revision's
+        # content only when it has this mark.
+        self.kept = set()
+        self.fail_keep = False
+        # HTTP status of a failed keepForever change.
+        self.keep_status = 403
         # Runs once, before the next upload is stored.
         self.before_upload = None
         monkeypatch.setattr("urllib.request.urlopen", self.urlopen)
@@ -74,8 +88,19 @@ class FakeDrive:
                     ]
                 }
             )
+        if url.path.startswith("/drive/v3/files/f/revisions/") and method == "PATCH":
+            if self.fail_keep:
+                raise HTTPError(request.full_url, self.keep_status, "failed", {}, None)
+            wanted = url.path.rsplit("/", 1)[1]
+            if json.loads(request.data)["keepForever"]:
+                self.kept.add(wanted)
+            else:
+                self.kept.discard(wanted)
+            return reply({"id": wanted})
         if url.path.startswith("/drive/v3/files/f/revisions/"):
             wanted = url.path.rsplit("/", 1)[1]
+            if wanted != self.revisions[-1][0] and wanted not in self.kept:
+                raise HTTPError(request.full_url, 403, "forbidden", {}, None)
             return reply(dict(self.revisions)[wanted])
         if url.path == "/upload/drive/v3/files/f" and method == "PATCH":
             hook, self.before_upload = self.before_upload, None
@@ -109,6 +134,29 @@ def test_second_of_two_racing_uploads_restores_the_first_and_conflicts(monkeypat
         b"second device",
         b"first device",
     ]
+    # The mark needed for the download is removed once the content is back.
+    assert drive.kept == set()
+
+
+def test_failed_restore_reports_an_error_and_keeps_the_revision(monkeypatch):
+    drive = FakeDrive(monkeypatch, b"base")
+    drive.before_upload = lambda: drive.upload(b"first device")
+    drive.fail_keep = True
+    with pytest.raises(SyncError) as error:
+        GoogleDriveLocation("refresh").write(b"second device", md5(b"base"))
+    assert error.value.error_code == "gdrive_restore_failed"
+    assert not isinstance(error.value, SyncConflict)
+    assert drive.content == b"second device"
+
+
+def test_rate_limit_during_restore_keeps_its_error_code(monkeypatch):
+    drive = FakeDrive(monkeypatch, b"base")
+    drive.before_upload = lambda: drive.upload(b"first device")
+    drive.fail_keep, drive.keep_status = True, 429
+    with pytest.raises(DriveRestoreFailed) as error:
+        GoogleDriveLocation("refresh").write(b"second device", md5(b"base"))
+    assert error.value.error_code == "rate_limited"
+    assert error.value.replaced_revision == "r1"
 
 
 def test_upload_from_the_expected_revision_succeeds(monkeypatch):
@@ -149,7 +197,8 @@ def test_no_restore_over_upload_during_revision_download(monkeypatch):
     urlopen = drive.urlopen
 
     def upload_during_download(request, **kwargs):
-        if urlparse(request.full_url).path == "/drive/v3/files/f/revisions/r1":
+        url = urlparse(request.full_url)
+        if url.path == "/drive/v3/files/f/revisions/r1" and url.query == "alt=media":
             drive.upload(b"after")
         return urlopen(request, **kwargs)
 
@@ -158,6 +207,8 @@ def test_no_restore_over_upload_during_revision_download(monkeypatch):
         GoogleDriveLocation("refresh").write(b"mine", md5(b"base"))
 
     assert drive.content == b"after" and drive.uploads == 3
+    # The abandoned restore leaves no revision marked.
+    assert drive.kept == set()
 
 
 def test_unreadable_revision_history_keeps_the_upload(monkeypatch):
@@ -209,3 +260,76 @@ def test_sync_asks_after_a_replaced_upload(monkeypatch):
     assert status["choice_reason"] == "conflict"
     assert drive.content == other
     assert database.get_all_games()[0]["rating"] == "9"
+
+
+def test_sync_asks_after_a_replaced_upload_it_could_not_restore(monkeypatch):
+    base = backup_bytes("7", "2026-10-09T10:00:00Z", "other-device")
+    drive = FakeDrive(monkeypatch, base)
+    database.update_setting("sync_location", "gdrive")
+    sync = SyncManager(GoogleDriveLocation("refresh"))
+    assert sync.run()["state"] == "idle"
+    game = database.get_all_games()[0]
+    database.update_game(game["id"], {"rating": "9"})
+    database.update_setting("sync_local_modified_at", "2026-10-09T12:00:00Z")
+    other = backup_bytes("5", "2026-10-09T13:00:00Z", "other-device")
+
+    def other_device_uploads():
+        assert GoogleDriveLocation("refresh").write(other, md5(base)) == md5(other)
+        drive.fail_keep = True
+
+    drive.before_upload = other_device_uploads
+    status = sync.run()
+    assert status["error_code"] == "gdrive_restore_failed"
+    assert drive.revisions[-2][1] == other
+    # The next run puts the other device's upload back first, then asks.
+    drive.fail_keep = False
+    status = sync.run()
+    assert status["state"] == "needs_choice"
+    assert status["choice_reason"] == "conflict"
+    assert drive.content == other
+    assert drive.kept == set()
+    assert database.get_setting("sync_gdrive_replaced") == ""
+    assert database.get_all_games()[0]["rating"] == "9"
+
+
+def test_restore_is_released_after_a_later_upload(monkeypatch):
+    drive = FakeDrive(monkeypatch, b"base")
+    drive.before_upload = lambda: drive.upload(b"first device")
+    drive.fail_keep = True
+    location = GoogleDriveLocation("refresh")
+    with pytest.raises(DriveRestoreFailed) as error:
+        location.write(b"second device", md5(b"base"))
+    drive.fail_keep = False
+    drive.kept.add(error.value.replaced_revision)
+    _ = drive.upload(b"third device")
+    # The file is no longer the replacing upload: nothing is put back.
+    assert not location.restore_replaced(
+        error.value.replaced_revision, error.value.own_checksum
+    )
+    assert drive.content == b"third device"
+    assert drive.kept == set()
+
+
+def test_sync_stops_retrying_a_restore_after_the_limit(monkeypatch):
+    base = backup_bytes("7", "2026-10-09T10:00:00Z", "other-device")
+    drive = FakeDrive(monkeypatch, base)
+    database.update_setting("sync_location", "gdrive")
+    sync = SyncManager(GoogleDriveLocation("refresh"))
+    assert sync.run()["state"] == "idle"
+    game = database.get_all_games()[0]
+    database.update_game(game["id"], {"rating": "9"})
+    database.update_setting("sync_local_modified_at", "2026-10-09T12:00:00Z")
+    other = backup_bytes("5", "2026-10-09T13:00:00Z", "other-device")
+
+    def other_device_uploads():
+        assert GoogleDriveLocation("refresh").write(other, md5(base)) == md5(other)
+        drive.fail_keep = True
+
+    drive.before_upload = other_device_uploads
+    assert sync.run()["error_code"] == "gdrive_restore_failed"
+    for _ in range(RESTORE_ATTEMPTS - 1):
+        assert sync.run()["state"] != "needs_choice"
+    # Sync goes on and asks; it does not stay blocked.
+    status = sync.run()
+    assert status["state"] == "needs_choice"
+    assert database.get_setting("sync_gdrive_replaced") == ""

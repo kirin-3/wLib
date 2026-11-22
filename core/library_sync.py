@@ -76,6 +76,13 @@ GDRIVE_REVISION_PAGES = 5
 REQUEST_TIMEOUT = 8
 FILE_TRANSFER_TIMEOUT = 60
 CALLBACK_UNAVAILABLE = "The local callback server on port 8183 is unavailable."
+# A Drive upload replaced another device's upload and could not restore it.
+GDRIVE_RESTORE_FAILED = "gdrive_restore_failed"
+# Runs that try to put back a replaced Drive upload before sync goes on without it.
+RESTORE_ATTEMPTS = 5
+STALE_CHOICE_ERROR = (
+    "The sync file changed before your choice was applied. Choose again."
+)
 # How often the watcher checks the sync file for changes from other devices.
 FULL_SYNC_INTERVAL = 300.0
 FULL_SYNC_RETRY_MAX = 1800.0
@@ -120,6 +127,30 @@ def _rate_limited(provider: str, exc: urllib.error.HTTPError) -> SyncError:
         "rate_limited",
         _retry_after(exc) or 60.0,
     )
+
+
+class DriveRestoreFailed(SyncError):
+    """This upload replaced another device's Drive upload and could not put it back.
+
+    The replaced revision stays marked "keep forever", so the next run can put
+    it back. `error_code` is the cause's when sign-in or rate limits stopped
+    the restore, so the user sees the real problem.
+    """
+
+    def __init__(
+        self, cause: SyncError, replaced_revision: str, own_checksum: str
+    ) -> None:
+        if cause.error_code in ("rate_limited", "gdrive_auth_failed"):
+            message, code = str(cause), cause.error_code
+        else:
+            message = (
+                "This upload replaced another device's Google Drive upload and "
+                + "wLib could not put it back yet. wLib tries again at the next sync."
+            )
+            code = GDRIVE_RESTORE_FAILED
+        super().__init__(message, code, cause.retry_after)
+        self.replaced_revision: str = replaced_revision
+        self.own_checksum: str = own_checksum
 
 
 class SyncConflict(SyncError):
@@ -853,17 +884,77 @@ class GoogleDriveLocation(_OAuthLocation):
             # A third upload already followed this one. Putting the replaced
             # content back would now replace that upload instead.
             raise SyncConflict()
-        replaced = self._request(
-            "GET",
+        try:
+            # Drive serves an earlier revision's content only when that
+            # revision is marked "keep forever". The mark also keeps it past
+            # Drive's 30-day purge if putting it back fails.
+            self._keep_revision(file_id, previous_id, True)
+            replaced = self._revision_content(file_id, previous_id)
+            # Another upload can land while the previous revision downloads.
+            if self._head_revision(file_id) != own_revision:
+                raise SyncConflict()
+            _ = self._update_content(file_id, replaced)
+        except SyncConflict:
+            # Another upload followed; it replaces the content anyway.
+            self.release_revision(previous_id)
+            raise
+        except SyncError as exc:
+            raise DriveRestoreFailed(exc, previous_id, checksum) from exc
+        # The content is the head revision again; free the mark (Drive
+        # allows 200 per file).
+        self.release_revision(previous_id)
+        raise SyncConflict()
+
+    def restore_replaced(self, revision_id: str, own_checksum: str) -> bool:
+        """Put back a revision an earlier upload replaced; False when it is too late.
+
+        Only while the file is still that upload (`own_checksum`). After any
+        later upload, the replaced revision is released instead. A SyncError
+        leaves the revision marked, so a later run can try again.
+        """
+        found = self._lookup()
+        if found is None or found[1] != own_checksum:
+            self.release_revision(revision_id)
+            return False
+        file_id = found[0]
+        try:
+            # The mark can be missing when setting it was what failed.
+            self._keep_revision(file_id, revision_id, True)
+            replaced = self._revision_content(file_id, revision_id)
+        except SyncConflict:
+            # The revision is gone; nothing is left to put back.
+            return False
+        _ = self._update_content(file_id, replaced)
+        self.release_revision(revision_id)
+        return True
+
+    def release_revision(self, revision_id: str) -> None:
+        """Remove the "keep forever" mark; errors are ignored (best effort)."""
+        if not self._file_id:
+            return
+        try:
+            self._keep_revision(self._file_id, revision_id, False)
+        except SyncError:
+            pass
+
+    @staticmethod
+    def _revision_url(file_id: str, revision_id: str) -> str:
+        return (
             GDRIVE_API
             + "files/"
             + urllib.parse.quote(file_id)
             + "/revisions/"
-            + urllib.parse.quote(previous_id)
-            + "?alt=media",
+            + urllib.parse.quote(revision_id)
+        )
+
+    def _revision_content(self, file_id: str, revision_id: str) -> bytes:
+        return self._request(
+            "GET",
+            self._revision_url(file_id, revision_id) + "?alt=media",
             file_request=True,
         )
-        # Another upload can land while the previous revision downloads.
+
+    def _head_revision(self, file_id: str) -> object:
         head = _json_object(
             self._request(
                 "GET",
@@ -874,10 +965,15 @@ class GoogleDriveLocation(_OAuthLocation):
                 file_request=True,
             )
         )
-        if head.get("headRevisionId") != own_revision:
-            raise SyncConflict()
-        _ = self._update_content(file_id, replaced)
-        raise SyncConflict()
+        return head.get("headRevisionId")
+
+    def _keep_revision(self, file_id: str, revision_id: str, keep: bool) -> None:
+        _ = self._request(
+            "PATCH",
+            self._revision_url(file_id, revision_id) + "?fields=id",
+            data=json.dumps({"keepForever": keep}).encode("utf-8"),
+            file_request=True,
+        )
 
     def write(self, data: bytes, expected_revision: str | None) -> str:
         if self.revision() != expected_revision:
@@ -967,6 +1063,9 @@ class SyncManager:
         # sync file would remove most of this library).
         self._choice_revision: str | None = None
         self._choice_reason: str = ""
+        # Remote revision of the last first-connection run that asked the
+        # user to choose a library.
+        self._first_choice_revision: str | None = None
         # (state, PKCE verifier, expiry, provider)
         self._pending: tuple[str, str, float, str] | None = None
         self._stop: threading.Event = threading.Event()
@@ -1095,6 +1194,7 @@ class SyncManager:
                 "sync_last_error": "",
                 "sync_last_device": "",
                 "sync_pending_push": "",
+                "sync_gdrive_replaced": "",
                 "sync_paused": "",
                 **values,
             }
@@ -1103,6 +1203,7 @@ class SyncManager:
         self._first_pending = None
         self._newer_remote = None
         self._choice_revision, self._choice_reason = None, ""
+        self._first_choice_revision = None
 
     def set_folder(self, folder: object) -> dict[str, object]:
         selected = folder if isinstance(folder, str) else ""
@@ -1240,11 +1341,89 @@ class SyncManager:
             "sync_pending_push",
             json.dumps({"modified_at": modified, "device": device}),
         )
-        new_revision = location.write(
-            json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8"), revision
-        )
+        try:
+            new_revision = location.write(
+                json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8"),
+                revision,
+            )
+        except DriveRestoreFailed as exc:
+            # The file is this upload, but it replaced another device's
+            # upload. Never record it as synced; the next run puts the
+            # replaced upload back and then asks.
+            self._remember_replaced(location, exc)
+            raise
         # Do not reset local_modified_at: another local edit may have occurred during upload.
         database.update_settings(self._winning_settings(modified, device, new_revision))
+
+    def _remember_replaced(
+        self, location: SyncLocation, exc: DriveRestoreFailed
+    ) -> None:
+        previous = self._replaced_record()
+        if (
+            previous is not None
+            and previous[0] != exc.replaced_revision
+            and isinstance(location, GoogleDriveLocation)
+        ):
+            # Keep one marked revision at most: the newest replaced upload.
+            location.release_revision(previous[0])
+        database.update_settings(
+            {
+                "sync_pending_push": "",
+                "sync_gdrive_replaced": json.dumps(
+                    {
+                        "revision": exc.replaced_revision,
+                        "checksum": exc.own_checksum,
+                    }
+                ),
+            }
+        )
+
+    def _replaced_record(self) -> tuple[str, str, int] | None:
+        raw = self._setting("gdrive_replaced")
+        if not raw:
+            return None
+        try:
+            record = cast(object, json.loads(raw))
+        except ValueError:
+            return None
+        if not isinstance(record, dict):
+            return None
+        fields = cast(dict[str, object], record)
+        revision, checksum = fields.get("revision"), fields.get("checksum")
+        attempts = fields.get("attempts", 0)
+        if not isinstance(revision, str) or not isinstance(checksum, str):
+            return None
+        if not revision or not checksum:
+            return None
+        return revision, checksum, attempts if isinstance(attempts, int) else 0
+
+    def _restore_replaced(self, location: SyncLocation) -> None:
+        """Put back another device's upload that an earlier upload replaced."""
+        if not self._setting("gdrive_replaced"):
+            return
+        record = self._replaced_record()
+        if record is not None and isinstance(location, GoogleDriveLocation):
+            revision, checksum, attempts = record
+            try:
+                _ = location.restore_replaced(revision, checksum)
+            except SyncError:
+                if attempts + 1 < RESTORE_ATTEMPTS:
+                    # Keep the record; the next run tries again.
+                    database.update_setting(
+                        "sync_gdrive_replaced",
+                        json.dumps(
+                            {
+                                "revision": revision,
+                                "checksum": checksum,
+                                "attempts": attempts + 1,
+                            }
+                        ),
+                    )
+                    raise
+                # Do not block sync forever. The revision stays marked in
+                # Drive, so its content is not purged.
+                print(f"[wLib] Gave up putting back Drive revision {revision}")
+        database.update_setting("sync_gdrive_replaced", "")
 
     def local_changed(self) -> bool:
         return bool(self._setting("location")) and (
@@ -1311,6 +1490,7 @@ class SyncManager:
 
     def _run_once(self, choice: str | None, *, push_only: bool) -> None:
         location = self._location()
+        self._restore_replaced(location)
         last_revision = self._setting("last_revision") or None
         revision = location.revision()
         first = not self._setting("last_synced_at")
@@ -1377,6 +1557,15 @@ class SyncManager:
             # for the earlier file, so it must not overwrite or mirror this
             # one: evaluate the new file as if no answer was given.
             choice, stale_choice = None, True
+        if (
+            choice is not None
+            and first
+            and self._first_choice_revision is not None
+            and revision != self._first_choice_revision
+        ):
+            # Same rule on the first connection: an empty replacement file
+            # must not mirror away every local game.
+            choice, stale_choice = None, True
         if first:
             assert backup is not None
             if choice is None and self._adopt_unconfirmed_push(
@@ -1389,10 +1578,10 @@ class SyncManager:
             )
             if push_only and remote_games and choice is None:
                 if local_games:
-                    self._state = "needs_choice"
+                    self._ask_first_choice(revision, stale=stale_choice)
                 return
             if local_games and remote_games and choice is None:
-                self._state = "needs_choice"
+                self._ask_first_choice(revision, stale=stale_choice)
                 return
             if choice == "merge-once":
                 result = apply_library_backup(
@@ -1493,14 +1682,17 @@ class SyncManager:
             remote_sync.get("modified_at") or ""
         ) and str(marker.get("device") or "") == str(remote_sync.get("device") or "")
 
+    def _ask_first_choice(self, revision: str, *, stale: bool = False) -> None:
+        self._state = "needs_choice"
+        self._first_choice_revision = revision
+        if stale:
+            database.update_setting("sync_last_error", STALE_CHOICE_ERROR)
+
     def _ask_choice(self, revision: str, reason: str, *, stale: bool = False) -> None:
         self._state = "needs_choice"
         self._choice_revision, self._choice_reason = revision, reason
         if stale:
-            database.update_setting(
-                "sync_last_error",
-                "The sync file changed before your choice was applied. Choose again.",
-            )
+            database.update_setting("sync_last_error", STALE_CHOICE_ERROR)
 
     @staticmethod
     def _removes_most_games(backup: dict[str, object]) -> bool:

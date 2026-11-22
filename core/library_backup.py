@@ -1211,6 +1211,9 @@ def _release_duplicate_claims(plan: list[dict[str, object]]) -> None:
     overwrite the first. A repeated thread (same URL) still merges by design;
     every other weak claim on a row someone else keeps becomes a new game, and
     so does a thread claim with another sync identity on a row a UID keeps.
+    When no UID keeps the row, a thread claim with another sync identity
+    that shares no thread with the kept claim (for example the F95 and the
+    LewdCorner thread of one local game) is a different game too.
     Among only weak claims, the one titled exactly like the local game keeps
     the match (the first in plan order on a tie).
     """
@@ -1231,6 +1234,14 @@ def _release_duplicate_claims(plan: list[dict[str, object]]) -> None:
     def uid(entry: Mapping[str, object]) -> str:
         return _sync_uid(_coerce_mapping(entry.get("game")).get("uid"))
 
+    def threads(entry: Mapping[str, object]) -> set[tuple[str, str]]:
+        metadata = _game_section(_coerce_mapping(entry.get("game")), "metadata")
+        keys = {
+            ("f95", thread_match_key(normalize_thread_url(metadata.get("f95_url")))),
+            ("lc", lewdcorner.extract_thread_id(metadata.get("lc_url"))),
+        }
+        return {key for key in keys if key[1]}
+
     for local_id, items in claims.items():
         if len(items) < 2:
             continue
@@ -1240,12 +1251,25 @@ def _release_duplicate_claims(plan: list[dict[str, object]]) -> None:
             local_title = _coerce_text(local.get("title")).strip()
             # sorted() is stable, so plan order breaks ties.
             ranked.sort(key=lambda entry: title(entry) != local_title)
-        owner_uid = uid(ranked[0]) if ranked[0].get("match_type") == "sync_uid" else ""
+        keeper = ranked[0]
+        owner_uid = uid(keeper) if keeper.get("match_type") == "sync_uid" else ""
+        keeper_uid = uid(keeper)
         for item in ranked[1:]:
             # A thread claim from a game with another sync identity is a
             # different game: the row's own game moved that thread to it on
             # another device. It must not merge into the row the UID keeps.
             separate = bool(owner_uid) and uid(item) not in ("", owner_uid)
+            if (
+                not owner_uid
+                and keeper_uid
+                and uid(item) not in ("", keeper_uid)
+                and strength(keeper) > _WEAK_MATCH_STRENGTH
+                and strength(item) > _WEAK_MATCH_STRENGTH
+                and not threads(item) & threads(keeper)
+            ):
+                # Two synced games each matched the row by another site's
+                # thread; merging both would keep only the last one.
+                separate = True
             if strength(item) > _WEAK_MATCH_STRENGTH and not separate:
                 continue
             game = _coerce_mapping(item.get("game"))
@@ -2322,32 +2346,50 @@ def _resolve_merge_mode(
 
 def _keep_attachments_of_mirrored_games(
     deleted_uids: Mapping[int, str], created_ids: Sequence[int]
-) -> None:
+) -> set[int]:
     """Hold attachments of games a mirror removed; give them back on re-create.
 
     Backups and snapshots never carry attachment files, so a snapshot restore
-    finds them here by sync uid. A failure leaves the files where they are.
+    finds them here by sync uid. A failure leaves the files where they are and
+    marks the folder, so later prunes retry the hold instead of deleting it.
+    Returns the IDs whose hold failed; the orphan prune must skip them.
     """
-    from core.game_attachments import hold_game_attachments, reclaim_held_attachments
+    from core.game_attachments import (
+        hold_game_attachments,
+        mark_pending_hold,
+        pending_holds_by_uid,
+        reclaim_held_attachments,
+    )
 
+    failed: set[int] = set()
     for game_id, uid in deleted_uids.items():
         try:
             _ = hold_game_attachments(game_id, uid)
         except OSError as exc:
+            failed.add(game_id)
             print(f"[wLib] Failed to keep attachments of removed game {game_id}: {exc}")
+            try:
+                _ = mark_pending_hold(game_id, uid)
+            except OSError as mark_exc:
+                print(
+                    f"[wLib] Failed to mark attachments of removed game {game_id}: {mark_exc}"
+                )
     if not created_ids:
-        return
+        return failed
     wanted = set(created_ids)
     created_uids = {
         int(str(game["id"])): str(game.get("sync_uid") or "")
         for game in _local_games()
         if int(str(game["id"])) in wanted
     }
+    # One folder scan for every re-created game.
+    pending = pending_holds_by_uid()
     for game_id, uid in created_uids.items():
         try:
-            reclaim_held_attachments(game_id, uid)
+            reclaim_held_attachments(game_id, uid, pending)
         except OSError as exc:
             print(f"[wLib] Failed to restore attachments of game {game_id}: {exc}")
+    return failed
 
 
 def _prune_held_attachments() -> None:
@@ -2708,8 +2750,10 @@ def apply_library_backup(
         prune_sync_snapshots()
 
     _discard_cover_files(replaced_covers)
+    # Until the hold step reports otherwise, keep every removed game's folder.
+    unheld_ids: set[int] = set(deleted_uids)
     try:
-        _keep_attachments_of_mirrored_games(deleted_uids, created_ids)
+        unheld_ids = _keep_attachments_of_mirrored_games(deleted_uids, created_ids)
     except Exception as exc:
         print(f"[wLib] Failed to keep attachments of removed games: {exc}")
     if deleted > 0:
@@ -2717,7 +2761,7 @@ def apply_library_backup(
             from core.game_attachments import prune_orphan_attachments
 
             remaining_ids = {int(str(game["id"])) for game in _local_games()}
-            prune_orphan_attachments(remaining_ids)
+            prune_orphan_attachments(remaining_ids | unheld_ids)
         except Exception as exc:
             print(f"[wLib] Failed to prune orphan attachments: {exc}")
     if mirror:

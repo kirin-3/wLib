@@ -860,27 +860,10 @@ class Scraper:
         )
         flags = thread_prefix_flags((*labels, *appended_labels))
         thread_completed = flags.completed
-        clean_h1 = re.sub(
-            r'<a\b[^>]*class=["\'][^"\']*\blabelLink\b[^"\']*["\'][^>]*>.*?</a>',
-            "",
-            h1,
-            flags=re.I | re.S,
-        )
-        clean_h1 = re.sub(
-            r'<span\b[^>]*class=["\'][^"\']*\blabel-append\b[^"\']*["\'][^>]*>.*?</span>',
-            "",
-            clean_h1,
-            flags=re.I | re.S,
-        )
-        title = re.sub(r"\s+", " ", _text(clean_h1)) or self._page_title(html)
+        title = self._thread_title(h1, html)
         if not title:
             return self._error("title_not_found", "Could not find thread title")
-        starter = next(_blocks(html, "article", "message-threadStarterPost"), ("", ""))[
-            1
-        ]
-        if not starter:
-            starter = next(_blocks(html, "article", "message--post"), ("", ""))[1]
-        wrapper = next(_blocks(starter, "div", "bbWrapper"), ("", ""))[1]
+        starter, wrapper = self._starter_post(html)
         version = self._extract_version_from_title(title)
         if self._is_non_actionable_version(version):
             version = self._extract_version_from_post(wrapper)
@@ -935,6 +918,39 @@ class Scraper:
             result["rating"] = rating
             result["rating_count"] = rating_count
         return result
+
+    def _starter_post(self, html: str) -> tuple[str, str]:
+        """The starter post and its body (bbWrapper)."""
+        starter = next(_blocks(html, "article", "message-threadStarterPost"), ("", ""))[
+            1
+        ]
+        if not starter:
+            starter = next(_blocks(html, "article", "message--post"), ("", ""))[1]
+        return starter, next(_blocks(starter, "div", "bbWrapper"), ("", ""))[1]
+
+    def _thread_title(self, h1: str, html: str) -> str:
+        """The thread title without its prefix labels (the page title as a fallback)."""
+        clean_h1 = re.sub(
+            r'<a\b[^>]*class=["\'][^"\']*\blabelLink\b[^"\']*["\'][^>]*>.*?</a>',
+            "",
+            h1,
+            flags=re.I | re.S,
+        )
+        clean_h1 = re.sub(
+            r'<span\b[^>]*class=["\'][^"\']*\blabel-append\b[^"\']*["\'][^>]*>.*?</span>',
+            "",
+            clean_h1,
+            flags=re.I | re.S,
+        )
+        return re.sub(r"\s+", " ", _text(clean_h1)) or self._page_title(html)
+
+    def _thread_version(self, html: str) -> str:
+        """The version a thread read stores: the title's, else the starter post's."""
+        h1 = next(_blocks(html, "h1", "p-title-value"), ("", ""))[1]
+        version = self._extract_version_from_title(self._thread_title(h1, html))
+        if self._is_non_actionable_version(version):
+            version = self._extract_version_from_post(self._starter_post(html)[1])
+        return version
 
     def _starter_hides_attachments(self, html: str) -> bool:
         """True when the starter post hides attachments from guests."""
@@ -1260,6 +1276,18 @@ def fetch_thread_download_links(
             "error": f"F95Zone returned HTTP {status}",
         }
     result = parse_download_links(html)
+    # True when the release comes from the thread read's rules, not from a
+    # bracketed title version: a download saved as "Unknown" before those rules
+    # existed still relinks to it.
+    version_fallback = False
+    if result["version"] == "Unknown":
+        # The download parser found no bracketed title version. Take the
+        # version a thread read stores (a bare title version, else the starter
+        # post): a saved download relinks only to its own release.
+        thread_version = scraper._thread_version(html)  # pyright: ignore[reportPrivateUsage]
+        if not scraper._is_non_actionable_version(thread_version):  # pyright: ignore[reportPrivateUsage]
+            result = parse_download_links(html, page_version=thread_version)
+            version_fallback = True
     if not result["signed_in"]:
         return {
             "success": False,
@@ -1271,7 +1299,7 @@ def fetch_thread_download_links(
     logging.getLogger("wlib.scraper").info(
         "Thread %s: found %d download links", thread_id, count
     )
-    return {"success": True, **result}
+    return {"success": True, **result, "version_fallback": version_fallback}
 
 
 def resolve_download_link(

@@ -48,6 +48,9 @@ class _Link:
     # Which thread read made this link; a later read replaces older links only.
     fetch: int = 0
     password: str = ""
+    # The release came from the thread read's rules (a bare title version or
+    # the starter post), not from a bracketed title version.
+    version_fallback: bool = False
 
     @property
     def site(self) -> lewdcorner.Site:
@@ -231,6 +234,7 @@ class UpdateDownloads:
                     str(result.get("version") or ""),
                     fetch,
                     archive_password,
+                    bool(result.get("version_fallback")),
                 )
                 mirrors.append(
                     {
@@ -329,7 +333,13 @@ class UpdateDownloads:
             and candidate.url
             and same(candidate.key)
             # A refreshed thread that now offers another release is not this download.
-            and (not wanted or candidate.version.strip().casefold() == wanted)
+            and (
+                not wanted
+                or candidate.version.strip().casefold() == wanted
+                # Saved before downloads read the thread's own version: such a
+                # job stored "Unknown" where the thread now gives a fallback one.
+                or (wanted == "unknown" and candidate.version_fallback)
+            )
             and (not fresh or now - candidate.created < LINK_SECONDS)
         ]
 

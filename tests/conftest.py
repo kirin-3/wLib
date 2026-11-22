@@ -40,6 +40,14 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 @pytest.fixture(autouse=True)
+def _no_pending_attachment_holds(monkeypatch):
+    """Failed attachment holds are remembered in memory; start each test empty."""
+    import core.game_attachments
+
+    monkeypatch.setattr(core.game_attachments, "_pending_in_memory", {})
+
+
+@pytest.fixture(autouse=True)
 def _no_catalog_startup_check(monkeypatch):
     """Api() would otherwise start a real catalog download on every construction."""
     from core.catalog import CatalogClient

@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import sqlite3
 import stat
 import uuid
-from typing import BinaryIO
+from collections.abc import Mapping, Sequence
+from typing import BinaryIO, cast
 
 from core import database
 
@@ -212,12 +215,21 @@ def prune_orphan_attachments(existing_ids: set[int] | list[int]) -> None:
         entries = os.listdir(base)
     except FileNotFoundError:
         return
+    pending = _pending_records()
     for entry in entries:
         if not entry.isdigit():
             continue
         if entry in live:
             continue
         full_path = os.path.join(base, entry)
+        uid = _pending_hold_uid(full_path) or pending.get(int(entry), "")
+        if uid:
+            # A removed game whose hold failed: retry the hold, never delete.
+            try:
+                _ = hold_game_attachments(int(entry), uid)
+            except OSError:
+                pass
+            continue
         # Only remove directories; a stray file named "123" is left alone.
         try:
             if os.path.isdir(full_path) and not os.path.islink(full_path):
@@ -243,6 +255,89 @@ def held_attachments_dir() -> str:
     return os.path.join(database.DATA_DIR, "attachments", HELD_FOLDER)
 
 
+# A removed game's folder whose hold failed keeps its sync uid in this hidden
+# file, so later prunes retry the hold instead of deleting the files.
+PENDING_HOLD_MARKER = ".wlib-held-uid"
+
+
+# The same record in a device-local setting and in memory, for when the marker
+# itself cannot be written (for example on a full drive).
+PENDING_HOLDS_SETTING = "attachments_pending_holds"
+_pending_in_memory: dict[int, str] = {}
+
+
+def _pending_records() -> dict[int, str]:
+    records: dict[int, str] = {}
+    try:
+        raw = database.get_setting(PENDING_HOLDS_SETTING) or ""
+        loaded: object = cast(object, json.loads(raw)) if raw else None
+    except (ValueError, sqlite3.Error):
+        loaded = None
+    if isinstance(loaded, dict):
+        for key, value in cast(dict[object, object], loaded).items():
+            uid = _held_uid(value)
+            if isinstance(key, str) and key.isdigit() and uid:
+                records[int(key)] = uid
+    records.update(_pending_in_memory)
+    return records
+
+
+def _store_pending_records(records: Mapping[int, str]) -> None:
+    try:
+        database.update_setting(
+            PENDING_HOLDS_SETTING,
+            json.dumps({str(key): value for key, value in records.items()})
+            if records
+            else "",
+        )
+    except sqlite3.Error as exc:
+        print(f"[wLib] Could not save pending attachment holds: {exc}")
+
+
+def _forget_pending_hold(game_id: int) -> None:
+    _ = _pending_in_memory.pop(game_id, None)
+    records = _pending_records()
+    if game_id in records:
+        del records[game_id]
+        _store_pending_records(records)
+
+
+def mark_pending_hold(game_id: int, sync_uid: object) -> bool:
+    """Record a failed hold so prunes retry it; False when there is nothing to mark.
+
+    The record goes to memory and a device-local setting first, then to a
+    marker file in the game's folder; the marker write can raise OSError.
+    """
+    uid = _held_uid(sync_uid)
+    folder = attachments_dir(game_id)
+    if not uid or not os.path.isdir(folder) or os.path.islink(folder):
+        return False
+    _pending_in_memory[game_id] = uid
+    _store_pending_records({**_pending_records(), game_id: uid})
+    marker = os.path.join(folder, PENDING_HOLD_MARKER)
+    with open(marker, "w", encoding="utf-8") as handle:
+        _ = handle.write(uid)
+    return True
+
+
+def _pending_hold_uid(folder: str) -> str:
+    marker = os.path.join(folder, PENDING_HOLD_MARKER)
+    if os.path.islink(marker):
+        return ""
+    try:
+        with open(marker, encoding="utf-8") as handle:
+            return _held_uid(handle.read(64))
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _drop_pending_hold_marker(folder: str) -> None:
+    try:
+        os.remove(os.path.join(folder, PENDING_HOLD_MARKER))
+    except OSError:
+        pass
+
+
 def _move_folder_contents(source: str, target: str) -> None:
     """Move `source` to `target`; merge into `target` when it already exists."""
     if not os.path.isdir(source) or os.path.islink(source):
@@ -251,7 +346,10 @@ def _move_folder_contents(source: str, target: str) -> None:
         os.makedirs(os.path.dirname(target), exist_ok=True)
         os.replace(source, target)
         return
-    for name in os.listdir(source):
+    # The pending-hold marker moves last: if another file cannot move, the
+    # source keeps its marker and is not pruned.
+    names = sorted(os.listdir(source), key=lambda name: name == PENDING_HOLD_MARKER)
+    for name in names:
         free_name = _free_attachment_name(target, name)
         os.replace(os.path.join(source, name), os.path.join(target, free_name))
     os.rmdir(source)
@@ -265,20 +363,58 @@ def hold_game_attachments(game_id: int, sync_uid: object) -> bool:
     uid = _held_uid(sync_uid)
     if not uid:
         return False
-    _move_folder_contents(
-        attachments_dir(game_id), os.path.join(held_attachments_dir(), uid)
-    )
+    target = os.path.join(held_attachments_dir(), uid)
+    _move_folder_contents(attachments_dir(game_id), target)
+    _drop_pending_hold_marker(target)
+    _forget_pending_hold(game_id)
     return True
 
 
-def reclaim_held_attachments(game_id: int, sync_uid: object) -> None:
-    """Give a re-created game the attachments held for its sync uid."""
+def pending_holds_by_uid() -> dict[str, list[int]]:
+    """Removed games' folders whose hold failed, by sync uid (one folder scan)."""
+    found: dict[str, list[int]] = {}
+    base = os.path.join(database.DATA_DIR, "attachments")
+    try:
+        entries = os.listdir(base)
+    except OSError:
+        return found
+    records = _pending_records()
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        game_id = int(entry)
+        uid = _pending_hold_uid(os.path.join(base, entry)) or records.get(game_id, "")
+        if uid:
+            found.setdefault(uid, []).append(game_id)
+    return found
+
+
+def reclaim_held_attachments(
+    game_id: int,
+    sync_uid: object,
+    pending: Mapping[str, Sequence[int]] | None = None,
+) -> None:
+    """Give a re-created game the attachments held for its sync uid.
+
+    `pending` is pending_holds_by_uid(); pass it when reclaiming many games.
+    """
     uid = _held_uid(sync_uid)
     if not uid:
         return
+    if pending is None:
+        pending = pending_holds_by_uid()
+    for folder_id in pending.get(uid, ()):
+        if folder_id == game_id:
+            continue
+        try:
+            _ = hold_game_attachments(folder_id, uid)
+        except OSError:
+            # The record stays, so a later prune or restore tries again.
+            continue
     _move_folder_contents(
         os.path.join(held_attachments_dir(), uid), attachments_dir(game_id)
     )
+    _drop_pending_hold_marker(attachments_dir(game_id))
 
 
 def held_attachment_uids() -> list[str]:

@@ -49,7 +49,11 @@ def _write_source_note(backup_dir: str, name: str, source: str) -> None:
     finally:
         if os.path.lexists(temp):
             os.remove(temp)
-    # Notes of pruned backups are of no use; drop them.
+    _drop_stale_source_notes(backup_dir)
+
+
+def _drop_stale_source_notes(backup_dir: str) -> None:
+    """Notes of pruned backups are of no use; drop them."""
     try:
         entries = os.listdir(backup_dir)
     except OSError:
@@ -397,6 +401,14 @@ class SavesMixin(ApiBase):
             return {"success": False, "error": "Choose a saves folder first"}
         elsewhere = bool(game_save_folder) and not _same_folder(target, effective)
         note_to_write = source_note or (_GAME_SAVE_SOURCE if elsewhere else "")
+        backup_dir = game_backup_dir(self._save_backups_root(), coerced_id)
+
+        def note_safety_backup(name: str) -> None:
+            # The safety backup holds the game's save folder too. The note is
+            # written before the first merge write, so a merge that fails
+            # part way leaves a backup that restores into the right folder.
+            _write_source_note(backup_dir, name, note_to_write)
+
         try:
             with self._save_operation(coerced_id, writes=True):
                 info = import_saves(
@@ -406,22 +418,13 @@ class SavesMixin(ApiBase):
                     coerced_id,
                     get_save_backup_keep(),
                     backup_files=backup_files,
+                    on_backup=note_safety_backup if note_to_write else None,
                 )
-                if note_to_write and info.backup is not None:
-                    # The safety backup holds the game's save folder too.
-                    try:
-                        _write_source_note(
-                            game_backup_dir(self._save_backups_root(), coerced_id),
-                            info.backup.name,
-                            note_to_write,
-                        )
-                    except OSError as exc:
-                        name = info.backup.name
-                        print(
-                            f"[wLib] Could not note the source of backup {name}: {exc}"
-                        )
         except GameSavesError as exc:
             return {"success": False, "error": str(exc)}
+        # The note is written before the prune inside import_saves; drop the
+        # notes of the backups that prune removed.
+        _drop_stale_source_notes(backup_dir)
         message = f"{verb} {info.files} file(s) ({self._format_bytes(info.bytes)})"
         if elsewhere:
             message += " into the game's own save folder"

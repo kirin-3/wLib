@@ -13,7 +13,7 @@ import re
 import shutil
 import stat
 import tempfile
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TypedDict
@@ -855,11 +855,16 @@ def backup_saves(
     protect: Collection[str] = (),
     now: datetime | None = None,
     files: Sequence[str] | None = None,
+    on_created: Callable[[str], None] | None = None,
 ) -> BackupInfo:
     """Copy `saves_dir` into a new timestamped backup folder, then prune.
 
     With `files` (names directly in `saves_dir`), only those regular files
     are copied: loose saves next to a game's executable, without the game.
+
+    `on_created(name)` runs before the prune (for example to note where the
+    backup came from). When it raises OSError, the new backup is removed,
+    nothing is pruned, and the backup fails.
 
     The copy lands in a `.partial` sibling and is renamed into place, so an
     interrupted or failed backup never looks like a real one.
@@ -905,6 +910,15 @@ def backup_saves(
             shutil.rmtree(partial, ignore_errors=True)
         raise GameSavesError(f"Backup failed: {exc}") from exc
 
+    if on_created is not None:
+        try:
+            on_created(name)
+        except OSError as exc:
+            shutil.rmtree(final, ignore_errors=True)
+            raise GameSavesError(
+                f"Backup failed: could not record its folder: {exc}"
+            ) from exc
+
     pruned = prune_backups(backup_dir, keep, protect={name, *protect})
     return BackupInfo(
         name=name,
@@ -928,11 +942,14 @@ def import_saves(
     *,
     now: datetime | None = None,
     backup_files: Sequence[str] | None = None,
+    on_backup: Callable[[str], None] | None = None,
 ) -> ImportInfo:
     """Merge `source` into `saves_dir`: same-named files are overwritten.
 
     A non-empty target is backed up first and the import stops if that
     fails. The merge itself is not atomic; the backup is the way back.
+    `on_backup` goes to backup_saves() as `on_created`, so it runs before
+    the first write to `saves_dir`.
     """
     if not os.path.isdir(source):
         raise GameSavesError("The folder to import does not exist")
@@ -996,6 +1013,7 @@ def import_saves(
                 protect=protect,
                 now=now,
                 files=backup_files,
+                on_created=on_backup,
             )
         except NothingToBackUpError:
             backup = None
