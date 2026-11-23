@@ -85,10 +85,16 @@ the catalog.
 
 The publisher stores the F95 review count in the optional
 `f95_thread_details.rating_count` snapshot column. A positive number is a
-count collected from the thread page. A zero means the publisher has no count
-to report, and a null means the row has not yet been checked for counts. Older
-snapshots may omit the column. Existing publisher databases add it in place,
-and the existing paced thread queue backfills previously fetched threads.
+count collected from the thread page. Zero means the page explicitly reports
+no reviews. NULL means the count is unknown. Older snapshots may omit the
+column. The publisher resets ambiguous legacy zeros to NULL and uses the
+existing paced queue to backfill counts for previously fetched threads. An
+attempt flag keeps unknown counts from repeatedly entering the backfill queue.
+
+The feed supplies the average rating independently of the count. An available
+count reflects the thread-page read at f95_thread_details.fetched_at. After
+backfill, the thread is reread when its feed timestamp advances. Review
+activity alone can leave a count stale even while the feed rating changes.
 
 ## Library sync and encrypted backups
 
