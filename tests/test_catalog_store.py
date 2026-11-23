@@ -64,6 +64,43 @@ def test_upsert_keeps_first_seen_and_clears_removed(tmp_path):
     )
 
 
+def test_f95_rating_count_migration_backfills_existing_details(tmp_path):
+    path = str(tmp_path / "catalog.sqlite")
+    now = "2026-10-26T00:00:00Z"
+    catalog = CatalogStore(path)
+    catalog.upsert(
+        "f95_threads",
+        "thread_id",
+        [{"thread_id": 1, "title": "Existing game", "url": "u", "ts": 10}],
+        now,
+    )
+    catalog.upsert_f95_details(
+        1, 10, now, {"status": "ok", "overview": "Existing text"}
+    )
+    with catalog.conn:
+        catalog.conn.execute("ALTER TABLE f95_thread_details DROP COLUMN rating_count")
+    catalog.close()
+
+    catalog = CatalogStore(path)
+    try:
+        assert catalog.conn.execute(
+            "SELECT overview, rating_count FROM f95_thread_details WHERE thread_id = 1"
+        ).fetchone() == ("Existing text", None)
+        assert catalog.f95_details_queue(since_ts=20, limit=10) == [(1, 10)]
+        catalog.upsert_f95_details(
+            1,
+            10,
+            now,
+            {"status": "ok", "overview": "Existing text", "rating_count": 12},
+        )
+        assert catalog.conn.execute(
+            "SELECT overview, rating_count FROM f95_thread_details WHERE thread_id = 1"
+        ).fetchone() == ("Existing text", 12)
+        assert catalog.f95_details_queue(since_ts=20, limit=10) == []
+    finally:
+        catalog.close()
+
+
 def test_state_values_round_trip(tmp_path):
     state = StateStore(str(tmp_path / "state.sqlite"))
     state.put("f95", "sweep_page", 12)

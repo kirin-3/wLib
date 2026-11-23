@@ -330,7 +330,7 @@ def _first_number(text: str) -> float:
     return float(match.group()) if match else 0.0
 
 
-def _extract_rating(html: str) -> tuple[float, str]:
+def extract_f95_rating(html: str) -> tuple[float, str]:
     """F95 average rating and review count text, as the extension reads them.
 
     The current theme shows the average as a ring when signed in
@@ -913,7 +913,7 @@ class Scraper:
             "thread_main_post_last_edit_at": last_edit,
             "thread_main_post_checked_at": datetime.now().astimezone().isoformat(),
         }
-        rating, rating_count = _extract_rating(html)
+        rating, rating_count = extract_f95_rating(html)
         if rating > 0:
             result["rating"] = rating
             result["rating_count"] = rating_count

@@ -83,6 +83,13 @@ the catalog.
   `_fill_ratings_from_catalog` fills F95 ratings from the catalog. It is guarded by the device-local
   setting `catalog_rating_fill_sha`, so each snapshot is used once.
 
+The publisher stores the F95 review count in the optional
+`f95_thread_details.rating_count` snapshot column. A positive number is a
+count collected from the thread page. A zero means the publisher has no count
+to report, and a null means the row has not yet been checked for counts. Older
+snapshots may omit the column. Existing publisher databases add it in place,
+and the existing paced thread queue backfills previously fetched threads.
+
 ## Library sync and encrypted backups
 
 `core/library_sync.py` contains `SyncManager`, `FolderLocation`, `DropboxLocation`, and `GoogleDriveLocation`. All locations expose revision/read/write methods. Sync shares metadata, user state, and general settings using `wlib.library_migration` v1 plus a UTC `sync.modified_at` and hostname `sync.device`. Machine paths, launch settings, and local cover files are excluded. When only one side changed since the last sync, that side replaces the other for the whole library. When both changed, or when the sync file would remove most of the local games (an empty file from a device whose folder sync had not delivered the real one yet), `_run_once` stops in `needs_choice` with `choice_reason` `conflict` or `removal` and waits for Use sync file, Use this machine or Merge once; push-only runs and the exit push never resolve it. A first sync on an empty library with no sync file pushes nothing. A new revision whose `sync.modified_at` equals `sync_last_synced_at` (a sync tool rewrote the file) counts as unchanged. Simultaneous use from several machines is unsupported.

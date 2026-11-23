@@ -225,6 +225,23 @@ def test_changed_threads_first_then_most_viewed_old_ones(tmp_path):
     assert transport.requests == []
 
 
+def test_thread_reader_collects_the_f95_review_count(tmp_path):
+    transport = FakeTransport()
+    page = _page()
+    rating = (
+        b'<div class="f95rv-banner-ring" aria-label="4.7 out of 5"></div>'
+        b'<div class="f95rv-banner-count">1,234 reviews</div>'
+    )
+    transport.route("/threads/1/", Response(200, page.text().encode() + rating))
+    ctx, _ = make_context(tmp_path, transport)
+    ctx.upsert("f95_threads", "thread_id", [_thread(1, 10)])
+    F95ThreadsSource().incremental(ctx)
+
+    assert ctx.catalog.conn.execute(
+        "SELECT rating_count FROM f95_thread_details WHERE thread_id = 1"
+    ).fetchone() == (1234,)
+
+
 def test_missing_and_unreadable_threads_are_kept_so_the_queue_moves(tmp_path):
     transport = FakeTransport()
     # F95's own "not found" page, logged in.

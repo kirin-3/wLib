@@ -13,7 +13,7 @@ import re
 from html.parser import HTMLParser
 from typing import override
 
-from core.scraper import _extract_rating
+from core.scraper import extract_f95_rating
 
 from ..net import RateLimited
 from .base import SourceContext
@@ -218,9 +218,11 @@ class F95ThreadsSource:
                     "status": "ok",
                     **parse_first_post(first_post_html(response.text())),
                 }
-                _, count = _extract_rating(response.text())
+                _, count = extract_f95_rating(response.text())
                 match = re.search(r"\d[\d,]*", count)
-                details["rating_count"] = int(match.group().replace(",", "")) if match else 0
+                details["rating_count"] = (
+                    int(match.group().replace(",", "")) if match else 0
+                )
             except ValueError:
                 # Kept so one odd page does not block the queue; read again when it changes.
                 log.warning("f95_threads: no first post on thread %s", thread_id)
