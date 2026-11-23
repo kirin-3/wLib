@@ -1,6 +1,6 @@
 # Feature comparison: wLib, xLib, Atlas, f69
 
-Snapshot from 2026-11-16: wLib 0.4.8, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f69 0.15.24
+Snapshot from 2026-11-16: wLib 0.4.8, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f69 0.15.24. The wLib column was updated on 2026-11-23 for the changes after 0.4.8; the other columns were not checked again.
 
 ✅ supported · ⚠️ partial or limited · ❌ not found in the source
 
@@ -59,7 +59,7 @@ Snapshot from 2026-11-16: wLib 0.4.8, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f
 | Desktop notifications | ✅ (Linux) | ✅ | ❌ | ✅ |
 | In-app downloads | ✅ via extension: MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire, Mixdrop +4; F95 and LewdCorner links; Downloads page with one queue (reorder, pause/resume, shared speed limit) | ✅ ~20 hosts, JDownloader hand-off; Downloads page with one queue (reorder, start now, speed limit, pause while playing or on battery); MEGA, Pixeldrain, Mediafire account sign-in | ✅ MEGA, Pixeldrain, Gofile, Buzzheavier; F95 and LewdCorner links | ✅ aria2: donor DDL, masked links, MEGAcmd |
 | Torrents / RPDL | ✅ RPDL, with seeding, in the same Downloads queue; export .torrent/magnet or send to a client's watch folder | ✅ | ❌ | ✅ |
-| Install from archive, keep saves | ✅ | ✅ | ✅ | ✅ |
+| Install from archive, keep saves | ✅ (+ archive password read from the thread) | ✅ | ✅ | ✅ |
 | App self-update | ⚠️ checks GitHub | ✅ | ✅ stable/nightly | ❌ |
 
 ## Saves, mods and tools
@@ -69,7 +69,7 @@ Snapshot from 2026-11-16: wLib 0.4.8, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f
 | Save backup / restore | ✅ | ✅ | ⚠️ during updates only | ✅ (+ import saves, chapters can share one save folder) |
 | Apply patches, with rollback | ❌ | ✅ xdelta patches, version snapshots | ❌ | ❌ |
 | Ren'Py `.rpa` extract, dev console | ✅ (+ URM toggle) | ❌ | ❌ | ✅ |
-| RPG Maker MV/MZ decryption | ✅ | ❌ | ❌ | ✅ |
+| RPG Maker MV/MZ decryption | ✅ (+ XP/VX/VX Ace archive extraction, MV/MZ plugin on/off, save editor for MV/MZ and XP/VX/VX Ace) | ❌ | ❌ | ✅ |
 | Unity BepInEx | ✅ installer | ⚠️ detects mod folders | ❌ | ✅ recipe preset |
 | Mod recipes / universal mods | ❌ | ❌ | ❌ | ✅ |
 | Machine translation | ❌ | ✅ DeepL, OpenRouter, Ollama, OpenAI-compatible; MTool | ❌ | ❌ |
@@ -82,7 +82,7 @@ Snapshot from 2026-11-16: wLib 0.4.8, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f
 | Engine detection | ✅ | ✅ | ✅ | ✅ |
 | Wine | ✅ | ✅ | ✅ (auto on PATH) | ❌ |
 | Proton / umu-launcher | ✅ umu, Proton-GE download | ✅ umu, GE-Proton/umu-proton download | ⚠️ manual wrapper | ❌ |
-| Native Linux runs of Windows builds | ✅ RPGM runner, NW.js fixes | ⚠️ EasyRPG | ❌ | ✅ mkxp-z, Ren'Py SDK, NW.js conversion |
+| Native Linux runs of Windows builds | ✅ RPGM runner (Auto Detect for XP to MZ, one-click install with mkxp-z), NW.js fixes | ⚠️ EasyRPG | ❌ | ✅ mkxp-z, Ren'Py SDK, NW.js conversion |
 | Other runtimes | Java, built-in HTML player, Flash/Ruffle | Java, HTML player, Flash/Ruffle, DOSBox, ScummVM | Per-extension emulator mapping | ❌ |
 | Japanese locale | ✅ Wine/Proton locale on Linux, Locale Emulator on Windows | ✅ Locale Emulator | ❌ | ❌ |
 | Winecfg / Winetricks / runtime installs | ✅ | ❌ | ❌ | ❌ |

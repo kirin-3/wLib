@@ -63,7 +63,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - **Download update** reads the F95 or LewdCorner thread's links through the extension, picks a suitable build, and downloads it from MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire and other hosts. Sign in to your own Pixeldrain or MEGA account to use it for downloads.
 - **RPDL torrents** show up next to the thread's links, matched to the game's title and version. Downloads resume after a restart, and you choose whether to keep seeding, up to a ratio or time limit. You can also save the `.torrent`, copy the magnet link, or send it to your own torrent client's watch folder.
 - **Downloads page** lists every download in one queue: reorder it, start one now, pause and resume, and see why one failed with the next step to take. Set how many run at once and a speed limit for file hosts and torrents together, and let downloads wait while you play or run on battery.
-- Install a new game or an update from a `.zip`, `.7z` or `.rar`, including multi-part archives, or from a tar archive (`.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`/`.tbz2`/`.tbz`, `.tar.xz`/`.txz`), the format of many Ren'Py Linux builds. wLib moves your saves over and removes the old version, and it also spots matching archives in your Downloads folder. Installs use every CPU core and are fast on NFS and SMB network drives too.
+- Install a new game or an update from a `.zip`, `.7z` or `.rar`, including multi-part archives, or from a tar archive (`.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`/`.tbz2`/`.tbz`, `.tar.xz`/`.txz`), the format of many Ren'Py Linux builds. Password-protected archives work too: wLib reads the password from the thread's first post, shows it with a **Copy** button, and fills it in for the install. wLib moves your saves over and removes the old version, and it also spots matching archives in your Downloads folder. Installs use every CPU core and are fast on NFS and SMB network drives too.
 - Skip a version you don't want, and undo the skip any time.
 - Desktop notifications for new releases and completed wishlist games (Linux).
 
@@ -72,12 +72,13 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - Save backups with restore and merge after an update. Backups stay on your computer and are never synced.
 - **Ren'Py:** developer console switch, `.rpa` extraction and the URM toggle.
 - **RPG Maker MV/MZ:** decrypt encrypted assets and switch the game to load them, edit saves (gold, items, actors, switches, variables, or the raw data) with a backup before each write, and switch plugins on or off with a backup and one-click restore. The plugin list warns about missing files, duplicates and, for MZ only, declared dependencies and load order. Game updates do not keep plugin changes.
+- **RPG Maker XP/VX/VX Ace:** extract `.rgssad`, `.rgss2a` and `.rgss3a` archives to a folder or into the game folder, switch the game to load the extracted files, and edit saves (gold, items, actors, switches, variables, or the raw data) with a backup before each write.
 - **Unity:** install, update or remove BepInEx 5 or 6, with a backup.
 
 ### Launching
 
 - Detects Ren'Py, Unity, Unreal, Godot, RPG Maker (XP to MZ), Wolf RPG and native Linux games.
-- On Linux you can pick native, Wine, Proton (through umu-launcher, with a Proton-GE download), an RPG Maker Linux runner or your own command for each game. You also get:
+- On Linux you can pick native, Wine, Proton (through umu-launcher, with a Proton-GE download), an RPG Maker Linux runner or your own command for each game. When the RPGMaker Linux runner is installed, Auto Detect uses it for RPG Maker XP, VX, VX Ace, MV and MZ games. **Settings > Wine / Proton** installs the runner and mkxp-z with one click. You also get:
   - automatic fixes for common black screens in RPG Maker and NW.js games
   - a Japanese locale option and a Wayland toggle
   - Winecfg, Winetricks and one-click runtime installs (DirectX, VC++, fonts, RPG Maker RTPs)
@@ -303,7 +304,7 @@ To install it, add the flake as an input and put `inputs.wlib.packages.x86_64-li
 | Play Windows games on Linux | Wine, or Proton (wLib can download Proton-GE) |
 | Use the runtime installers on Linux | Winetricks |
 | Play `.jar` games | Java |
-| Install from `.7z` or `.rar` | 7-Zip on Windows; `7z`, `bsdtar` or `unrar` on Linux (included in Flatpak and Nix) |
+| Install from `.7z` or `.rar` | 7-Zip on Windows; `7z`, `bsdtar` or `unrar` on Linux (included in Flatpak and Nix). Password-protected `.7z` needs `7z`; password-protected `.rar` needs `7z` or `unrar` |
 | Install from `.zip` or a tar archive (`.tar`, `.tar.gz`, `.tar.bz2`, `.tar.xz`) | Nothing: wLib extracts these itself |
 | Run games in a sandbox | bubblewrap on Linux, Sandboxie-Plus on Windows (wLib can install either from **Settings > Sandbox**) |
 | Use GameMode, MangoHud or gamescope | `gamemode`, `mangohud`, `gamescope` |
