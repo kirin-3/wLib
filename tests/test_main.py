@@ -56,12 +56,14 @@ def test_configure_qt_runtime_environment_prefers_wayland(monkeypatch):
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
     monkeypatch.delenv("WLIB_QPA_PLATFORM", raising=False)
+    monkeypatch.delenv("WLIB_OWNED_ENV", raising=False)
 
     result = main.configure_qt_runtime_environment()
 
     assert result["qt_qpa_platform"] == ""
     assert result["source"] == "auto-wayland"
     assert "QT_QPA_PLATFORM" not in os.environ
+    assert "WLIB_OWNED_ENV" not in os.environ
 
 
 def test_configure_qt_runtime_environment_sets_xcb_for_x11(monkeypatch):
@@ -71,12 +73,14 @@ def test_configure_qt_runtime_environment_sets_xcb_for_x11(monkeypatch):
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
     monkeypatch.delenv("WLIB_QPA_PLATFORM", raising=False)
+    monkeypatch.delenv("WLIB_OWNED_ENV", raising=False)
 
     result = main.configure_qt_runtime_environment()
 
     assert result["qt_qpa_platform"] == "xcb"
     assert result["source"] == "auto-x11"
     assert os.environ["QT_QPA_PLATFORM"] == "xcb"
+    assert os.environ["WLIB_OWNED_ENV"] == "QT_QPA_PLATFORM"
 
 
 def test_configure_qt_runtime_environment_keeps_native_platform_on_windows(
@@ -88,6 +92,7 @@ def test_configure_qt_runtime_environment_keeps_native_platform_on_windows(
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
     monkeypatch.delenv("WLIB_QPA_PLATFORM", raising=False)
+    monkeypatch.delenv("WLIB_OWNED_ENV", raising=False)
 
     result = main.configure_qt_runtime_environment()
 
@@ -102,12 +107,29 @@ def test_configure_qt_runtime_environment_honors_override(monkeypatch):
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.setenv("WLIB_QPA_PLATFORM", "xcb")
     monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.delenv("WLIB_OWNED_ENV", raising=False)
 
     result = main.configure_qt_runtime_environment()
 
     assert result["qt_qpa_platform"] == "xcb"
     assert result["source"] == "override"
     assert os.environ["QT_QPA_PLATFORM"] == "xcb"
+    assert os.environ["WLIB_OWNED_ENV"] == "QT_QPA_PLATFORM"
+
+
+def test_configure_qt_runtime_environment_keeps_user_platform_unmarked(monkeypatch):
+    monkeypatch.setattr(main, "is_linux", lambda: True)
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "wayland")
+    monkeypatch.delenv("WLIB_QPA_PLATFORM", raising=False)
+    monkeypatch.delenv("WLIB_OWNED_ENV", raising=False)
+
+    result = main.configure_qt_runtime_environment()
+
+    assert result["source"] == "existing"
+    assert os.environ["QT_QPA_PLATFORM"] == "wayland"
+    assert "WLIB_OWNED_ENV" not in os.environ
 
 
 def test_configure_ssl_certificates_drops_missing_configured_bundles(

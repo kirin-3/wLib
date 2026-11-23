@@ -27,9 +27,11 @@ from core.host_platform import (
     get_default_wine_prefix,
     get_extension_dir,
     get_proton_dir,
+    host_open_env,
     host_which,
     is_linux,
     is_windows,
+    open_on_host,
     open_windows_system_target,
 )
 from core.game_tools import game_tool_folder
@@ -481,25 +483,7 @@ class ApiBase:
         return str(manifest_data.get("version", "")).strip()
 
     def _build_host_open_env(self) -> dict[str, str]:
-        clean_env: dict[str, str] = os.environ.copy()
-
-        for var in (
-            "APPIMAGE",
-            "APPDIR",
-            "ARGV0",
-            "APPIMAGE_SILENT_INSTALL",
-            "OWD",
-            "APPIMAGE_EXTRACT_AND_RUN",
-        ):
-            _ = clean_env.pop(var, None)
-
-        original_library_path = str(clean_env.get("LD_LIBRARY_PATH_ORIG") or "").strip()
-        if original_library_path:
-            clean_env["LD_LIBRARY_PATH"] = original_library_path
-        else:
-            _ = clean_env.pop("LD_LIBRARY_PATH", None)
-
-        return clean_env
+        return host_open_env()
 
     def _open_with_system_handler(
         self, target: str, missing_opener_error: str
@@ -510,41 +494,10 @@ class ApiBase:
                 return {"success": True}
             return {"success": False, "error": error or missing_opener_error}
 
-        import shutil
-        import subprocess
-
-        clean_env = self._build_host_open_env()
-        commands: list[list[str]] = [
-            ["xdg-open", target],
-            ["gio", "open", target],
-            ["kde-open5", target],
-            ["kde-open", target],
-            ["gnome-open", target],
-        ]
-
-        launch_errors: list[str] = []
-        for command in commands:
-            binary = shutil.which(command[0])
-            if not binary:
-                continue
-
-            resolved_command = [binary, *command[1:]]
-            try:
-                _ = subprocess.Popen(
-                    resolved_command,
-                    env=clean_env,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-                return {"success": True}
-            except Exception as e:
-                launch_errors.append(f"{binary}: {e}")
-
-        if launch_errors:
-            return {"success": False, "error": "; ".join(launch_errors)}
-
-        return {"success": False, "error": missing_opener_error}
+        opened, error = open_on_host(target, missing_opener_error)
+        if opened:
+            return {"success": True}
+        return {"success": False, "error": error}
 
     def _open_path_with_system_handler(self, path: str) -> OpenPathResult:
         normalized_path = os.path.abspath(path)

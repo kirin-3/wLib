@@ -333,3 +333,183 @@ def test_host_which_inside_flatpak_ignores_login_profile_output(monkeypatch):
     no_path = MagicMock(returncode=0, stdout="Welcome back!\n")
     with patch("subprocess.run", return_value=no_path):
         assert host_platform.host_which("unrar") is None
+
+
+def _frozen_bundle(monkeypatch, tmp_path):
+    bundle = tmp_path / "_internal"
+    (bundle / "PyQt6" / "Qt6" / "plugins").mkdir(parents=True)
+    (bundle / "PyQt6" / "Qt6" / "qml").mkdir(parents=True)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
+    return bundle
+
+
+def test_host_open_env_removes_bundled_qt_paths(monkeypatch, tmp_path):
+    from core.host_platform import host_open_env
+
+    bundle = _frozen_bundle(monkeypatch, tmp_path)
+    env = host_open_env(
+        {
+            "QT_PLUGIN_PATH": str(bundle / "PyQt6" / "Qt6" / "plugins"),
+            "QML2_IMPORT_PATH": str(bundle / "PyQt6" / "Qt6" / "qml"),
+            "LD_LIBRARY_PATH": str(bundle),
+            "LD_LIBRARY_PATH_ORIG": "/host/lib",
+            "HOME": "/home/user",
+        }
+    )
+
+    assert env == {"LD_LIBRARY_PATH": "/host/lib", "HOME": "/home/user"}
+
+
+def test_host_open_env_keeps_user_qt_paths_in_dev_mode(monkeypatch):
+    from core.host_platform import host_open_env
+
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    env = host_open_env({"QT_PLUGIN_PATH": "/opt/myqt/plugins"})
+
+    assert env["QT_PLUGIN_PATH"] == "/opt/myqt/plugins"
+
+
+def test_host_open_env_keeps_only_user_entries_of_mixed_path(monkeypatch, tmp_path):
+    from core.host_platform import host_open_env
+
+    bundle = _frozen_bundle(monkeypatch, tmp_path)
+    appdir = tmp_path / "mount"
+    appdir.mkdir()
+    value = os.pathsep.join(
+        [
+            "/opt/myqt/plugins",
+            str(bundle / "PyQt6" / "Qt6" / "plugins"),
+            str(appdir / "usr" / "plugins"),
+        ]
+    )
+    env = host_open_env({"QT_PLUGIN_PATH": value, "APPDIR": str(appdir)})
+
+    assert env["QT_PLUGIN_PATH"] == "/opt/myqt/plugins"
+    assert "APPDIR" not in env
+
+
+def test_host_open_env_removes_only_owned_values(monkeypatch):
+    from core.host_platform import WLIB_OWNED_ENV, host_open_env, mark_wlib_owned
+
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    owned = {
+        "QT_QPA_PLATFORM": "xcb",
+        "QT_QUICK_BACKEND": "software",
+        "WLIB_QPA_PLATFORM": "xcb",
+    }
+    mark_wlib_owned(owned, "QT_QPA_PLATFORM")
+    mark_wlib_owned(owned, "QT_QUICK_BACKEND")
+    mark_wlib_owned(owned, "QT_QPA_PLATFORM")
+    assert owned[WLIB_OWNED_ENV] == "QT_QPA_PLATFORM,QT_QUICK_BACKEND"
+    assert host_open_env(owned) == {}
+
+    user = host_open_env({"QT_QPA_PLATFORM": "wayland", "QT_QUICK_BACKEND": "rhi"})
+    assert user == {"QT_QPA_PLATFORM": "wayland", "QT_QUICK_BACKEND": "rhi"}
+
+
+def test_host_open_env_drops_only_empty_style_override(monkeypatch):
+    from core.host_platform import host_open_env
+
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    assert "QT_STYLE_OVERRIDE" not in host_open_env({"QT_STYLE_OVERRIDE": ""})
+    assert host_open_env({"QT_STYLE_OVERRIDE": "kvantum"}) == {
+        "QT_STYLE_OVERRIDE": "kvantum"
+    }
+
+
+def _opener_process(*returncodes):
+    process = MagicMock()
+    process.poll.side_effect = list(returncodes)
+    return process
+
+
+@pytest.fixture
+def host_openers(monkeypatch):
+    import core.host_platform as host_platform
+
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    monkeypatch.setattr(host_platform, "OPENER_START_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr(host_platform, "_OPENER_POLL_SECONDS", 0.01)
+    installed = {"xdg-open", "gio", "kde-open"}
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda name, path=None: f"/usr/bin/{name}" if name in installed else None,
+    )
+    return host_platform
+
+
+def test_open_on_host_returns_at_once_on_exit_zero(host_openers):
+    with patch("subprocess.Popen", return_value=_opener_process(0)) as popen:
+        assert host_openers.open_on_host("/games/g", "none") == (True, "")
+    popen.assert_called_once()
+    assert popen.call_args.args[0] == ["/usr/bin/xdg-open", "/games/g"]
+    assert popen.call_args.kwargs["start_new_session"] is True
+
+
+def test_open_on_host_falls_back_after_early_failure(host_openers):
+    processes = [_opener_process(None, 4), _opener_process(0)]
+    with patch("subprocess.Popen", side_effect=processes) as popen:
+        assert host_openers.open_on_host("https://f95zone.to/t", "none") == (True, "")
+    assert [call.args[0] for call in popen.call_args_list] == [
+        ["/usr/bin/xdg-open", "https://f95zone.to/t"],
+        ["/usr/bin/gio", "open", "https://f95zone.to/t"],
+    ]
+
+
+def test_open_on_host_counts_running_opener_as_started(host_openers):
+    running = MagicMock()
+    running.poll.return_value = None
+    with (
+        patch("subprocess.Popen", return_value=running) as popen,
+        patch("threading.Thread") as thread,
+    ):
+        assert host_openers.open_on_host("/games/g", "none") == (True, "")
+    popen.assert_called_once()
+    assert thread.call_args.kwargs["target"] is running.wait
+    thread.return_value.start.assert_called_once()
+
+
+def test_open_on_host_reports_every_failure(host_openers):
+    processes = [_opener_process(4), _opener_process(2), _opener_process(-6)]
+    with patch("subprocess.Popen", side_effect=processes):
+        opened, error = host_openers.open_on_host("/games/g", "none")
+    assert opened is False
+    assert error == (
+        "xdg-open exited with code 4; gio exited with code 2; "
+        "kde-open exited with code -6"
+    )
+
+
+@pytest.mark.parametrize(
+    "spawn_error",
+    [OSError("denied"), ValueError("embedded null byte"), subprocess.SubprocessError()],
+)
+def test_open_on_host_falls_back_after_spawn_error(host_openers, spawn_error):
+    with patch(
+        "subprocess.Popen", side_effect=[spawn_error, _opener_process(0)]
+    ) as popen:
+        assert host_openers.open_on_host("/games/g", "none") == (True, "")
+    assert popen.call_count == 2
+
+
+def test_open_on_host_without_openers(host_openers, monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name, path=None: None)
+    with patch("subprocess.Popen") as popen:
+        assert host_openers.open_on_host("/games/g", "No opener") == (
+            False,
+            "No opener",
+        )
+    popen.assert_not_called()
+
+
+def test_open_on_host_uses_clean_environment(host_openers, monkeypatch, tmp_path):
+    bundle = _frozen_bundle(monkeypatch, tmp_path)
+    monkeypatch.setenv("QT_PLUGIN_PATH", str(bundle / "PyQt6" / "Qt6" / "plugins"))
+    monkeypatch.setenv("WLIB_OWNED_ENV", "QT_QPA_PLATFORM")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "xcb")
+    with patch("subprocess.Popen", return_value=_opener_process(0)) as popen:
+        assert host_openers.open_on_host("/games/g", "none")[0] is True
+    env = popen.call_args.kwargs["env"]
+    assert "QT_PLUGIN_PATH" not in env
+    assert "QT_QPA_PLATFORM" not in env
+    assert "WLIB_OWNED_ENV" not in env

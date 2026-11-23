@@ -1750,6 +1750,7 @@ def test_without_packaged_runtime_env_strips_python_and_qt_variables(monkeypatch
     monkeypatch.setenv("QT_PLUGIN_PATH", "/tmp/wlib/plugins")
     monkeypatch.setenv("QML2_IMPORT_PATH", "/tmp/wlib/qml")
     monkeypatch.setenv("WLIB_QPA_PLATFORM", "xcb")
+    monkeypatch.setenv("WLIB_OWNED_ENV", "QT_QPA_PLATFORM,QT_QUICK_BACKEND")
     monkeypatch.setenv("PYWEBVIEW_GUI", "qt")
 
     with (
@@ -1772,6 +1773,7 @@ def test_without_packaged_runtime_env_strips_python_and_qt_variables(monkeypatch
         "QT_PLUGIN_PATH",
         "QML2_IMPORT_PATH",
         "WLIB_QPA_PLATFORM",
+        "WLIB_OWNED_ENV",
         "PYWEBVIEW_GUI",
     ):
         assert var not in launched_env

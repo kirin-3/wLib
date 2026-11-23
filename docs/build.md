@@ -224,6 +224,7 @@ The Python backend mirrors this information to `<data dir>/renderer-diagnostics.
 Before launching the Python binary, the shared launcher:
 
 - Restores the host's `LD_LIBRARY_PATH` from `LD_LIBRARY_PATH_ORIG` to prevent bundled libraries from shadowing host GPU drivers
+- Adds `QT_QUICK_BACKEND` to `WLIB_OWNED_ENV` when the GPU check sets it and the user had not, so host programs that wLib opens do not inherit software rendering (`wlib.sh` does the same)
 - Configures SSL certificates from bundled certifi or system paths
 - Sets `WLIB_LAUNCH_LOG` for Python-side diagnostic mirroring
 - Sets `WLIB_APPIMAGE_LAUNCH_LOG` as a compatibility alias for AppImage launches

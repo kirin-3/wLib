@@ -40,6 +40,7 @@ from .host_platform import (
     host_x11_sockets,
     is_flatpak,
     is_windows,
+    mark_wlib_owned,
     no_console_window,
     open_windows_system_target,
     proton_compat_data_path as proton_compat_data_path,
@@ -806,6 +807,7 @@ def without_packaged_runtime_env(env_vars: dict[str, str]) -> dict[str, str]:
         "QT_PLUGIN_PATH",
         "QML2_IMPORT_PATH",
         "WLIB_QPA_PLATFORM",
+        "WLIB_OWNED_ENV",
         "PYWEBVIEW_GUI",
     ):
         _ = clean_env.pop(var, None)
@@ -2638,6 +2640,9 @@ class Launcher:
             player_env.update(user_env)
             if sandboxed:
                 # The sandbox is the security boundary; Chromium's own cannot nest.
+                if "QTWEBENGINE_DISABLE_SANDBOX" not in player_env:
+                    # Host programs the player opens must not inherit it.
+                    mark_wlib_owned(player_env, "QTWEBENGINE_DISABLE_SANDBOX")
                 player_env["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
             runtime_paths: tuple[str, ...] = ()
             command = player

@@ -6,6 +6,7 @@ import io
 import json
 import os
 import sqlite3
+import sys
 import ssl
 import tarfile
 import tempfile
@@ -1847,6 +1848,30 @@ def test_build_linux_browse_backends_skips_portal_when_unavailable(monkeypatch):
     assert [backend["name"] for backend in backends] == ["zenity", "kdialog"]
 
 
+def test_build_linux_browse_backends_drop_bundled_qt_paths(monkeypatch, tmp_path):
+    api = Api()
+    bundle = tmp_path / "_internal"
+    plugins = bundle / "PyQt6" / "Qt6" / "plugins"
+    plugins.mkdir(parents=True)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
+    monkeypatch.setenv("QT_PLUGIN_PATH", str(plugins))
+    monkeypatch.setenv("QT_QPA_PLATFORM", "xcb")
+    monkeypatch.setenv("WLIB_OWNED_ENV", "QT_QPA_PLATFORM")
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda command: "/usr/bin/kdialog" if command == "kdialog" else None,
+    )
+    monkeypatch.setattr(api, "_coerce_browse_directory", lambda _path: "/home/tester")
+
+    backends = api._build_linux_browse_backends("file", "")
+
+    assert [backend["name"] for backend in backends] == ["kdialog"]
+    env = backends[0]["env"]
+    assert "QT_PLUGIN_PATH" not in env
+    assert "QT_QPA_PLATFORM" not in env
+    assert "WLIB_OWNED_ENV" not in env
+
+
 def test_build_linux_browse_backends_uses_custom_file_filters(monkeypatch):
     api = Api()
 
@@ -2005,6 +2030,7 @@ def test_open_folder_uses_host_env_outside_appimage_runtime(monkeypatch, tmp_pat
     target_dir.mkdir()
 
     popen_mock = MagicMock()
+    popen_mock.return_value.poll.return_value = 0
     monkeypatch.setenv("APPIMAGE", "/tmp/wLib.AppImage")
     monkeypatch.setenv("APPDIR", "/tmp/.mount_wLib")
     monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/.mount_wLib/usr/bin/_internal")
@@ -2012,7 +2038,8 @@ def test_open_folder_uses_host_env_outside_appimage_runtime(monkeypatch, tmp_pat
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.setattr(
-        "shutil.which", lambda cmd: "/usr/bin/xdg-open" if cmd == "xdg-open" else None
+        "shutil.which",
+        lambda cmd, path=None: "/usr/bin/xdg-open" if cmd == "xdg-open" else None,
     )
     monkeypatch.setattr("subprocess.Popen", popen_mock)
 
@@ -2033,6 +2060,7 @@ def test_open_folder_uses_host_env_outside_appimage_runtime(monkeypatch, tmp_pat
 def test_open_in_browser_uses_host_env_outside_appimage_runtime(monkeypatch):
     api = Api()
     popen_mock = MagicMock()
+    popen_mock.return_value.poll.return_value = 0
 
     monkeypatch.setenv("APPIMAGE", "/tmp/wLib.AppImage")
     monkeypatch.setenv("APPDIR", "/tmp/.mount_wLib")
@@ -2041,7 +2069,8 @@ def test_open_in_browser_uses_host_env_outside_appimage_runtime(monkeypatch):
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.setattr(
-        "shutil.which", lambda cmd: "/usr/bin/xdg-open" if cmd == "xdg-open" else None
+        "shutil.which",
+        lambda cmd, path=None: "/usr/bin/xdg-open" if cmd == "xdg-open" else None,
     )
     monkeypatch.setattr("subprocess.Popen", popen_mock)
 
@@ -2062,7 +2091,7 @@ def test_open_in_browser_uses_host_env_outside_appimage_runtime(monkeypatch):
 def test_open_in_browser_returns_error_when_no_opener_found(monkeypatch):
     api = Api()
 
-    monkeypatch.setattr("shutil.which", lambda _cmd: None)
+    monkeypatch.setattr("shutil.which", lambda _cmd, path=None: None)
 
     result = api.open_in_browser("https://example.com")
 
@@ -2094,7 +2123,8 @@ def test_open_in_browser_returns_launch_error(monkeypatch):
     api = Api()
 
     monkeypatch.setattr(
-        "shutil.which", lambda cmd: "/usr/bin/xdg-open" if cmd == "xdg-open" else None
+        "shutil.which",
+        lambda cmd, path=None: "/usr/bin/xdg-open" if cmd == "xdg-open" else None,
     )
 
     def raise_popen(*_args, **_kwargs):
@@ -2108,11 +2138,30 @@ def test_open_in_browser_returns_launch_error(monkeypatch):
     assert "launch failed" in result.get("error", "")
 
 
+def test_open_in_browser_reports_opener_that_exits_with_error(monkeypatch):
+    import core.host_platform as host_platform
+
+    api = Api()
+    popen_mock = MagicMock()
+    popen_mock.return_value.poll.return_value = 4
+    monkeypatch.setattr(host_platform, "OPENER_START_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda cmd, path=None: "/usr/bin/xdg-open" if cmd == "xdg-open" else None,
+    )
+    monkeypatch.setattr("subprocess.Popen", popen_mock)
+
+    result = api.open_in_browser("https://example.com")
+
+    assert result == {"success": False, "error": "xdg-open exited with code 4"}
+
+
 def test_open_extension_folder_uses_host_env_outside_appimage_runtime(
     monkeypatch, tmp_path
 ):
     api = Api()
     popen_mock = MagicMock()
+    popen_mock.return_value.poll.return_value = 0
     persistent_dir = tmp_path / "extension"
     _redirect_extension_dir(monkeypatch, persistent_dir)
 
@@ -2122,7 +2171,7 @@ def test_open_extension_folder_uses_host_env_outside_appimage_runtime(
     monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/usr/lib:/lib")
     monkeypatch.setattr(
         "shutil.which",
-        lambda cmd: "/usr/bin/xdg-open" if cmd == "xdg-open" else None,
+        lambda cmd, path=None: "/usr/bin/xdg-open" if cmd == "xdg-open" else None,
     )
     monkeypatch.setattr("subprocess.Popen", popen_mock)
     result = api.open_extension_folder()

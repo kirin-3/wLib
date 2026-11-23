@@ -211,8 +211,22 @@ detect_gpu() {
 }
 
 # Run wLib
+# Record a variable that wLib set and the user did not, so host programs that
+# wLib starts do not inherit it (host_open_env in core/host_platform.py).
+mark_wlib_owned() {
+    case ",${WLIB_OWNED_ENV:-}," in
+        *",$1,"*) ;;
+        *) WLIB_OWNED_ENV="${WLIB_OWNED_ENV:+$WLIB_OWNED_ENV,}$1" ;;
+    esac
+    export WLIB_OWNED_ENV
+}
+
 echo "🚀 Starting wLib..."
+quick_backend_was_set="${QT_QUICK_BACKEND+set}"
 detect_gpu
+if [ -z "$quick_backend_was_set" ] && [ -n "${QT_QUICK_BACKEND+set}" ]; then
+    mark_wlib_owned QT_QUICK_BACKEND
+fi
 export DEV_MODE=0
 echo "   QT_QUICK_BACKEND=$QT_QUICK_BACKEND"
 echo "   Renderer mode: $GPU_RENDER_MODE"

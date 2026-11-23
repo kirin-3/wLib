@@ -6,7 +6,7 @@ import ntpath
 import shutil
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from typing import Literal, TypedDict, cast, final
 
 
@@ -285,6 +285,143 @@ def host_tool_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
     else:
         _ = clean.pop("LD_LIBRARY_PATH", None)
     return clean
+
+
+# Names of the variables that wLib set and the user did not, comma separated.
+# The launcher scripts, main.py and the web player launch write it; host
+# programs must not inherit those values (see host_open_env).
+WLIB_OWNED_ENV = "WLIB_OWNED_ENV"
+
+# The PyInstaller PyQt6 hook points these at the bundled Qt. A system Qt
+# program that reads them can load a bundled platform plugin and abort.
+_BUNDLE_PATH_VARS = ("QT_PLUGIN_PATH", "QML2_IMPORT_PATH")
+
+
+def mark_wlib_owned(env: MutableMapping[str, str], name: str) -> None:
+    """Record in `env` that wLib set `name`, so host programs do not get it."""
+    names = [item for item in env.get(WLIB_OWNED_ENV, "").split(",") if item]
+    if name not in names:
+        names.append(name)
+    env[WLIB_OWNED_ENV] = ",".join(names)
+
+
+def _bundle_roots(environ: Mapping[str, str]) -> tuple[str, ...]:
+    roots: list[str] = []
+    for root in (
+        str(getattr(sys, "_MEIPASS", "") or "").strip(),
+        str(environ.get("APPDIR") or "").strip(),
+    ):
+        if root:
+            roots.append(os.path.realpath(root))
+    return tuple(roots)
+
+
+def _is_inside(path: str, roots: Sequence[str]) -> bool:
+    real = os.path.realpath(path)
+    for root in roots:
+        try:
+            if os.path.commonpath((real, root)) == root:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def host_open_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Environment for host openers, file pickers and archive tools.
+
+    Starts from host_tool_env and also removes what wLib or its bundle set:
+    plugin and QML path entries inside the bundle, every name listed in
+    WLIB_OWNED_ENV, wLib's own WLIB_QPA_PLATFORM and the empty
+    QT_STYLE_OVERRIDE that pywebview sets. Values the user set stay.
+    """
+    source = dict(os.environ if environ is None else environ)
+    # Read APPDIR before host_tool_env removes it.
+    roots = _bundle_roots(source)
+    clean = host_tool_env(source)
+    for var in _BUNDLE_PATH_VARS:
+        value = clean.get(var)
+        if value is None:
+            continue
+        kept = [
+            entry
+            for entry in value.split(os.pathsep)
+            if entry and not _is_inside(entry, roots)
+        ]
+        if kept:
+            clean[var] = os.pathsep.join(kept)
+        else:
+            _ = clean.pop(var, None)
+    for name in clean.pop(WLIB_OWNED_ENV, "").split(","):
+        if name.strip():
+            _ = clean.pop(name.strip(), None)
+    _ = clean.pop("WLIB_QPA_PLATFORM", None)
+    if clean.get("QT_STYLE_OVERRIDE") == "":
+        _ = clean.pop("QT_STYLE_OVERRIDE", None)
+    return clean
+
+
+# How long an opener may run before wLib counts it as started. An opener that
+# exits with an error in this time is a failure and the next one is tried.
+OPENER_START_WAIT_SECONDS = 2.0
+_OPENER_POLL_SECONDS = 0.05
+_HOST_OPENERS: tuple[tuple[str, ...], ...] = (
+    ("xdg-open",),
+    ("gio", "open"),
+    ("kde-open5",),
+    ("kde-open",),
+    ("gnome-open",),
+)
+
+
+def _reap_in_background(process: subprocess.Popen[bytes]) -> None:
+    import threading
+
+    threading.Thread(
+        target=process.wait, name="wlib-opener-reaper", daemon=True
+    ).start()
+
+
+def open_on_host(target: str, missing_opener_error: str) -> tuple[bool, str]:
+    """Open a path or URL with the first host opener that works (Linux).
+
+    An opener counts as started when it exits with code 0, or is still
+    running after OPENER_START_WAIT_SECONDS. When it exits with another code
+    first (kde-open that aborts, for example), the next opener is tried.
+    """
+    import time
+
+    env = host_open_env()
+    errors: list[str] = []
+    for command in _HOST_OPENERS:
+        binary = shutil.which(command[0], path=env.get("PATH"))
+        if not binary:
+            continue
+        try:
+            process = subprocess.Popen(
+                [binary, *command[1:], target],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            errors.append(f"{binary}: {exc}")
+            continue
+        deadline = time.monotonic() + OPENER_START_WAIT_SECONDS
+        returncode = process.poll()
+        while returncode is None and time.monotonic() < deadline:
+            time.sleep(_OPENER_POLL_SECONDS)
+            returncode = process.poll()
+        if returncode is None:
+            _reap_in_background(process)
+            return True, ""
+        if returncode == 0:
+            return True, ""
+        errors.append(f"{command[0]} exited with code {returncode}")
+    if errors:
+        return False, "; ".join(errors)
+    return False, missing_opener_error
 
 
 def host_which(name: str) -> str | None:

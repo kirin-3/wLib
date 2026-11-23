@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core import game_sandbox
+from core.host_platform import host_open_env
 from core.web_launch import resolve_web_player
 from core.launcher import Launcher
 
@@ -146,7 +147,10 @@ def test_no_internet_and_sandbox_flags(game_dir, monkeypatch):
     player = argv[argv.index("--play-web") - 2 :]
     assert "--offline" in player and player[player.index("--links") + 1] == "ignore"
     assert "--sandboxed" in player
-    assert popen.call_args.kwargs["env"]["QTWEBENGINE_DISABLE_SANDBOX"] == "1"
+    player_env = popen.call_args.kwargs["env"]
+    assert player_env["QTWEBENGINE_DISABLE_SANDBOX"] == "1"
+    assert "QTWEBENGINE_DISABLE_SANDBOX" in player_env["WLIB_OWNED_ENV"].split(",")
+    assert "QTWEBENGINE_DISABLE_SANDBOX" not in host_open_env(player_env)
     profile = game_sandbox.web_player_folder(7)
     assert ["--bind", profile, profile] in [
         argv[i : i + 3] for i in range(len(argv) - 2)

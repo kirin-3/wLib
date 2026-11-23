@@ -44,7 +44,13 @@ from core.game_saves import (
     is_within,
     loose_save_files,
 )
-from core.host_platform import host_command, host_which, is_flatpak, no_console_window
+from core.host_platform import (
+    host_command,
+    host_open_env,
+    host_which,
+    is_flatpak,
+    no_console_window,
+)
 from core.versions import has_update, normalize_version
 
 _WINDOWS_RESERVED_NAMES = {
@@ -584,23 +590,8 @@ def _target_inside_staging(staging: str, entry: str) -> str:
 
 
 def build_host_open_env() -> dict[str, str]:
-    """Env for archive subprocesses (no AppImage library paths)."""
-    clean_env: dict[str, str] = os.environ.copy()
-    for var in (
-        "APPIMAGE",
-        "APPDIR",
-        "ARGV0",
-        "APPIMAGE_SILENT_INSTALL",
-        "OWD",
-        "APPIMAGE_EXTRACT_AND_RUN",
-    ):
-        _ = clean_env.pop(var, None)
-    original_library_path = str(clean_env.get("LD_LIBRARY_PATH_ORIG") or "").strip()
-    if original_library_path:
-        clean_env["LD_LIBRARY_PATH"] = original_library_path
-    else:
-        _ = clean_env.pop("LD_LIBRARY_PATH", None)
-    return clean_env
+    """Env for archive subprocesses (no bundled libraries or Qt settings)."""
+    return host_open_env()
 
 
 def _unescape_mountinfo(field: str) -> str:

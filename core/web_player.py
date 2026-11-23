@@ -13,11 +13,12 @@ import mimetypes
 import ntpath
 import os
 import sys
+import threading
 import unicodedata
 from collections.abc import Callable, Iterable, Set
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Literal, override
+from typing import Literal, final, override
 from urllib.parse import quote, unquote, urlsplit
 
 from core.host_platform import is_windows
@@ -344,31 +345,10 @@ def is_network_request(url: str) -> bool:
 
 
 def host_open_env(env: dict[str, str]) -> dict[str, str]:
-    """Environment for the system opener, without the AppImage's libraries."""
-    clean = dict(env)
-    for var in (
-        "APPIMAGE",
-        "APPDIR",
-        "ARGV0",
-        "APPIMAGE_SILENT_INSTALL",
-        "OWD",
-        "APPIMAGE_EXTRACT_AND_RUN",
-    ):
-        _ = clean.pop(var, None)
-    original = str(clean.pop("LD_LIBRARY_PATH_ORIG", "") or "").strip()
-    if original:
-        clean["LD_LIBRARY_PATH"] = original
-    else:
-        _ = clean.pop("LD_LIBRARY_PATH", None)
-    # The player's own Qt platform and Chromium flags do not belong to a browser.
-    for var in (
-        "QT_QPA_PLATFORM",
-        "QTWEBENGINE_CHROMIUM_FLAGS",
-        "QTWEBENGINE_DISABLE_SANDBOX",
-        "QT_PLUGIN_PATH",
-    ):
-        _ = clean.pop(var, None)
-    return clean
+    """Environment for the system opener, without the bundle's libraries and Qt settings."""
+    from core import host_platform
+
+    return host_platform.host_open_env(env)
 
 
 def open_url_on_host(url: str) -> bool:
@@ -384,34 +364,63 @@ def open_folder_on_host(path: str) -> bool:
 
 
 def _open_system_target(target: str) -> bool:
-    import shutil
-    import subprocess
+    from core import host_platform
 
     if is_windows():
-        from core.host_platform import open_windows_system_target
-
-        opened, _error = open_windows_system_target(target)
+        opened, _error = host_platform.open_windows_system_target(target)
         return bool(opened)
-    env = host_open_env(dict(os.environ))
-    for command in (
-        ["xdg-open", target],
-        ["gio", "open", target],
-        ["kde-open", target],
-    ):
-        if not shutil.which(command[0], path=env.get("PATH")):
-            continue
-        try:
-            _ = subprocess.Popen(
-                command,
-                env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            return True
-        except OSError:
-            continue
-    return False
+    opened, _error = host_platform.open_on_host(target, "No opener found")
+    return opened
+
+
+def open_in_background(
+    open_target: Callable[[str], bool],
+    target: str,
+    on_failure: Callable[[str], None] | None = None,
+) -> threading.Thread:
+    """Run a host opener away from the Qt GUI thread.
+
+    The opener can wait up to host_platform.OPENER_START_WAIT_SECONDS, which
+    would freeze the player window. `on_failure(target)` runs on the worker
+    thread; use gui_thread_relay to reach Qt widgets from it.
+    """
+
+    def work() -> None:
+        if not open_target(target) and on_failure is not None:
+            on_failure(target)
+
+    thread = threading.Thread(target=work, name="wlib-player-opener", daemon=True)
+    thread.start()
+    return thread
+
+
+def gui_thread_relay(callback: Callable[[str], None]) -> Callable[[str], None]:
+    """Return a function that any thread can call to run `callback` on the GUI thread.
+
+    Call this on the GUI thread: the relay object lives there, and the queued
+    connection delivers each call through that thread's event loop.
+    """
+    from PyQt6.QtCore import QObject, pyqtSignal
+
+    @final
+    class _Relay(QObject):
+        called = pyqtSignal(str)
+
+        def __init__(self) -> None:
+            super().__init__()
+            # The receiver is this object, which lives on the GUI thread, so an
+            # emit from another thread is queued to the GUI thread.
+            _ = self.called.connect(self.deliver)  # pyright: ignore[reportUnknownMemberType]
+
+        def deliver(self, text: str) -> None:
+            callback(text)
+
+    relay = _Relay()
+
+    def emit(text: str) -> None:
+        relay.called.emit(text)
+
+    return emit
 
 
 def ruffle_root() -> str:
@@ -526,7 +535,7 @@ def run(args: PlayerArgs) -> int:
                 info.block(True)
 
     def open_externally(url: str) -> None:
-        _ = open_url_on_host(url)
+        _ = open_in_background(open_url_on_host, url)
 
     class GamePage(QWebEnginePage):
         last_pick_folder: str | None = None
@@ -747,9 +756,11 @@ def run(args: PlayerArgs) -> int:
                     clipboard = app.clipboard()
                     if clipboard is not None:
                         clipboard.setText(saved_path)
-                elif not open_folder_on_host(os.path.dirname(saved_path)):
-                    show_export_message(
-                        "Could not open exports folder", os.path.dirname(saved_path)
+                else:
+                    _ = open_in_background(
+                        open_folder_on_host,
+                        os.path.dirname(saved_path),
+                        report_folder_failure,
                     )
 
             action = message.addButton(
@@ -760,6 +771,10 @@ def run(args: PlayerArgs) -> int:
                 _ = action.clicked.connect(use_saved_path)  # pyright: ignore[reportUnknownMemberType]
         message.setWindowModality(Qt.WindowModality.NonModal)
         message.show()
+
+    report_folder_failure = gui_thread_relay(
+        lambda folder: show_export_message("Could not open exports folder", folder)
+    )
 
     taken: set[str] = set()
 

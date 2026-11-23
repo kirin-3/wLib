@@ -84,6 +84,7 @@ from core.host_platform import (  # noqa: E402
     get_legacy_browser_dirs,
     is_linux,
     is_windows,
+    mark_wlib_owned,
 )
 
 APP_DATA_DIR = get_data_dir()
@@ -386,7 +387,10 @@ def configure_qt_runtime_environment() -> dict[str, str]:
     linux_host = is_linux()
 
     if override_platform:
+        # The override replaces a user QT_QPA_PLATFORM too, so host programs
+        # get neither value; the user chose a wLib-only setting.
         os.environ["QT_QPA_PLATFORM"] = override_platform
+        mark_wlib_owned(os.environ, "QT_QPA_PLATFORM")
         selected_platform = override_platform
         source = "override"
     elif existing_platform:
@@ -398,6 +402,7 @@ def configure_qt_runtime_environment() -> dict[str, str]:
     elif linux_host and (session_type == "x11" or display):
         selected_platform = "xcb"
         os.environ["QT_QPA_PLATFORM"] = selected_platform
+        mark_wlib_owned(os.environ, "QT_QPA_PLATFORM")
         source = "auto-x11"
     else:
         selected_platform = ""

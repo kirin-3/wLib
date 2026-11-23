@@ -283,11 +283,19 @@ def test_host_open_env_drops_bundled_libs() -> None:
             "APPDIR": "/a",
             "LD_LIBRARY_PATH": "/a/lib",
             "LD_LIBRARY_PATH_ORIG": "/o",
+            "QT_PLUGIN_PATH": "/a/usr/plugins",
             "QT_QPA_PLATFORM": "xcb",
+            "QTWEBENGINE_DISABLE_SANDBOX": "1",
+            "WLIB_OWNED_ENV": "QT_QPA_PLATFORM,QTWEBENGINE_DISABLE_SANDBOX",
             "HOME": "/h",
         }
     )
     assert env == {"LD_LIBRARY_PATH": "/o", "HOME": "/h"}
+
+
+def test_host_open_env_keeps_user_qt_platform() -> None:
+    env = web_player.host_open_env({"QT_QPA_PLATFORM": "xcb", "HOME": "/h"})
+    assert env == {"QT_QPA_PLATFORM": "xcb", "HOME": "/h"}
 
 
 def test_open_url_on_host_rejects_other_schemes() -> None:
@@ -304,10 +312,27 @@ def test_open_folder_on_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         patch("shutil.which", side_effect=[None, "/usr/bin/gio"]),
         patch("subprocess.Popen") as popen,
     ):
+        popen.return_value.poll.return_value = 0
         assert web_player.open_folder_on_host(str(tmp_path))
-    assert popen.call_args.args[0] == ["gio", "open", str(tmp_path)]
+    assert popen.call_args.args[0] == ["/usr/bin/gio", "open", str(tmp_path)]
     assert popen.call_args.kwargs["env"]["LD_LIBRARY_PATH"] == "/host/lib"
     assert "APPDIR" not in popen.call_args.kwargs["env"]
+
+
+def test_open_folder_on_host_reports_failing_openers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import core.host_platform as host_platform
+
+    monkeypatch.setattr(host_platform, "OPENER_START_WAIT_SECONDS", 0.05)
+    with (
+        patch("core.web_player.is_windows", return_value=False),
+        patch("shutil.which", return_value="/usr/bin/opener"),
+        patch("subprocess.Popen") as popen,
+    ):
+        popen.return_value.poll.return_value = 4
+        assert web_player.open_folder_on_host(str(tmp_path)) is False
+    assert popen.call_count == 5
 
 
 def test_open_folder_on_windows(tmp_path: Path) -> None:
@@ -376,3 +401,57 @@ def test_literal_percent_names_decode_once(game: Path, tmp_path: Path) -> None:
         ["--root", str(game), "--entry", "a%20b.html", "--profile", str(tmp_path / "p")]
     )
     assert args.entry == "a%20b.html"
+
+
+def test_open_in_background_reports_failure_from_worker_thread() -> None:
+    import threading
+
+    failures: list[tuple[str, bool]] = []
+
+    def failing_opener(target: str) -> bool:
+        return False
+
+    thread = web_player.open_in_background(
+        failing_opener,
+        "/exports",
+        lambda target: failures.append(
+            (target, threading.current_thread() is threading.main_thread())
+        ),
+    )
+    thread.join(timeout=2)
+    assert thread.daemon is True
+    assert failures == [("/exports", False)]
+
+    ok = web_player.open_in_background(
+        lambda _target: True, "/exports", failures.append
+    )
+    ok.join(timeout=2)
+    assert len(failures) == 1
+
+
+def test_gui_thread_relay_runs_callback_on_gui_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    import time
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtCore import QCoreApplication
+    from PyQt6.QtGui import QGuiApplication
+
+    app = QCoreApplication.instance() or QGuiApplication([])
+    assert app is not None
+    received: list[tuple[str, bool]] = []
+    relay = web_player.gui_thread_relay(
+        lambda text: received.append(
+            (text, threading.current_thread() is threading.main_thread())
+        )
+    )
+
+    thread = web_player.open_in_background(lambda _target: False, "/exports", relay)
+    thread.join(timeout=2)
+    assert received == []  # Queued: nothing runs until the GUI loop does.
+    deadline = time.monotonic() + 2
+    while not received and time.monotonic() < deadline:
+        app.processEvents()
+    assert received == [("/exports", True)]
