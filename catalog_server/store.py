@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS f95_thread_details (
     fetched_at TEXT NOT NULL,
     status TEXT NOT NULL,
     overview TEXT,
+    rating_count INTEGER,
     original_title TEXT,
     aliases TEXT NOT NULL DEFAULT '[]',
     language TEXT,
@@ -288,6 +289,11 @@ class CatalogStore:
             str(row[1])
             for row in _rows(self.conn.execute("PRAGMA table_info(f95_thread_details)"))
         }
+        if "rating_count" not in details:
+            with self.conn:
+                _ = self.conn.execute(
+                    "ALTER TABLE f95_thread_details ADD COLUMN rating_count INTEGER"
+                )
         if "languages" not in details:
             with self.conn:
                 _ = self.conn.execute(
@@ -431,12 +437,13 @@ class CatalogStore:
         Changed means a feed `ts` newer than the stored details, or a thread
         never read whose `ts` is newer than `since_ts`.
         """
-        changed = "(d.thread_id IS NOT NULL OR t.ts > :since)"
+        changed = "(t.ts > d.thread_ts OR (d.thread_id IS NULL AND t.ts > :since))"
         rows = self.conn.execute(
             "SELECT t.thread_id, t.ts FROM f95_threads t "
             + "LEFT JOIN f95_thread_details d ON d.thread_id = t.thread_id "
             + "WHERE t.removed_at IS NULL AND t.ts IS NOT NULL "
-            + "AND (d.thread_id IS NULL OR t.ts > d.thread_ts) "
+            + "AND (d.thread_id IS NULL OR t.ts > d.thread_ts "
+            + "OR (d.status = 'ok' AND d.rating_count IS NULL)) "
             + f"ORDER BY CASE WHEN {changed} THEN 0 ELSE 1 END, "
             + f"CASE WHEN {changed} THEN t.ts ELSE COALESCE(t.views, 0) END DESC, "
             + "t.thread_id LIMIT :limit",
@@ -453,6 +460,7 @@ class CatalogStore:
             if details["status"] != "ok":
                 kept = self.conn.execute(
                     "UPDATE f95_thread_details SET thread_ts = ?, fetched_at = ?, kept_after_failure = 1 "
+                    + ", rating_count = COALESCE(rating_count, 0) "
                     + "WHERE thread_id = ? AND status = 'ok'",
                     (thread_ts, now, thread_id),
                 )
@@ -460,8 +468,8 @@ class CatalogStore:
                     return 1
             _ = self.conn.execute(
                 "INSERT OR REPLACE INTO f95_thread_details (thread_id, thread_ts, fetched_at, "
-                + "status, overview, original_title, aliases, language, languages, external_ids) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                + "status, overview, original_title, aliases, language, languages, external_ids, rating_count) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     thread_id,
                     thread_ts,
@@ -473,6 +481,7 @@ class CatalogStore:
                     details.get("language"),
                     json.dumps(details.get("languages") or [], ensure_ascii=False),
                     json.dumps(details.get("external_ids") or {}, ensure_ascii=False),
+                    details.get("rating_count", 0),
                 ),
             )
         return 1
