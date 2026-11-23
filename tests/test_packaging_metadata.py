@@ -52,9 +52,9 @@ def test_appimage_build_stages_icon_assets_for_desktop_integration():
 
     assert "$APPDIR/usr/share/icons/hicolor/scalable/apps/wlib.svg" in build_script
     assert "$APPDIR/usr/share/icons/hicolor/256x256/apps/wlib.png" in build_script
-    assert 'cp "$PROJECT_DIR/wlib.png" "$APPDIR/wlib.png"' in build_script
-    assert 'cp "$PROJECT_DIR/wlib.png" "$APPDIR/.DirIcon"' in build_script
-    assert 'cp "$PROJECT_DIR/icon.svg" "$APPDIR/.DirIcon"' not in build_script
+    assert 'install -m 644 "$PROJECT_DIR/wlib.png" "$APPDIR/wlib.png"' in build_script
+    assert 'install -m 644 "$PROJECT_DIR/wlib.png" "$APPDIR/.DirIcon"' in build_script
+    assert '"$PROJECT_DIR/icon.svg" "$APPDIR/.DirIcon"' not in build_script
 
 
 def test_appimage_build_keeps_qt_xcb_util_libs_and_catalog_name():
@@ -190,3 +190,15 @@ def test_aur_generator_escapes_backslashes_in_substitutions():
     # (\S -> S), silently corrupting values such as a maintainer name with a
     # backslash. Backslashes must be doubled before &-escaping.
     assert "'s/\\\\/\\\\\\\\/g'" in generator
+
+
+def test_build_script_makes_package_and_appdir_readable_for_all_users():
+    build_script = (PROJECT_ROOT / "scripts/build.sh").read_text(encoding="utf-8")
+
+    # `cp` keeps a checkout's 0700 modes; appimagetool then refuses the
+    # AppDir, and a root-owned system install is unreadable for users.
+    assert 'chmod -R u+rwX,go+rX,go-w "$BUILD_DIR/$PACKAGE_NAME"' in build_script
+    assert 'chmod -R u+rwX,go+rX,go-w "$APPDIR"' in build_script
+    for source in ("wlib.desktop", "wlib.png", "icon.svg", "LICENSE"):
+        assert f"cp {source} " not in build_script
+        assert f'cp "$PROJECT_DIR/{source}"' not in build_script

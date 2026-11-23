@@ -336,12 +336,19 @@ cp -a dist/wlib-bin/. "$BUILD_DIR/$PACKAGE_NAME/"
 # ── Assemble Package ──
 echo "📋 Assembling package..."
 
-# Desktop file + icon
-cp wlib.desktop "$BUILD_DIR/$PACKAGE_NAME/"
-if [ -f "wlib.png" ]; then cp wlib.png "$BUILD_DIR/$PACKAGE_NAME/"; fi
-if [ -f "icon.svg" ]; then cp icon.svg "$BUILD_DIR/$PACKAGE_NAME/"; fi
-cp LICENSE "$BUILD_DIR/$PACKAGE_NAME/"
+# Desktop file + icon. `install -m 644` sets the mode: `cp` would keep a
+# checkout's file mode, and a 0700 file is unreadable for other users.
+install -m 644 wlib.desktop "$BUILD_DIR/$PACKAGE_NAME/"
+if [ -f "wlib.png" ]; then install -m 644 wlib.png "$BUILD_DIR/$PACKAGE_NAME/"; fi
+if [ -f "icon.svg" ]; then install -m 644 icon.svg "$BUILD_DIR/$PACKAGE_NAME/"; fi
+install -m 644 LICENSE "$BUILD_DIR/$PACKAGE_NAME/"
 install -m 755 packaging/wlib-launcher "$BUILD_DIR/$PACKAGE_NAME/wlib"
+
+# Every user must be able to read the package (system installs are owned by
+# root, and appimagetool rejects files others cannot read). Wheels and
+# checkouts can carry 0700 modes, for example PyQt6's
+# Qt6/resources/locales folder. X keeps data files non-executable.
+chmod -R u+rwX,go+rX,go-w "$BUILD_DIR/$PACKAGE_NAME"
 
 # Clean up pyinstaller temp files
 rm -rf build/wlib-bin dist/wlib-bin wlib-bin.spec
@@ -367,22 +374,22 @@ mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications"
 cp -a "$BUILD_DIR/$PACKAGE_NAME"/. "$APPDIR/usr/bin/"
 
 # Desktop file + icon
-cp "$PROJECT_DIR/wlib.desktop" "$APPDIR/usr/share/applications/"
-cp "$PROJECT_DIR/wlib.desktop" "$APPDIR/"
+install -m 644 "$PROJECT_DIR/wlib.desktop" "$APPDIR/usr/share/applications/"
+install -m 644 "$PROJECT_DIR/wlib.desktop" "$APPDIR/"
 
 # Install both PNG and SVG icons for desktop integration. AppImage thumbnailers
 # expect .DirIcon to be a PNG even when the desktop icon also has an SVG source.
 if [ -f "$PROJECT_DIR/wlib.png" ]; then
     mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-    cp "$PROJECT_DIR/wlib.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/wlib.png"
-    cp "$PROJECT_DIR/wlib.png" "$APPDIR/wlib.png"
-    cp "$PROJECT_DIR/wlib.png" "$APPDIR/.DirIcon"
+    install -m 644 "$PROJECT_DIR/wlib.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/wlib.png"
+    install -m 644 "$PROJECT_DIR/wlib.png" "$APPDIR/wlib.png"
+    install -m 644 "$PROJECT_DIR/wlib.png" "$APPDIR/.DirIcon"
 fi
 
 if [ -f "$PROJECT_DIR/icon.svg" ]; then
     mkdir -p "$APPDIR/usr/share/icons/hicolor/scalable/apps"
-    cp "$PROJECT_DIR/icon.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/wlib.svg"
-    cp "$PROJECT_DIR/icon.svg" "$APPDIR/wlib.svg"
+    install -m 644 "$PROJECT_DIR/icon.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/wlib.svg"
+    install -m 644 "$PROJECT_DIR/icon.svg" "$APPDIR/wlib.svg"
 fi
 
 # AppRun — the entry point for the AppImage
@@ -395,6 +402,8 @@ export WLIB_LAUNCHER_NAME="AppImage"
 exec "$SELF_DIR/usr/bin/wlib" "$@"
 APPRUN_EOF
 chmod +x "$APPDIR/AppRun"
+# appimagetool refuses files and folders that other users cannot read.
+chmod -R u+rwX,go+rX,go-w "$APPDIR"
 
 # Download appimagetool if not present
 APPIMAGETOOL="$BUILD_DIR/appimagetool"
