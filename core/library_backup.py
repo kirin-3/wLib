@@ -10,6 +10,7 @@ import ntpath
 import os
 import re
 import sqlite3
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from datetime import datetime, UTC
@@ -589,24 +590,40 @@ def write_library_backup(
     document = (
         encrypt_library_backup(backup, passphrase) if passphrase is not None else backup
     )
-    tmp_path = f"{output_path}.tmp"
+    parent_dir = os.path.dirname(output_path) or "."
+    tmp_path: str | None = None
 
     try:
-        with open(tmp_path, "w", encoding="utf-8") as backup_file:
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".wlib-backup-", suffix=".tmp", dir=parent_dir
+        )
+        try:
+            backup_file = os.fdopen(fd, "w", encoding="utf-8")
+        except BaseException:
+            os.close(fd)
+            raise
+        with backup_file:
             json.dump(document, backup_file, ensure_ascii=False, indent=2)
             _ = backup_file.write("\n")
             backup_file.flush()
             os.fsync(backup_file.fileno())
         os.replace(tmp_path, output_path)
     except OSError as exc:
-        try:
-            if os.path.exists(tmp_path):
+        if tmp_path is not None:
+            try:
                 os.remove(tmp_path)
-        except OSError:
-            pass
+            except OSError:
+                pass
         raise BackupValidationError(
             f"Could not write export file: {exc}", "write_failed"
         ) from exc
+    except BaseException:
+        if tmp_path is not None:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
 
     return {
         "path": output_path,
@@ -1770,7 +1787,7 @@ def _update_game_row(
         row = cast(
             sqlite3.Row | None,
             cursor.execute(
-                "SELECT lc_url FROM games WHERE id = ? AND lc_thread_completed IS NOT NULL",
+                "SELECT lc_url FROM games WHERE id = ? AND (lc_thread_completed IS NOT NULL OR lc_thread_completed_at IS NOT NULL)",
                 (game_id,),
             ).fetchone(),
         )
@@ -1779,6 +1796,7 @@ def _update_game_row(
             new_thread = lewdcorner.extract_thread_id(safe_fields["lc_url"])
             if old_thread != new_thread:
                 safe_fields["lc_thread_completed"] = None
+                safe_fields["lc_thread_completed_at"] = None
 
     set_clause = ", ".join(f"{key} = ?" for key in safe_fields)
     values = tuple(safe_fields.values()) + (game_id,)

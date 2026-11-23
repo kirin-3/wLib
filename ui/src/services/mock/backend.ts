@@ -1091,7 +1091,7 @@ export class MockBackend {
       case "unlock_sync": {
         let stored: LibrarySyncStatus = {};
         try { stored = JSON.parse(localStorage.getItem("wlib-mock-sync") || "{}"); } catch { /* Start with sync off when mock data is invalid. */ }
-        const status: LibrarySyncStatus = { success: true, mock: true, state: "off", location: "", folder_path: "", account: "", encrypted: false, last_synced_at: "", last_device: "", last_error: "", dropbox_available: true, dropbox_unavailable_reason: "", gdrive_available: true, gdrive_unavailable_reason: "", connecting: false, ...stored };
+        const status: LibrarySyncStatus = { success: true, mock: true, state: "off", location: "", folder_path: "", account: "", encrypted: false, last_synced_at: "", last_device: "", last_error: "", signin_error: "", dropbox_available: true, dropbox_unavailable_reason: "", gdrive_available: true, gdrive_unavailable_reason: "", connecting: false, ...stored };
         // Every successful action goes through SyncManager.start_run(), which
         // puts the syncer in "syncing" before it answers; the poll then reads
         // the finished state. connect_* only starts the OAuth round-trip and

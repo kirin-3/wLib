@@ -222,3 +222,15 @@ def check_thread(
         return CheckResult(error=error or lc.LcUpdateError("lc_extract_failed"))
     current, newly_finished, newly_abandoned = saved
     return CheckResult(current, newly_finished, error, note, newly_abandoned, states)
+
+
+def store_feed_item(
+    game_id: int, url: str, stored_version: object, item: lc.LcVersion
+) -> None:
+    """Store a feed item of a game the check leaves out, without a request.
+
+    The feed read already paid for the item; an item without a usable
+    version is skipped, because reading the thread page would be a request.
+    """
+    if actionable_remote_version(item.version):
+        _ = check_thread(game_id, url, stored_version, {}, feed_item=item)

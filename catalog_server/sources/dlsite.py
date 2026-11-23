@@ -156,6 +156,13 @@ class DlsiteSource:
                 )
             ctx.upsert("dlsite_works", "product_id", rows)
             ctx.state.add_skipped_dlsite(dropped)
+            # A stored work the details omit is still listed. Keep it seen so
+            # the removal marking does not retire it; an all-ages work is in
+            # `dropped` and is not kept.
+            answered = {str(row["product_id"]) for row in rows} | set(dropped)
+            ctx.catalog.touch(
+                "dlsite_works", "product_id", stored - answered, ctx.now()
+            )
         return len([value for value in ids if value not in known]), total
 
     def incremental(self, ctx: SourceContext) -> None:

@@ -1279,12 +1279,17 @@ class LibraryMixin(ApiBase):
             title, version, creator = split_thread_title(
                 str(metadata.get("title") or "")
             )
-            # The scraper reports a missing version as "Unknown"; that is not a
-            # version and must not replace the version guessed from the archive
-            # name in the install dialog.
+            # The scraper reports a missing version as "Unknown", and a title
+            # can hold the same placeholder ("Game [Unknown] [Dev]"); that is
+            # not a version and must not replace the version guessed from the
+            # archive name in the install dialog.
             scraped_version = metadata.get("version")
-            if not version and self._is_actionable_remote_version(scraped_version):
-                version = str(scraped_version).strip()
+            if not self._is_actionable_remote_version(version):
+                version = (
+                    str(scraped_version).strip()
+                    if self._is_actionable_remote_version(scraped_version)
+                    else ""
+                )
             return {
                 "success": True,
                 "title": title,

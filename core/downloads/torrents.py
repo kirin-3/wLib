@@ -307,7 +307,6 @@ class TorrentSupervisor:
         self._proc: subprocess.Popen[str] | None = None
         self._ready = False
         self._closing = False
-        self._gave_up = False
         self._engine_missing = False
         self._restarts: list[float] = []
         self._open: set[Path] = set()
@@ -393,6 +392,17 @@ class TorrentSupervisor:
             delay = self._count_restart()
         self._schedule_restart(delay)
 
+    @property
+    def _gave_up(self) -> bool:
+        """Whether more than `RESTART_LIMIT` exits fall in the last `RESTART_WINDOW`.
+
+        Derived from the exit times, so the cutoff ends with the window and
+        cannot disable the restart of a helper that a later download started.
+        """
+        now = self._clock()
+        recent = [t for t in self._restarts if now - t < RESTART_WINDOW]
+        return len(recent) > RESTART_LIMIT
+
     def _count_restart(self) -> float | None:
         """Spend one restart from the budget; give the delay to the next try, or None."""
         now = self._clock()
@@ -400,7 +410,6 @@ class TorrentSupervisor:
         self._restarts.append(now)
         active = [j for j in self._jobs.values() if self._wants_helper(j)]
         if len(self._restarts) > RESTART_LIMIT:
-            self._gave_up = True
             for job in active:
                 if job.stage == "done":
                     self._end_seeding(job)
@@ -852,6 +861,19 @@ class TorrentSupervisor:
             self._save_state(job)
             return True
 
+    def _ensure_helper(self, job: _Job) -> bool:
+        """Whether a helper runs, or a scheduled restart will start one, for `job`.
+
+        Call with the lock held. A helper that failed to start at load, or one
+        that is gone with no restart pending, is started here; False means it
+        cannot start.
+        """
+        if self._proc is not None and self._proc.poll() is None:
+            return True
+        if job.restarting and not self._closing:
+            return True  # `_schedule_restart` has a timer; `ready` adds the job.
+        return self._spawn()
+
     def resume(self, job_id: str) -> bool:
         """Resume a paused job, or retry a failed one that still has its folder."""
         with self._lock:
@@ -866,13 +888,17 @@ class TorrentSupervisor:
                 if self._free_space(torrents_dir()) < LOW_DISK_BYTES:
                     job.error = MSG_LOW_DISK
                     return False
+                if not self._ensure_helper(job):
+                    self._fail(job, MSG_UNAVAILABLE)
+                    return False
                 job.auto_paused = False
                 job.error = ""
                 self._set_paused(job, False)
+                if self._ready and not job.added:
+                    self._add_to_helper(job)
                 self._save_state(job)
                 return True
             if job.stage == "failed" and job.info_hash:
-                self._gave_up = False
                 self._restarts.clear()
                 job.error = ""
                 job.paused = False
@@ -886,21 +912,54 @@ class TorrentSupervisor:
                 return True
             return False
 
-    def cancel(self, job_id: str) -> bool:
-        with self._lock:
-            job = self._jobs.get(job_id)
-            # A failed job keeps its partial data until cancelled.
-            if job is None or job.stage not in (*ACTIVE_STAGES, "failed"):
-                return False
-            job.cancel.set()
-            job.stage = job.phase = "cancelled"
-            job.error = ""
-            job.speed = job.upload_speed = job.peers = 0
-            removing = job.added and self._send({"cmd": "remove", "id": job.id})
+    def _begin_cancel(self, job_id: str) -> tuple[_Job, bool] | None:
+        """Mark a job cancelled and ask the helper to drop it; call with the lock held.
+
+        Returns the job and whether the helper was asked, or None when the job
+        is not active or failed (a failed job keeps its partial data until cancelled).
+        """
+        job = self._jobs.get(job_id)
+        if job is None or job.stage not in (*ACTIVE_STAGES, "failed"):
+            return None
+        job.cancel.set()
+        job.stage = job.phase = "cancelled"
+        job.error = ""
+        job.speed = job.upload_speed = job.peers = 0
+        return job, bool(job.added and self._send({"cmd": "remove", "id": job.id}))
+
+    def _finish_cancel(self, job: _Job, removing: bool) -> None:
+        # The wait must not hold the lock: the helper's answer needs it.
         if removing:
             _ = job.removed.wait(REMOVE_WAIT_SECONDS)
         with self._lock:
             self._delete_folder(job)
+
+    def cancel(self, job_id: str) -> bool:
+        with self._lock:
+            begun = self._begin_cancel(job_id)
+        if begun is None:
+            return False
+        self._finish_cancel(*begun)
+        return True
+
+    def remove(self, job_id: str) -> bool:
+        """Remove a torrent the queue dropped: cancel it, or discard it once finished.
+
+        The stage is read and acted on under one lock, so a `finished` event
+        cannot slip in between and leave a removed torrent for the next start
+        to adopt again. A seeding torrent or one held by an install dialog
+        keeps its files and is marked removed (see `discard`).
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return False
+            if job.stage == "done":
+                return self.discard(job_id)
+            begun = self._begin_cancel(job_id)
+        if begun is None:
+            return False
+        self._finish_cancel(*begun)
         return True
 
     def forget_game(self, game_id: int) -> None:
@@ -1130,7 +1189,16 @@ class TorrentSupervisor:
             for job in list(self._jobs.values()):
                 self._delete_if_unused(job)
         if resumed:
-            _ = self._spawn()
+            self._start_helper_after_load()
+
+    def _start_helper_after_load(self) -> None:
+        """Start the helper for restored jobs; a failed start is retried like a crash."""
+        with self._lock:
+            if self._spawn() or self._engine_missing:
+                return
+            # No helper means no exit callback: the failed start spends the budget too.
+            delay = self._count_restart()
+        self._schedule_restart(delay)
 
     def cleanup(self, *, now: float | None = None) -> None:
         """Delete orphaned torrent folders and paused or failed ones untouched for 30 days."""

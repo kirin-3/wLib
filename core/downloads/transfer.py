@@ -271,6 +271,9 @@ def transfer(
                 except DownloadError:
                     keep_part = True
                     raise
+                except (OSError, http.client.HTTPException) as exc:
+                    keep_part = True
+                    raise DownloadError("network error") from exc
                 part.unlink(missing_ok=True)
                 offset = 0
                 try:

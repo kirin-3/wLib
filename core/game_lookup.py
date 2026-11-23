@@ -25,6 +25,7 @@ class PageResolution(TypedDict):
 
 # SQLite binds Python ints only up to a signed 64-bit value.
 _MAX_SQLITE_INT = 2**63 - 1
+_MIN_SQLITE_INT = -(2**63)
 
 
 def _sqlite_ids(values: Sequence[str]) -> list[int]:
@@ -40,6 +41,17 @@ def _sqlite_ids(values: Sequence[str]) -> list[int]:
         if number <= _MAX_SQLITE_INT:
             ids.add(number)
     return sorted(ids)
+
+
+def _bindable_ids(values: Sequence[int]) -> list[int]:
+    """The distinct IDs that SQLite can bind, sorted; others are skipped."""
+    return sorted(
+        {
+            number
+            for number in (int(value) for value in values)
+            if _MIN_SQLITE_INT <= number <= _MAX_SQLITE_INT
+        }
+    )
 
 
 def _strings(value: object) -> list[str]:
@@ -149,7 +161,10 @@ def _catalog_page(
                             ("vndb_ids", "vndb"),
                         ):
                             for value in _strings(data.get(field)):
-                                if link := link_from_id(target, value):
+                                # A live post can still name a removed row.
+                                if (link := link_from_id(target, value)) and _current(
+                                    conn, target, value
+                                ):
                                     extra.append(link)
             # Only expand the page's own ID. IDs discovered here are never
             # recursively expanded, even when several releases share a VN.
@@ -633,7 +648,7 @@ def f95_thread_ratings(thread_ids: Sequence[int]) -> tuple[str, dict[int, float]
     when the catalog is off, missing or unreadable. Rows with no rating are
     left out; the caller decides which values to use.
     """
-    ids = sorted({int(thread_id) for thread_id in thread_ids})
+    ids = _bindable_ids(thread_ids)
     path = Path(database.DB_PATH).parent / CATALOG_FILE
     ratings: dict[int, float] = {}
     try:
@@ -699,7 +714,7 @@ def f95_thread_details(thread_ids: Sequence[int]) -> dict[int, dict[str, object]
     Only threads the catalog read successfully are included. Returns {} when
     the catalog is off, missing, unreadable or older than the details table.
     """
-    ids = sorted({int(thread_id) for thread_id in thread_ids})
+    ids = _bindable_ids(thread_ids)
     path = Path(database.DB_PATH).parent / CATALOG_FILE
     details: dict[int, dict[str, object]] = {}
     try:

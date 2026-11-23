@@ -118,8 +118,12 @@ def parse_posts(response: Response) -> tuple[list[dict[str, object]], int, int]:
         if isinstance(item, dict)
     ]
     rows = [row for post in posts if (row := parse_post(post)) is not None]
-    total = response.header("X-WP-TotalPages") or "0"
-    return rows, int(total) if total.isdigit() else 0, len(posts)
+    total = (response.header("X-WP-TotalPages") or "").strip()
+    if not total.isdecimal():
+        # Without a page count the end of the list is unknown. Reading this as
+        # zero pages would complete the sweep and retire the unread posts.
+        raise ValueError("Ryuugames response has no valid page count")
+    return rows, int(total), len(posts)
 
 
 class RyuugamesSource:

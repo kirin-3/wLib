@@ -6,9 +6,12 @@ Each reader translates a source library into the backup game shape used by
 and ``launch_targets`` sections), so matching, preview, transactions and
 section selection are reused instead of rewritten.
 
-Source files are never written to. SQLite sources are read from a temporary
-copy (including ``-journal``/``-wal``/``-shm`` sidecars) opened read-only, so
-the source app can keep running during the import.
+Source files are never written to. SQLite sources are snapshotted into a
+temporary copy via SQLite's backup API and opened read-only, so the source app
+can keep running during the import. When that live read cannot get access (a
+closed WAL database, which it would give new -wal/-shm files, a read-only
+folder, a lock the source app keeps, or a file system without locks), the
+database file and its sidecars are copied instead.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import re
 import shutil
 import sqlite3
 import tempfile
+import time
 from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
 from datetime import datetime, UTC
@@ -244,23 +248,123 @@ def _fetch_rows(conn: sqlite3.Connection, sql: str) -> list[sqlite3.Row]:
     return cast(list[sqlite3.Row], conn.execute(sql).fetchall())
 
 
+_SNAPSHOT_LOCK_TIMEOUT = 5.0
+_SNAPSHOT_BUSY_SLEEP = 0.05
+_SNAPSHOT_ACCESS_ERROR_CODES = frozenset(
+    {
+        sqlite3.SQLITE_BUSY,
+        sqlite3.SQLITE_LOCKED,
+        sqlite3.SQLITE_PERM,
+        sqlite3.SQLITE_READONLY,
+        sqlite3.SQLITE_IOERR,
+        sqlite3.SQLITE_FULL,
+        sqlite3.SQLITE_CANTOPEN,
+        sqlite3.SQLITE_PROTOCOL,
+    }
+)
+
+
+def _sqlite_primary_error_code(exc: sqlite3.Error) -> int | None:
+    code = getattr(exc, "sqlite_errorcode", None)
+    return code & 0xFF if isinstance(code, int) else None
+
+
+def _remove_sqlite_files(path: str) -> None:
+    """Delete a database file and its sidecars that a failed snapshot left."""
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        try:
+            os.remove(path + suffix)
+        except FileNotFoundError:
+            pass
+
+
+def _copy_sqlite_snapshot(path: str, copy_path: str) -> None:
+    _ = shutil.copy2(path, copy_path)
+    for suffix in ("-journal", "-wal", "-shm"):
+        sidecar = path + suffix
+        if os.path.isfile(sidecar):
+            _ = shutil.copy2(sidecar, copy_path + suffix)
+    # A normal open lets SQLite recover a hot journal on the copy first.
+    recover = sqlite3.connect(copy_path)
+    try:
+        _ = recover.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+        recover.commit()
+    finally:
+        recover.close()
+
+
+def _closed_wal_database(path: str) -> bool:
+    """True for a WAL database with no -wal file: its data is all in the main file.
+
+    Opening such a database, even read-only, makes SQLite create -wal and -shm
+    files beside it, so a plain copy is used instead to leave the folder as it is.
+    """
+    if os.path.exists(path + "-wal"):
+        return False
+    try:
+        with open(path, "rb") as source:
+            header = source.read(20)
+    except OSError:
+        return False
+    # Bytes 18 and 19 of the header are the write and read versions; 2 is WAL.
+    return header.startswith(b"SQLite format 3\x00") and header[18:20] == b"\x02\x02"
+
+
+def _backup_sqlite_snapshot(path: str, copy_path: str) -> None:
+    # as_uri() escapes '?', '#' and '%' in the file name, which a raw
+    # "file:" string would read as URI syntax.
+    source_uri = f"{Path(os.path.abspath(path)).as_uri()}?mode=ro"
+    timeout = _SNAPSHOT_LOCK_TIMEOUT
+    deadline = time.monotonic() + timeout
+    src = sqlite3.connect(source_uri, uri=True, timeout=timeout)
+    try:
+        dst = sqlite3.connect(copy_path)
+        try:
+
+            def _check_progress(status: int, _remaining: int, _total: int) -> None:
+                if (
+                    status in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                    and time.monotonic() >= deadline
+                ):
+                    raise TimeoutError("database is locked")
+
+            src.backup(
+                dst,
+                pages=-1,
+                progress=_check_progress,
+                sleep=_SNAPSHOT_BUSY_SLEEP,
+            )
+            dst.commit()
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
 @contextmanager
 def open_snapshot(path: str) -> Generator[sqlite3.Connection, None, None]:
-    """Copy a SQLite file plus sidecars into a temp dir and open it read-only."""
+    """Snapshot a SQLite database into a temp dir and open it read-only."""
     with tempfile.TemporaryDirectory(prefix="wlib-external-") as tmp_dir:
         copy_path = os.path.join(tmp_dir, os.path.basename(path))
-        _ = shutil.copy2(path, copy_path)
-        for suffix in ("-journal", "-wal", "-shm"):
-            sidecar = path + suffix
-            if os.path.isfile(sidecar):
-                _ = shutil.copy2(sidecar, copy_path + suffix)
-        # A normal open lets SQLite recover a hot journal on the copy first.
-        recover = sqlite3.connect(copy_path)
         try:
-            _ = recover.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
-            recover.commit()
-        finally:
-            recover.close()
+            if _closed_wal_database(path):
+                _copy_sqlite_snapshot(path, copy_path)
+            else:
+                _backup_sqlite_snapshot(path, copy_path)
+        except (sqlite3.Error, TimeoutError) as exc:
+            primary = (
+                _sqlite_primary_error_code(exc)
+                if isinstance(exc, sqlite3.Error)
+                else sqlite3.SQLITE_BUSY
+            )
+            if primary not in _SNAPSHOT_ACCESS_ERROR_CODES:
+                raise
+            # The live read-only open cannot get access: a read-only folder
+            # without the -shm index, a source app that keeps the database
+            # locked, or a file system without working locks. Copy the files
+            # as before; a file that cannot be read fails there with OSError.
+            _remove_sqlite_files(copy_path)
+            _copy_sqlite_snapshot(path, copy_path)
         # as_uri() escapes '?', '#' and '%' in the file name, which a raw
         # "file:" string would read as URI syntax.
         conn = sqlite3.connect(f"{Path(copy_path).as_uri()}?mode=ro", uri=True)
@@ -389,6 +493,8 @@ def coerce_thread_url(value: object) -> str:
         return ""
     host = (urlparse(normalized).hostname or "").lower()
     if host not in F95_HOSTS:
+        return ""
+    if not extract_thread_id(normalized):
         return ""
     return normalized
 

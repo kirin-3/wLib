@@ -965,6 +965,24 @@ class RunningGame:
     network_bwrap: str = ""
     # Windows: the job that holds the game and the processes it starts.
     job: _WindowsJob | None = None
+    # Steam runner reservations: which runner invocation made it (see release_external).
+    launch_token: str = ""
+
+
+def prefix_sharing_refused(entry: RunningGame, other: RunningGame) -> bool:
+    """True when two games on one Wine prefix must not run together.
+
+    Processes started on a shared wineserver (explorer, services, COM servers)
+    outlive one game's sandbox or network block, so a sandboxed, umu or
+    network-blocked game cannot share a prefix with a game that runs
+    differently."""
+    return bool(
+        entry.sandboxed
+        or other.sandboxed
+        or entry.umu
+        or other.umu
+        or entry.network_blocked != other.network_blocked
+    )
 
 
 def _spawn_sandbox_process(
@@ -1058,6 +1076,9 @@ class Launcher:
         # of a runner that died without reporting its end.
         self._external: dict[int, RunningGame] = {}
         self.external_alive: Callable[[int], bool] | None = None
+        # Prefix claims that runners keep in their run records, so the window
+        # also sees games a headless runner started (steam_runner.running_claims).
+        self.external_claims: Callable[[], dict[int, RunningGame]] | None = None
         # True when games this launcher cannot see may share its Wine
         # prefixes (the Steam runner knows only its own game). stop() then
         # never runs wineserver -k and spares the prefix's Wine services.
@@ -1068,16 +1089,29 @@ class Launcher:
         self.shutting_down: bool = False
         _ = atexit.register(self.shutdown)
 
+    def _external_entries_locked(self) -> dict[int, RunningGame]:
+        """Games other wLib processes run. Caller holds _running_lock."""
+        self._prune_external_locked()
+        claims: dict[int, RunningGame] = {}
+        if self.external_claims is not None:
+            try:
+                claims = self.external_claims()
+            except Exception:
+                claims = {}
+        return {**claims, **self._external}
+
     def game_using_prefix(self, prefix: str) -> str | None:
         normalized = game_sandbox.normalize_prefix(prefix)
         if not normalized:
             return None
         with self._running_lock:
-            self._prune_external_locked()
             return next(
                 (
                     entry.title
-                    for entry in (*self._running.values(), *self._external.values())
+                    for entry in (
+                        *self._running.values(),
+                        *self._external_entries_locked().values(),
+                    )
                     if game_sandbox.normalize_prefix(entry.prefix) == normalized
                 ),
                 None,
@@ -1091,21 +1125,13 @@ class Launcher:
             return None
         if entry.prefix in self._killing_prefixes:
             return "Another game on this Wine prefix is closing. Try again in a moment."
-        self._prune_external_locked()
-        for other_id, other in (*self._running.items(), *self._external.items()):
+        for other_id, other in (
+            *self._running.items(),
+            *self._external_entries_locked().items(),
+        ):
             if other_id == game_id or entry.prefix != other.prefix:
                 continue
-            # Processes started on a shared wineserver (explorer, services,
-            # COM servers) outlive one game's sandbox or network block, so
-            # a sandboxed, umu or network-blocked game cannot share a prefix
-            # with a game that runs differently.
-            if (
-                entry.sandboxed
-                or other.sandboxed
-                or entry.umu
-                or other.umu
-                or entry.network_blocked != other.network_blocked
-            ):
+            if prefix_sharing_refused(entry, other):
                 return f"{other.title} is already running on this Wine prefix. Use a separate custom prefix to run both games."
         return None
 
@@ -1131,8 +1157,21 @@ class Launcher:
             self._external[game_id] = entry
             return None
 
-    def release_external(self, game_id: int) -> None:
+    def release_external(self, game_id: int, launch_token: str = "") -> None:
+        """Drop a runner's reservation.
+
+        With a launch_token only the runner invocation that made the
+        reservation can drop it: a duplicate launch that is refused reports an
+        error for the same game and must not free the running game's prefix."""
         with self._running_lock:
+            held = self._external.get(game_id)
+            if (
+                held is not None
+                and launch_token
+                and held.launch_token
+                and held.launch_token != launch_token
+            ):
+                return
             _ = self._external.pop(game_id, None)
 
     def shutdown(self) -> None:
@@ -1356,14 +1395,14 @@ class Launcher:
             running_prefix = shareable_prefix(running) if running is not None else ""
             # Steam-shortcut games run in other processes; their reservations
             # sit in _external and count too.
-            self._prune_external_locked()
+            external_entries = self._external_entries_locked()
             prefix_shared = bool(running_prefix) and (
                 self.prefix_owner_uncertain
                 or any(
                     other_id != game_id and shareable_prefix(other) == running_prefix
                     for other_id, other in (
                         *self._running.items(),
-                        *self._external.items(),
+                        *external_entries.items(),
                     )
                 )
             )

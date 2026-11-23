@@ -30,6 +30,7 @@ from core.downloads.transfer import (
     DownloadError,
     DownloadPaused,
     FileInfo,
+    delete_part,
     resume_part_name,
     staging_dir,
     transfer,
@@ -364,10 +365,25 @@ class DownloadManager:
             info = self._probe(job, signals)
             part_name = resume_part_name(info)
             with self._lock:
-                job.part_name = part_name
-                job.can_continue = bool(part_name)
-                job.stage = "downloading"
-                job.samples.clear()
+                cancelled = signals.cancel.is_set()
+                paused = signals.pause.is_set()
+                if not cancelled and not paused:
+                    job.part_name = part_name
+                    job.can_continue = bool(part_name)
+                    job.stage = "downloading"
+                    job.samples.clear()
+            if cancelled or paused:
+                if info.close:
+                    info.close()
+                if cancelled:
+                    # transfer() would delete the partial file of a cancelled
+                    # job; it does not run now, so delete it here. Like
+                    # transfer(), a pause (also set by forget(keep_partial=True))
+                    # keeps it.
+                    if not paused:
+                        _ = delete_part(part_name)
+                    raise DownloadError("cancelled")
+                raise DownloadPaused()
 
             def progress(current: int, total: int | None) -> None:
                 now = time.monotonic()

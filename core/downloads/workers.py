@@ -31,7 +31,7 @@ from core.downloads.queue import (
     WorkerState,
 )
 from core.downloads.manager import RESUMABLE_HOSTS, DownloadManager, Resolve
-from core.downloads.torrents import ACTIVE_STAGES, MSG_LOW_DISK, TorrentSupervisor
+from core.downloads.torrents import MSG_LOW_DISK, TorrentSupervisor
 from core.downloads.transfer import DownloadError, delete_part, staging_dir
 
 _TORRENT_DETAIL_KEYS = (
@@ -156,12 +156,10 @@ class TorrentWorker:
         snapshot = self._snapshot(job.id)
         if snapshot is None:
             return
-        stage = snapshot.get("stage")
-        if stage in (*ACTIVE_STAGES, "failed"):
-            _ = supervisor.cancel(job.id)
-        elif stage == "done":
-            # A seeding torrent keeps its files; it leaves with "Stop seeding".
-            _ = supervisor.discard(job.id)
+        # One supervisor call picks between cancelling and discarding under its
+        # lock: a torrent that finishes just now must not be left behind.
+        # A seeding torrent keeps its files; it leaves with "Stop seeding".
+        _ = supervisor.remove(job.id)
 
     def snapshot(self, job: QueueJob) -> WorkerState:
         snapshot = self._snapshot(job.id)

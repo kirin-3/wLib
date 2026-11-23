@@ -1070,7 +1070,7 @@ def test_runner_endpoints_require_token_and_notify_window(monkeypatch, tmp_path)
     handler.__dict__["rfile"] = BytesIO(payload)
     handler.do_POST()
     handler.send_response.assert_called_once_with(200)
-    api.release_runner_launch.assert_called_once_with(12)
+    api.release_runner_launch.assert_called_once_with(12, "")
     assert "wlib-refresh-library" in window.evaluate_js.call_args.args[0]
 
 

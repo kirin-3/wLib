@@ -7,10 +7,14 @@ import json
 import os
 import signal
 import time
+import uuid
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from core.host_platform import get_data_dir
+
+if TYPE_CHECKING:
+    from core.launcher import RunningGame
 
 
 RUNNER_HEADER = "X-wLib-Runner"
@@ -111,6 +115,123 @@ def create_record(game_id: int, data_dir: str | None = None) -> bool:
         path.unlink(missing_ok=True)
         raise
     return True
+
+
+def _claim_lock(directory: Path):
+    """Exclusive cross-process lock for prefix claims; closing the file releases it."""
+    import fcntl
+
+    directory.mkdir(parents=True, exist_ok=True)
+    fd = os.open(directory / ".claims.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _record_claim(record: dict[str, object], title: str = "") -> RunningGame | None:
+    from core.launcher import RunningGame
+
+    claim = record.get("claim")
+    if not isinstance(claim, dict):
+        return None
+    values = cast(dict[str, object], claim)
+    prefix = values.get("prefix")
+    if not isinstance(prefix, str) or not prefix:
+        return None
+    return RunningGame(
+        None,
+        None,
+        prefix=prefix,
+        sandboxed=values.get("sandboxed") is True,
+        umu=values.get("umu") is True,
+        network_blocked=values.get("blocked") is True,
+        title=str(values.get("title") or title or "Another game"),
+    )
+
+
+def running_claims(
+    data_dir: str | None = None, proc: Path | None = None
+) -> dict[int, RunningGame]:
+    """Prefix claims of the live runners, by game ID.
+
+    A runner claims its Wine prefix in its run record before the game starts and
+    holds it until the record goes, so the open window and other runners see it."""
+    directory = Path(data_dir or get_data_dir()) / "runs"
+    claims: dict[int, RunningGame] = {}
+    if not directory.is_dir():
+        return claims
+    for path in directory.glob("*.json"):
+        if not path.stem.isdecimal() or int(path.stem) <= 0:
+            continue
+        game_id = int(path.stem)
+        if runner_pid(game_id, data_dir, proc) is None:
+            continue
+        try:
+            record = cast(dict[str, object], json.loads(path.read_text("utf-8")))
+            entry = _record_claim(record, f"Game {game_id}")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if entry is not None:
+            claims[game_id] = entry
+    return claims
+
+
+def claim_prefix(
+    game_id: int,
+    entry: RunningGame,
+    data_dir: str | None = None,
+    proc: Path | None = None,
+) -> str | None:
+    """Hold entry's Wine prefix in this runner's record, or say why it can't be held.
+
+    The check and the claim happen under one cross-process lock, so two runners
+    starting on the same prefix cannot both pass. Another runner's live claim
+    follows the same sharing rules as a game in one launcher."""
+    from core.launcher import prefix_sharing_refused
+
+    if not entry.prefix:
+        return None
+    directory = Path(data_dir or get_data_dir()) / "runs"
+    path = _path(game_id, data_dir)
+    fd = _claim_lock(directory)
+    try:
+        for other_id, other in running_claims(data_dir, proc).items():
+            if (
+                other_id != game_id
+                and other.prefix == entry.prefix
+                and prefix_sharing_refused(entry, other)
+            ):
+                return (
+                    f"{other.title} is already running on this Wine prefix. "
+                    + "Use a separate custom prefix to run both games."
+                )
+        try:
+            record = cast(dict[str, object], json.loads(path.read_text("utf-8")))
+        except (OSError, ValueError, AttributeError):
+            return "This launch lost its run record. Try again."
+        if record.get("pid") != os.getpid():
+            return "Another runner owns this game's record. Try again."
+        record["claim"] = {
+            "prefix": entry.prefix,
+            "sandboxed": entry.sandboxed,
+            "umu": entry.umu,
+            "blocked": entry.network_blocked,
+            "title": entry.title,
+        }
+        temporary = path.with_name(f".{path.stem}.{os.getpid()}.tmp")
+        stream_fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(stream_fd, "w", encoding="utf-8") as stream:
+                json.dump(record, stream)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return None
+    finally:
+        os.close(fd)
 
 
 def remove_record(game_id: int, data_dir: str | None = None) -> None:
@@ -222,12 +343,13 @@ def launch_check(payload: dict[str, object]) -> str | None:
     return str(checked.get("error") or "This game cannot start right now.")
 
 
-def report_error(game_id: int, message: str) -> None:
+def report_error(game_id: int, message: str, launch_id: str = "") -> None:
     import subprocess
 
     print(f"[wLib] Launch error: {message}")
     response = _window_request(
-        "/api/runner-event", {"gameId": game_id, "state": "error", "error": message}
+        "/api/runner-event",
+        {"gameId": game_id, "state": "error", "error": message, "launchId": launch_id},
     )
     if response and response.get("success"):
         from core.desktop_notify import send_notification
@@ -262,6 +384,10 @@ def run(game_id: int) -> int:
     from core.game_launch import launch_tracked, request_from_game
     from core.launcher import Launcher
 
+    # Names this invocation to the open window. It releases a game's prefix
+    # reservation only for the invocation that made it, so a duplicate launch
+    # that is refused cannot free the running game's prefix.
+    launch_id = uuid.uuid4().hex
     for name in ("LD_PRELOAD", "SteamAppId", "SteamGameId"):
         host_value = os.environ.pop("WLIB_HOST_" + name, None)
         if host_value:
@@ -270,32 +396,37 @@ def run(game_id: int) -> int:
         init_db()
         game = get_game(game_id)
     except Exception as exc:
-        report_error(game_id, f"Could not open the library: {exc}")
+        report_error(game_id, f"Could not open the library: {exc}", launch_id)
         return 1
     if game is None:
-        report_error(game_id, f"Game {game_id} was not found.")
+        report_error(game_id, f"Game {game_id} was not found.", launch_id)
         return 2
     window = _window_request("/api/running")
     if window and game_id in cast(list[object], window.get("games", [])):
-        report_error(game_id, f"{game.get('title') or 'Game'} is already running.")
+        report_error(
+            game_id, f"{game.get('title') or 'Game'} is already running.", launch_id
+        )
         return 3
     if not create_record(game_id):
-        report_error(game_id, f"{game.get('title') or 'Game'} is already running.")
+        report_error(
+            game_id, f"{game.get('title') or 'Game'} is already running.", launch_id
+        )
         return 3
     launcher = Launcher()
     # This process sees only its own game. The wLib window or another runner
     # may run a game on the same Wine prefix, so never end the whole prefix.
     launcher.prefix_owner_uncertain = True
 
-    def ask_window(entry: object, launch_id: int | None) -> str | None:
+    def ask_window(entry: object, checked_id: int | None) -> str | None:
         # The open wLib window knows about installs, mod tools, prefix tools
         # and the games it runs; without a window there is nothing to clash with.
         from core.launcher import RunningGame
 
         assert isinstance(entry, RunningGame)
-        return launch_check(
+        refused = launch_check(
             {
-                "gameId": launch_id,
+                "gameId": checked_id,
+                "launchId": launch_id,
                 "prefix": entry.prefix,
                 "sandboxed": entry.sandboxed,
                 "umu": entry.umu,
@@ -303,6 +434,11 @@ def run(game_id: int) -> int:
                 "title": entry.title,
             }
         )
+        if refused or checked_id is None:
+            return refused
+        # Other runners know nothing of this one, and a closed window cannot
+        # tell them; the run records hold each runner's prefix claim.
+        return claim_prefix(checked_id, entry)
 
     launcher.external_guard = ask_window
     done = threading.Event()
@@ -320,10 +456,11 @@ def run(game_id: int) -> int:
             request = request_from_game(game)
         except ValueError as exc:
             remove_record(game_id)
-            report_error(game_id, f"{game.get('title') or 'Game'}: {exc}")
+            report_error(game_id, f"{game.get('title') or 'Game'}: {exc}", launch_id)
             return 1
         _ = _window_request(
-            "/api/runner-event", {"gameId": game_id, "state": "started"}
+            "/api/runner-event",
+            {"gameId": game_id, "state": "started", "launchId": launch_id},
         )
         result = launch_tracked(
             launcher,
@@ -336,6 +473,7 @@ def run(game_id: int) -> int:
             report_error(
                 game_id,
                 f"{game.get('title') or 'Game'}: {result.get('error', 'Cannot track this game')}",
+                launch_id,
             )
             return 1
         if stop_requested.is_set() and not done.is_set():
@@ -348,11 +486,14 @@ def run(game_id: int) -> int:
                 elif time.monotonic() >= stop_deadline:
                     launcher.shutdown()
                     if not done.is_set():
-                        report_error(game_id, "Timed out stopping the game.")
+                        report_error(game_id, "Timed out stopping the game.", launch_id)
                         return 1
         return 0
     finally:
         remove_record(game_id)
-        _ = _window_request("/api/runner-event", {"gameId": game_id, "state": "ended"})
+        _ = _window_request(
+            "/api/runner-event",
+            {"gameId": game_id, "state": "ended", "launchId": launch_id},
+        )
         for sig, handler in previous:
             _ = signal.signal(sig, handler)

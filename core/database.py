@@ -616,6 +616,20 @@ def _utc_moment(value: object) -> datetime | None:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
+def _compare_moments(left: str, right: str) -> int | None:
+    left_moment = _utc_moment(left)
+    right_moment = _utc_moment(right)
+    if left_moment is not None and right_moment is not None:
+        if left_moment < right_moment:
+            return -1
+        return 1 if left_moment > right_moment else 0
+    if left and right:
+        if left < right:
+            return -1
+        return 1 if left > right else 0
+    return None
+
+
 def thread_state_fields(
     game: Mapping[str, object], states: ThreadStates | None
 ) -> tuple[dict[str, object], bool]:
@@ -1039,6 +1053,28 @@ def _backup_before_migration() -> str | None:
     return target
 
 
+def _ensure_wal_mode(conn: sqlite3.Connection) -> None:
+    """Ensure a file-backed database uses WAL journal mode."""
+    row = cast(
+        tuple[object, ...] | None, conn.execute("PRAGMA journal_mode").fetchone()
+    )
+    mode = str(row[0]).lower() if row and row[0] is not None else ""
+    if mode in ("wal", "memory"):
+        return
+    # Wait if another wLib process is briefly using the database while we
+    # switch the journal mode back to WAL.
+    _ = conn.execute("PRAGMA busy_timeout = 120000")
+    updated = cast(
+        tuple[object, ...] | None,
+        conn.execute("PRAGMA journal_mode=WAL;").fetchone(),
+    )
+    new_mode = str(updated[0]).lower() if updated and updated[0] is not None else ""
+    if new_mode != "wal":
+        raise sqlite3.OperationalError(
+            f"Could not enable WAL journal mode (SQLite returned {new_mode or 'unknown'!r})."
+        )
+
+
 def init_db() -> None:
     """Create or upgrade the schema, skipping the work when it is current.
 
@@ -1051,6 +1087,10 @@ def init_db() -> None:
     conn = get_connection()
     try:
         _check_database(conn)
+        # WAL is stored in the database file, so checking it on every start
+        # restores WAL even when the schema is already current. It cannot
+        # change inside the migration transaction below.
+        _ensure_wal_mode(conn)
         fingerprint = schema_fingerprint()
 
         def current() -> bool:
@@ -1061,9 +1101,6 @@ def init_db() -> None:
 
         if current():
             return
-        # WAL is stored in the database file, so setting it once covers every
-        # connection. It cannot change inside the transaction below.
-        _ = conn.execute("PRAGMA journal_mode=WAL;")
         # Another wLib process (the app and the Steam runner) can start the
         # same update. The write lock makes the second one wait, then skip.
         _ = conn.execute("PRAGMA busy_timeout = 120000")
@@ -1373,6 +1410,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         # The last live LC read's Completed prefix (NULL: no read yet). Device-local;
         # it lets an F95 read clear `thread_completed` once LC no longer sets it.
         ("lc_thread_completed", "INTEGER"),
+        # When `lc_thread_completed` was observed (ISO UTC); device-local.
+        ("lc_thread_completed_at", "TEXT"),
         # No default: NULL means the thread's state is not known yet.
         ("thread_onhold", "INTEGER"),
         ("thread_abandoned", "INTEGER"),
@@ -1468,7 +1507,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         INSERT INTO settings (key, value)
         VALUES ('sync_local_modified_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         ON CONFLICT(key) DO UPDATE SET value = CASE
-            WHEN settings.value >= excluded.value
+            WHEN strftime('%Y-%m-%dT%H:%M:%fZ', settings.value) >= excluded.value
             THEN COALESCE(
                 strftime('%Y-%m-%dT%H:%M:%fZ', settings.value, '+0.001 seconds'),
                 excluded.value
@@ -1851,7 +1890,8 @@ def list_game_launch_targets(game_id: int) -> list[LaunchTarget]:
     return [_row_to_launch_target(row) for row in rows]
 
 
-def list_launch_targets_for_games(
+def _list_launch_targets_for_games(
+    conn: sqlite3.Connection,
     game_ids: Sequence[int],
 ) -> dict[int, list[LaunchTarget]]:
     normalized_ids = [int(game_id) for game_id in game_ids]
@@ -1862,24 +1902,30 @@ def list_launch_targets_for_games(
         return targets_by_game
 
     rows: list[sqlite3.Row] = []
-    with closing(get_connection()) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        unique_ids = list(dict.fromkeys(normalized_ids))
-        # SQLite before 3.32 allows only 999 parameters per statement.
-        for start in range(0, len(unique_ids), 500):
-            chunk = unique_ids[start : start + 500]
-            placeholders = ",".join("?" for _ in chunk)
-            _ = cursor.execute(
-                f"SELECT * FROM game_launch_targets WHERE game_id IN ({placeholders}) ORDER BY game_id ASC, sort_order ASC, id ASC",
-                tuple(chunk),
-            )
-            rows.extend(cast(list[sqlite3.Row], cursor.fetchall()))
+    cursor = conn.cursor()
+    unique_ids = list(dict.fromkeys(normalized_ids))
+    # SQLite before 3.32 allows only 999 parameters per statement.
+    for start in range(0, len(unique_ids), 500):
+        chunk = unique_ids[start : start + 500]
+        placeholders = ",".join("?" for _ in chunk)
+        _ = cursor.execute(
+            f"SELECT * FROM game_launch_targets WHERE game_id IN ({placeholders}) ORDER BY game_id ASC, sort_order ASC, id ASC",
+            tuple(chunk),
+        )
+        rows.extend(cast(list[sqlite3.Row], cursor.fetchall()))
 
     for row in rows:
         target = _row_to_launch_target(row)
         targets_by_game.setdefault(target["game_id"], []).append(target)
     return targets_by_game
+
+
+def list_launch_targets_for_games(
+    game_ids: Sequence[int],
+) -> dict[int, list[LaunchTarget]]:
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        return _list_launch_targets_for_games(conn, game_ids)
 
 
 def add_game_launch_target(
@@ -1997,26 +2043,35 @@ def get_game_count() -> int:
 def get_all_games() -> list[dict[str, object]]:
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        _ = cursor.execute("SELECT * FROM games ORDER BY title ASC")
-        games = cast(list[sqlite3.Row], cursor.fetchall())
-        link_rows = cast(
-            list[tuple[int, str, str, str]],
-            conn.execute(
-                "SELECT game_id, source, external_id, url FROM game_links ORDER BY id"
-            ).fetchall(),
-        )
+        # Read games, links, launch targets, and the collection registry in one
+        # read transaction so a concurrent collection rename cannot mismatch
+        # memberships against a newer registry snapshot.
+        _ = conn.execute("BEGIN")
+        try:
+            cursor = conn.cursor()
+            _ = cursor.execute("SELECT * FROM games ORDER BY title ASC")
+            games = cast(list[sqlite3.Row], cursor.fetchall())
+            link_rows = cast(
+                list[tuple[int, str, str, str]],
+                conn.execute(
+                    "SELECT game_id, source, external_id, url FROM game_links ORDER BY id"
+                ).fetchall(),
+            )
+            targets_by_game = _list_launch_targets_for_games(
+                conn, [int(str(cast(object, game["id"]))) for game in games]
+            )
+            # Membership is matched by name, case-insensitively; names that no longer
+            # belong to any collection are hidden rather than shown as ghost tabs.
+            canonical_collections = {
+                name.casefold(): name for name in _read_collections(cursor)
+            }
+        finally:
+            conn.rollback()
     links_by_game: dict[int, list[StoreLink]] = {}
     for game_id, source, identity, url in link_rows:
         links_by_game.setdefault(game_id, []).append(
             {"source": source, "id": identity, "url": url}
         )
-    targets_by_game = list_launch_targets_for_games(
-        [int(str(cast(object, game["id"]))) for game in games]
-    )
-    # Membership is matched by name, case-insensitively; names that no longer
-    # belong to any collection are hidden rather than shown as ghost tabs.
-    canonical_collections = {name.casefold(): name for name in get_collections()}
     result: list[dict[str, object]] = []
     for game in games:
         game_dict = {str(key): cast(object, game[key]) for key in game.keys()}
@@ -2137,12 +2192,14 @@ def store_thread_update(
 
     `lc_completed` is an LC read's Completed prefix; None means the read had
     no live prefix data. False clears the Completed flag of an LC-only game;
-    for a game on both sites the next F95 page read decides. A negative flag
-    from a dated feed observation is ignored if that observation is too old.
+    for a game on both sites the next F95 page read decides. A dated feed
+    observation is ignored if it is older than the stored release or completion
+    observation, even when the normalized version is the same.
 
     `catalog_completed` is the Completed flag of the catalog entry that gave
     `observation`. It counts as `completed` and `lc_completed` True, except
-    when `keep_newer` rejects the observation as older than the stored one.
+    when `keep_newer` rejects the observation as older than the stored release
+    or no newer than a recorded LC completion observation.
 
     `lc_states` is the LC read of a game the F95 step stores; it applies by
     the rule in `site_thread_states` when `states` (F95 data) is None.
@@ -2170,25 +2227,76 @@ def store_thread_update(
             return None
 
         fields: dict[str, object] = {}
+        obs_at = ""
         if observation is not None:
-            version, at = observation
+            version, obs_at = observation
             version_key, time_key = f"{site}_latest_version", f"{site}_latest_at"
             stored_at = str(game.get(time_key) or "")
             same = normalize_version(version) == normalize_version(
                 game.get(version_key)
             )
-            if keep_newer and at and stored_at > at and not same:
-                # The catalog's Completed flag came with this older version.
-                catalog_completed = False
-                if lc_completed_from_feed and lc_completed is False:
-                    lc_completed = None
-            else:
+            older_version = bool(
+                keep_newer
+                and obs_at
+                and stored_at
+                and _compare_moments(obs_at, stored_at) == -1
+            )
+            if not older_version:
                 fields[version_key] = version
                 # An undated read of this version takes the first date seen.
-                fields[time_key] = (stored_at or at) if same else at
+                fields[time_key] = (stored_at or obs_at) if same else obs_at
             fields["latest_version"], fields["latest_site"] = _latest_for_game(
                 {**game, **fields}, lc_enabled
             )
+
+        lc_prefix_at = ""
+        clear_prefix_at = False
+        if site == "lc":
+            stored_lc_at = str(game.get("lc_latest_at") or "")
+            stored_completed_at = str(game.get("lc_thread_completed_at") or "")
+            older_than_release = bool(
+                obs_at and stored_lc_at and _compare_moments(obs_at, stored_lc_at) == -1
+            )
+            if catalog_completed:
+                stale_catalog = keep_newer and (
+                    older_than_release
+                    or (
+                        bool(stored_completed_at)
+                        and (
+                            not obs_at
+                            or (_compare_moments(obs_at, stored_completed_at) or 0) <= 0
+                        )
+                    )
+                )
+                if stale_catalog:
+                    catalog_completed = False
+                else:
+                    lc_prefix_at = obs_at or stored_completed_at
+            elif lc_completed is not None:
+                if lc_completed_from_feed:
+                    stale_feed = (
+                        keep_newer
+                        and bool(obs_at)
+                        and (
+                            older_than_release
+                            or (
+                                bool(stored_completed_at)
+                                and _compare_moments(obs_at, stored_completed_at) == -1
+                            )
+                        )
+                    )
+                    if stale_feed:
+                        lc_completed = None
+                        completed = False
+                    else:
+                        lc_prefix_at = obs_at
+                else:
+                    # A live page read has no LC time of its own: feed and
+                    # catalog times are release times, and the read time is a
+                    # clock time. Mixing them would make every later feed or
+                    # catalog change of this release look older, so the page
+                    # read clears the mark and they compare with the release.
+                    clear_prefix_at = True
 
         if catalog_completed:
             completed, lc_completed = True, True
@@ -2201,6 +2309,11 @@ def store_thread_update(
             fields["thread_completed"] = 1
         if site == "lc" and lc_completed is not None:
             fields["lc_thread_completed"] = int(lc_completed)
+            if clear_prefix_at:
+                if game.get("lc_thread_completed_at") is not None:
+                    fields["lc_thread_completed_at"] = None
+            elif lc_prefix_at and game.get("lc_thread_completed_at") != lc_prefix_at:
+                fields["lc_thread_completed_at"] = lc_prefix_at
             has_f95 = bool(str(game.get("f95_url") or "").strip())
             if not lc_completed and not has_f95 and game.get("thread_completed"):
                 fields["thread_completed"] = 0
@@ -2654,6 +2767,7 @@ def update_game(
                 safe_fields["lc_latest_version"] = ""
                 safe_fields["lc_latest_at"] = ""
                 safe_fields["lc_thread_completed"] = None
+                safe_fields["lc_thread_completed_at"] = None
                 refresh_winner = True
                 # Without an F95 thread the states came from the old LC thread.
                 f95_after = safe_fields.get("f95_url", row[2] if row else "")
@@ -3046,34 +3160,34 @@ def update_settings(
     values: Mapping[str, str], *, custom_play_statuses: Sequence[str] | None = None
 ) -> None:
     """Write settings (and optionally the custom play statuses) in one transaction."""
-    removed: list[str] = []
-    if custom_play_statuses is not None:
-        # Match case-insensitively like the reset below, so a case-only rename keeps its games.
-        kept = {str(status).strip().casefold() for status in custom_play_statuses}
-        removed = [
-            status
-            for status in get_custom_play_statuses()
-            if status.casefold() not in kept
-        ]
-        values = {
-            **values,
-            "custom_play_statuses": json.dumps(
-                [str(status).strip() for status in custom_play_statuses]
-            ),
-        }
     with closing(get_connection()) as conn:
-        if removed:
-            # SQLite's NOCASE folds ASCII only; match with casefold() like above.
-            folded = {status.casefold() for status in removed}
+        if custom_play_statuses is not None:
+            _ = conn.execute("BEGIN IMMEDIATE")
+            # Match case-insensitively like the reset below, so a case-only rename keeps its games.
+            kept = {str(status).strip().casefold() for status in custom_play_statuses}
+            removed = [
+                status
+                for status in _read_custom_play_statuses(conn)
+                if status.casefold() not in kept
+            ]
+            values = {
+                **values,
+                "custom_play_statuses": json.dumps(
+                    [str(status).strip() for status in custom_play_statuses]
+                ),
+            }
+            if removed:
+                # SQLite's NOCASE folds ASCII only; match with casefold() like above.
+                folded = {status.casefold() for status in removed}
 
-            def status_removed(status: object) -> bool:
-                return isinstance(status, str) and status.casefold() in folded
+                def status_removed(status: object) -> bool:
+                    return isinstance(status, str) and status.casefold() in folded
 
-            conn.create_function("wlib_status_removed", 1, status_removed)
-            _ = conn.execute(
-                "UPDATE games SET play_status = ? WHERE wlib_status_removed(play_status)",
-                (DEFAULT_PLAY_STATUS,),
-            )
+                conn.create_function("wlib_status_removed", 1, status_removed)
+                _ = conn.execute(
+                    "UPDATE games SET play_status = ? WHERE wlib_status_removed(play_status)",
+                    (DEFAULT_PLAY_STATUS,),
+                )
         _ = conn.executemany(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             list(values.items()),
@@ -3094,9 +3208,9 @@ def get_save_backup_keep() -> int | None:
     return keep if 1 <= keep <= SAVE_BACKUP_KEEP_MAX else None
 
 
-def get_custom_play_statuses() -> list[str]:
+def _validated_custom_play_statuses(raw: object) -> list[str]:
     try:
-        statuses = cast(object, json.loads(get_setting("custom_play_statuses") or "[]"))
+        statuses = cast(object, json.loads(str(raw or "[]")))
     except (ValueError, TypeError):
         return []
     if not isinstance(statuses, list):
@@ -3118,6 +3232,20 @@ def get_custom_play_statuses() -> list[str]:
         seen.add(name.casefold())
         result.append(name)
     return result
+
+
+def _read_custom_play_statuses(conn: sqlite3.Connection) -> list[str]:
+    row = cast(
+        tuple[object, ...] | None,
+        conn.execute(
+            "SELECT value FROM settings WHERE key = 'custom_play_statuses'"
+        ).fetchone(),
+    )
+    return _validated_custom_play_statuses(row[0] if row is not None else None)
+
+
+def get_custom_play_statuses() -> list[str]:
+    return _validated_custom_play_statuses(get_setting("custom_play_statuses"))
 
 
 def update_custom_play_statuses(statuses: Sequence[str]) -> None:

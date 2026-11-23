@@ -874,6 +874,7 @@ class LaunchMixin(ApiBase):
         umu: bool,
         blocked: bool,
         title: str,
+        launch_id: str = "",
     ) -> str | None:
         """Check a Steam-shortcut launch against this app's busy games, prefix
         tools and running games, and hold its prefix until it ends.
@@ -893,9 +894,10 @@ class LaunchMixin(ApiBase):
                 umu=umu,
                 network_blocked=blocked,
                 title=title or f"Game {game_id}",
+                launch_token=launch_id,
             )
             return self.launcher.reserve_external(game_id, entry)
 
     @python_only
-    def release_runner_launch(self, game_id: int) -> None:
-        self.launcher.release_external(game_id)
+    def release_runner_launch(self, game_id: int, launch_id: str = "") -> None:
+        self.launcher.release_external(game_id, launch_id)

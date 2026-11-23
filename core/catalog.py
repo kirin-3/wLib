@@ -164,6 +164,9 @@ class CatalogClient:
         self._opener: Opener = opener
         self._clock: Callable[[], float] = clock
         self._lock: threading.Lock = threading.Lock()
+        # Serializes the last enabled check and the sidecar write with
+        # remove(). Never held across network or decompression work.
+        self._files_lock: threading.Lock = threading.Lock()
         self._checking: bool = False
         self._remove_stale_temp_files()
 
@@ -338,15 +341,20 @@ class CatalogClient:
             updated = self._update(sidecar)
         except Exception as exc:
             sidecar["last_error"] = str(exc) or type(exc).__name__
-            if self._enabled():
-                self._write_sidecar(sidecar)
+            self._write_sidecar_if_enabled(sidecar)
             return {"success": False, "error": sidecar["last_error"]}
         sidecar["last_error"] = None
-        if self._enabled():
-            self._write_sidecar(sidecar)
+        self._write_sidecar_if_enabled(sidecar)
         if updated:
             self._call_on_installed()
         return {"success": True, "updated": updated}
+
+    def _write_sidecar_if_enabled(self, sidecar: Mapping[str, object]) -> None:
+        # Turning the setting off saves it and then calls remove(). Checking
+        # and writing under the same lock stops a write after that removal.
+        with self._files_lock:
+            if self._enabled():
+                self._write_sidecar(sidecar)
 
     def installed_sha256(self) -> str:
         """SHA-256 of the installed snapshot, or "" when none is installed."""
@@ -531,5 +539,6 @@ class CatalogClient:
 
     def remove(self) -> None:
         """Delete the local catalog; used when the setting is turned off."""
-        _remove(self.catalog_path)
-        _remove(self.sidecar_path)
+        with self._files_lock:
+            _remove(self.catalog_path)
+            _remove(self.sidecar_path)

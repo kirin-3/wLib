@@ -878,6 +878,7 @@ export interface LibrarySyncStatus extends ApiBasicResponse {
   last_synced_at?: string;
   last_device?: string;
   last_error?: string;
+  signin_error?: string;
   dropbox_available?: boolean;
   dropbox_unavailable_reason?: string;
   gdrive_available?: boolean;

@@ -375,8 +375,8 @@ class DownloadQueue:
             if self._stopped(job):
                 self._finish_if_done(job, now)
                 continue
-            state = self._worker(job).snapshot(job)
-            self._take_progress(job, state, now)
+            state, source_changed = self._snapshot(job)
+            self._take_progress(job, state, now, source_changed=source_changed)
             phase = state.phase
             if phase == PHASE_DONE:
                 self._finish(job, now)
@@ -416,7 +416,7 @@ class DownloadQueue:
                 if job.state != RUNNING and len(self._running()) >= self._max_active:
                     # Back from a browser check, but its slot went to another
                     # job: stop it and make it the first waiting job.
-                    self._worker(job).stop(job)
+                    self._stop_running(job)
                     self._set_state(job, QUEUED)
                     self._move_to_top_of_waiting([job])
                 elif job.state != RUNNING:
@@ -439,12 +439,45 @@ class DownloadQueue:
     def _finish_if_done(self, job: QueueJob, now: float) -> None:
         """A stopped worker can still finish: a torrent paused after its last
         piece arrived reports "finished" later. Only that result counts here."""
-        state = self._worker(job).snapshot(job)
+        state, source_changed = self._snapshot(job)
         if state.phase == PHASE_DONE:
-            self._take_progress(job, state, now)
+            self._take_progress(job, state, now, source_changed=source_changed)
             self._finish(job, now)
+        elif source_changed:
+            self._save(job, "source")
 
-    def _take_progress(self, job: QueueJob, state: WorkerState, now: float) -> None:
+    def _snapshot(self, job: QueueJob) -> tuple[WorkerState, bool]:
+        """The worker's state, and whether the snapshot changed `job.source`.
+
+        A snapshot can write `part_file` or `info_hash` into `job.source`;
+        the caller must save such a change at once, not only with the
+        throttled progress save.
+        """
+        before = dict(job.source)
+        state = self._worker(job).snapshot(job)
+        return state, job.source != before
+
+    def _stop_running(self, job: QueueJob) -> None:
+        """Stop a running worker and persist any partial/progress it already holds."""
+        self._worker(job).stop(job)
+        state, source_changed = self._snapshot(job)
+        self._take_progress(
+            job,
+            state,
+            self._clock(),
+            source_changed=source_changed,
+            save_now=True,
+        )
+
+    def _take_progress(
+        self,
+        job: QueueJob,
+        state: WorkerState,
+        now: float,
+        *,
+        source_changed: bool = False,
+        save_now: bool = False,
+    ) -> None:
         job.can_continue = state.can_continue
         job.details = dict(state.details)
         job.speed = state.speed if state.phase == PHASE_RUNNING else 0.0
@@ -456,8 +489,12 @@ class DownloadQueue:
             job.bytes_total = (
                 state.bytes_total if state.bytes_total is not None else job.bytes_total
             )
-        if changed and now - job.saved_progress_at >= PROGRESS_SAVE_SECONDS:
-            job.saved_progress_at = now
+        if source_changed or (
+            changed
+            and (save_now or now - job.saved_progress_at >= PROGRESS_SAVE_SECONDS)
+        ):
+            if changed:
+                job.saved_progress_at = now
             self._save(job, "bytes_done", "bytes_total", "source")
 
     def _finish(self, job: QueueJob, now: float) -> None:
@@ -536,7 +573,7 @@ class DownloadQueue:
         if self._hold_active():
             for job in self._running():
                 if job.can_continue:
-                    self._worker(job).stop(job)
+                    self._stop_running(job)
                     self._set_state(job, HELD, reason)
             for job in self._jobs.values():
                 if job.state == HELD and job.reason != reason:
@@ -630,6 +667,13 @@ class DownloadQueue:
 
     # --- public: adding ---------------------------------------------------
 
+    def _prepare_job(self, job: QueueJob, context: object) -> None:
+        """Register `job` with its worker to begin preparation. Call with the lock held."""
+        try:
+            self._worker(job).prepare(job, context)
+        except Exception as exc:
+            self._fail(job, str(exc) or type(exc).__name__, self._clock())
+
     def add(
         self,
         kind: str,
@@ -679,9 +723,12 @@ class DownloadQueue:
                     if key != "archive_password"
                 )
             )
-            if same and replaced is not None and replaced.source.get("part_file"):
-                # Startup cleanup keeps the partial files that jobs name.
-                job.source["part_file"] = replaced.source["part_file"]
+            if same and replaced is not None:
+                if not replaced.source.get("part_file"):
+                    _ = self._worker(replaced).snapshot(replaced)
+                if replaced.source.get("part_file"):
+                    # Startup cleanup keeps the partial files that jobs name.
+                    job.source["part_file"] = replaced.source["part_file"]
             ordered = self._ordered()
             if replaced is not None:
                 index = ordered.index(replaced)
@@ -697,13 +744,14 @@ class DownloadQueue:
                 _ = self._jobs.pop(replaced.id, None)
                 self._store.delete(replaced.id)
             self._store.reorder([item.id for item in ordered])
+            if replaced is None:
+                self._prepare_job(job, context)
         if replaced is not None:
             self._remove_data(replaced, keep_partial=same)
-        try:
-            self._worker(job).prepare(job, context)
-        except Exception as exc:
             with self._lock:
-                self._fail(job, str(exc) or type(exc).__name__, self._clock())
+                if self._jobs.get(job.id) is not job:
+                    return job
+                self._prepare_job(job, context)
         self.poke()
         return job
 
@@ -771,7 +819,7 @@ class DownloadQueue:
         victim = next((item for item in running if item.can_continue), None)
         if victim is None:
             return "first"
-        self._worker(victim).stop(victim)
+        self._stop_running(victim)
         self._set_state(victim, QUEUED)
         self._start(job, now)
         # The stopped job becomes the first waiting job.
@@ -795,7 +843,7 @@ class DownloadQueue:
 
     def _pause(self, job: QueueJob) -> bool:
         if job.state == RUNNING:
-            self._worker(job).stop(job)
+            self._stop_running(job)
             self._set_state(job, PAUSED)
             return True
         if job.state == PREPARING:
@@ -965,11 +1013,15 @@ class DownloadQueue:
                     PREPARING,
                     READY,
                 ) or self._transient_attention(job):
-                    state = self._worker(job).snapshot(job)
+                    state, source_changed = self._snapshot(job)
                     if job.state == READY:
                         job.details = dict(state.details)
+                        if source_changed:
+                            self._save(job, "source")
                     else:
-                        self._take_progress(job, state, now)
+                        self._take_progress(
+                            job, state, now, source_changed=source_changed
+                        )
 
     def status(self, include_history: bool = False) -> dict[str, object]:
         self.refresh()
@@ -1075,6 +1127,7 @@ class DownloadQueue:
         _ = queue_settings.migrate_legacy_limit()
         now = self._clock()
         saved: list[QueueJob] = []
+        expired: list[QueueJob] = []
         for row in self._store.list():
             job = QueueJob.from_row(row)
             if not job.id or job.kind not in self._workers:
@@ -1086,9 +1139,17 @@ class DownloadQueue:
                 and job.updated_at < now - STALE_HOST_JOB_SECONDS
             ):
                 self._store.delete(job.id)
-                self._remove_data(job)
+                expired.append(job)
                 continue
             saved.append(job)
+        kept_parts = {
+            str(job.source.get("part_file") or "")
+            for job in saved
+            if job.kind == "host" and job.state != READY
+        } - {""}
+        for job in expired:
+            part = str(job.source.get("part_file") or "")
+            self._remove_data(job, keep_partial=bool(part and part in kept_parts))
         # Before restoring: a finished job whose archive this deletes leaves the queue below.
         for worker in self._workers.values():
             try:

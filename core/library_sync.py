@@ -80,6 +80,10 @@ CALLBACK_UNAVAILABLE = "The local callback server on port 8183 is unavailable."
 GDRIVE_RESTORE_FAILED = "gdrive_restore_failed"
 # Runs that try to put back a replaced Drive upload before sync goes on without it.
 RESTORE_ATTEMPTS = 5
+# Errors that only delay a restore (see `_restore_replaced`); they use up no attempt.
+RESTORE_WAIT_ERRORS = frozenset(
+    {"location_unavailable", "rate_limited", "gdrive_auth_failed"}
+)
 STALE_CHOICE_ERROR = (
     "The sync file changed before your choice was applied. Choose again."
 )
@@ -924,6 +928,12 @@ class GoogleDriveLocation(_OAuthLocation):
         except SyncConflict:
             # The revision is gone; nothing is left to put back.
             return False
+        # Another device can upload while the revision downloads. Putting the
+        # old content back would then replace that upload instead.
+        found = self._lookup()
+        if found is None or found[1] != own_checksum:
+            self.release_revision(revision_id)
+            return False
         _ = self._update_content(file_id, replaced)
         self.release_revision(revision_id)
         return True
@@ -1049,6 +1059,7 @@ class SyncManager:
         self._on_pull: Callable[[], None] | None = on_pull
         self._state: str = "idle"
         self._error_code: str = ""
+        self._signin_error_message: str = ""
         self.server_available: bool = False
         self._remote_encrypted: bool = False
         # Remote revision a first-connection run read, and the pending
@@ -1118,6 +1129,7 @@ class SyncManager:
             "last_device": self._setting("last_device"),
             "last_error": error,
             "error_code": self._error_code,
+            "signin_error": self._signin_error_message,
             "dropbox_available": self.server_available,
             "dropbox_unavailable_reason": (
                 "" if self.server_available else CALLBACK_UNAVAILABLE
@@ -1135,7 +1147,7 @@ class SyncManager:
             ),
         }
 
-    def _error(self, error: Exception) -> dict[str, object]:
+    def _error_details(self, error: Exception) -> tuple[str, str]:
         code = (
             error.error_code
             if isinstance(error, (SyncError, BackupValidationError))
@@ -1147,6 +1159,10 @@ class SyncManager:
             if isinstance(error, (SyncError, BackupValidationError))
             else "Sync could not be completed. Check the location and try again."
         )
+        return message, code
+
+    def _error(self, error: Exception) -> dict[str, object]:
+        message, code = self._error_details(error)
         if code in ("passphrase_required", "decrypt_failed"):
             self._state = "needs_passphrase"
         elif code == "location_unavailable":
@@ -1163,6 +1179,14 @@ class SyncManager:
             delay = max(delay, error.retry_after)
         self._next_full_run = time.monotonic() + delay
         database.update_setting("sync_last_error", message)
+        return {**self.status(), "success": False, "error": message, "error_code": code}
+
+    def _signin_error(self, error: Exception) -> dict[str, object]:
+        """Report a sign-in callback failure without altering the active connection."""
+        message, code = self._error_details(error)
+        pending = self._pending
+        if pending is None or time.monotonic() > pending[2]:
+            self._signin_error_message = message
         return {**self.status(), "success": False, "error": message, "error_code": code}
 
     def _location(self) -> SyncLocation:
@@ -1200,6 +1224,7 @@ class SyncManager:
             }
         )
         self._state, self._error_code = "idle", ""
+        self._signin_error_message = ""
         self._first_pending = None
         self._newer_remote = None
         self._choice_revision, self._choice_reason = None, ""
@@ -1236,6 +1261,7 @@ class SyncManager:
                     self._setting("location") == "folder"
                     and self._setting("folder_path") == resolved
                 ):
+                    self._signin_error_message = ""
                     return self.status()
                 self._disconnect_locked()
                 self._reset_connection(
@@ -1406,7 +1432,11 @@ class SyncManager:
             revision, checksum, attempts = record
             try:
                 _ = location.restore_replaced(revision, checksum)
-            except SyncError:
+            except SyncError as exc:
+                # Being offline, rate limited or signed out says nothing about
+                # the restore itself: such a run does not use up an attempt.
+                if exc.error_code in RESTORE_WAIT_ERRORS:
+                    raise
                 if attempts + 1 < RESTORE_ATTEMPTS:
                     # Keep the record; the next run tries again.
                     database.update_setting(
@@ -1576,10 +1606,14 @@ class SyncManager:
                 database.get_all_games(),
                 cast(list[object], backup["games"]),
             )
-            if push_only and remote_games and choice is None:
-                if local_games:
+            if push_only and choice is None:
+                if local_games and remote_games:
                     self._ask_first_choice(revision, stale=stale_choice)
-                return
+                    return
+                if not local_games:
+                    # Push-only runs never pull, even when both game lists are
+                    # empty and only remote settings would be mirrored.
+                    return
             if local_games and remote_games and choice is None:
                 self._ask_first_choice(revision, stale=stale_choice)
                 return
@@ -1599,7 +1633,7 @@ class SyncManager:
                 choice is None and local_games and not remote_games
             ):
                 self._push(location, revision)
-            else:
+            elif not push_only:
                 self._pull(backup, revision, local_modified)
             return
         if remote_changed:
@@ -1817,6 +1851,7 @@ class SyncManager:
     ) -> dict[str, object]:
         verifier, challenge, state = _pkce()
         self._pending = (state, verifier, time.monotonic() + 600, provider)
+        self._signin_error_message = ""
         query = urllib.parse.urlencode(
             {
                 **parameters,
@@ -1852,6 +1887,7 @@ class SyncManager:
     def cancel_signin(self) -> None:
         with self._lock:
             self._pending = None
+            self._signin_error_message = ""
 
     def connect_dropbox(self) -> dict[str, object]:
         with self._lock:
@@ -1937,7 +1973,7 @@ class SyncManager:
                 )
                 return self.status()
             except Exception as error:
-                return self._error(error)
+                return self._signin_error(error)
 
     def complete_dropbox(self, code: str, state: str) -> dict[str, object]:
         with self._lock:
@@ -1979,7 +2015,7 @@ class SyncManager:
                 )
                 return self.status()
             except Exception as error:
-                return self._error(error)
+                return self._signin_error(error)
 
     def _reconnect_same(self, provider: str, account: str, refresh: str) -> bool:
         """Signing in again to the account in use keeps its sync state.
@@ -1998,6 +2034,7 @@ class SyncManager:
             }
         )
         self._state, self._error_code = "idle", ""
+        self._signin_error_message = ""
         self._failures, self._next_full_run = 0, 0.0
         return True
 
@@ -2035,6 +2072,7 @@ class SyncManager:
         )
         self._dropbox, self._gdrive, self._pending = None, None, None
         self._state, self._error_code = "idle", ""
+        self._signin_error_message = ""
         self._first_pending = None
         self._newer_remote = None
         self._choice_revision, self._choice_reason = None, ""

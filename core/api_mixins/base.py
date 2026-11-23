@@ -186,11 +186,12 @@ class ApiBase:
         self.launcher.prefix_guard_lock = self._status_lock
         self.launcher.prefix_guard = self._prefix_tool_conflict
         if is_linux():
-            from core.steam_runner import runner_pid
+            from core.steam_runner import runner_pid, running_claims
 
             self.launcher.external_alive = lambda game_id: (
                 runner_pid(game_id) is not None
             )
+            self.launcher.external_claims = running_claims
         from core.umu import UmuDownload, UmuRuntimePrepare
 
         self._umu_download: UmuDownload = UmuDownload()
@@ -1962,7 +1963,9 @@ class ApiBase:
                 if isinstance(game.get("id"), int)
                 and int(str(game.get("id"))) in wanted_ids
             ]
+        archived_games: list[dict[str, object]] = []
         if game_ids is None or automatic or skip_archived:
+            archived_games = [game for game in all_games_raw if is_archived(game)]
             all_games_raw = [game for game in all_games_raw if not is_archived(game)]
         games_with_url: list[GameRecord] = []
         from core.store_links import coerce_store_links
@@ -2026,6 +2029,17 @@ class ApiBase:
         lc_only = {
             game_id for game_id, game in lc_games.items() if not game.get("f95_url")
         }
+        # A library-wide check saves the feed cursor, so it also stores the
+        # feed items of the Archived LC games it leaves out (no request, no
+        # result); else the cursor would hide them once they are unarchived.
+        archived_lc_games = {
+            int(str(game["id"])): game
+            for game in archived_games
+            if game_ids is None
+            and not refresh_info
+            and isinstance(game.get("id"), int)
+            and lewdcorner.lc_active(game, lc_enabled)
+        }
 
         # Check-and-set in one critical section. _update_running stays True
         # until the worker exits (even after cancel), so runs never overlap.
@@ -2066,6 +2080,7 @@ class ApiBase:
             error = "Update check interrupted before completion"
             try:
                 lc_results: dict[int, lewdcorner_updates.CheckResult] = {}
+                feed_cursor = ""
                 if lc_games:
                     lc_urls = {
                         game_id: lewdcorner.normalize_thread_url(game.get("lc_url"))
@@ -2126,9 +2141,19 @@ class ApiBase:
                                 ):
                                     self._update_results.append(entry)
                                 self._update_checked += 1
-                    # Only a check of every LC game applied the whole feed.
+                    for game_id, game in archived_lc_games.items():
+                        if self._update_cancelled_now():
+                            return
+                        url = lewdcorner.normalize_thread_url(game.get("lc_url"))
+                        item = feed.get(lewdcorner.extract_thread_id(url))
+                        if item is not None:
+                            lewdcorner_updates.store_feed_item(
+                                game_id, url, game.get("lc_latest_version"), item
+                            )
+                    # Only a check of every LC game applied the whole feed; the
+                    # cursor is saved once the whole check has finished.
                     if game_ids is None:
-                        lewdcorner_updates.save_feed_cursor(feed_read.cursor)
+                        feed_cursor = feed_read.cursor
                 if self._update_cancelled_now():
                     return
 
@@ -2438,6 +2463,11 @@ class ApiBase:
                         with self._update_lock:
                             self._update_checked += 1
                             self._update_current = ""
+
+                # A cancelled check keeps the old cursor, so the next check
+                # reads the same feed items again.
+                if not self._update_cancelled_now():
+                    lewdcorner_updates.save_feed_cursor(feed_cursor)
 
                 # A full pass postpones the next automatic check as long as at least
                 # one game was checked; a deleted thread or one timeout must not make

@@ -50,6 +50,7 @@ class SteamSync:
         self._lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._timer: threading.Timer | None = None
+        self._generation = 0
         self._stopped = False
         self._retry_removed = False
         self._status: dict[str, object] = {"running": False}
@@ -72,17 +73,29 @@ class SteamSync:
                 self._timer.cancel()
             # A later debounced change must not drop a pending "Sync now" retry.
             self._retry_removed = self._retry_removed or retry_removed
+            self._generation += 1
+            generation = self._generation
             self._timer = threading.Timer(
-                delay, self._run, kwargs={"retry_removed": self._retry_removed}
+                delay,
+                self._run,
+                kwargs={
+                    "retry_removed": self._retry_removed,
+                    "generation": generation,
+                },
             )
             self._timer.daemon = True
             self._timer.start()
 
-    def _run(self, *, retry_removed: bool = False) -> None:
+    def _run(
+        self, *, retry_removed: bool = False, generation: int | None = None
+    ) -> None:
         with self._lock:
             with self._state_lock:
                 if self._stopped:
                     return
+                if generation is not None and generation != self._generation:
+                    return
+                retry_removed = retry_removed or self._retry_removed
                 self._timer = None
                 self._retry_removed = False
                 self._status = {"running": True}
@@ -190,6 +203,7 @@ class SteamSync:
     def stop(self) -> None:
         with self._state_lock:
             self._stopped = True
+            self._generation += 1
             if self._timer:
                 self._timer.cancel()
                 self._timer = None

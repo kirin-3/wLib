@@ -173,10 +173,19 @@ def run(
                 snapshot = build_snapshot(
                     catalog, os.path.join(work_dir, "snapshots"), now()
                 )
+
+                def _published(manifest: dict[str, object]) -> None:
+                    # The manifest is live: a later retention error must not
+                    # report this run as unpublished.
+                    result.manifest = manifest
+
                 try:
-                    result.manifest = publish(storage, snapshot, counts)
-                    published = snapshot.name
+                    result.manifest = publish(
+                        storage, snapshot, counts, on_published=_published
+                    )
                 finally:
+                    if result.manifest is not None:
+                        published = snapshot.name
                     os.remove(snapshot.path)
     except Exception as exc:
         result.error = f"{type(exc).__name__}: {exc}"

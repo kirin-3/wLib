@@ -94,11 +94,15 @@ class _RuntimeManifestError(ValueError):
 
 
 def required_runtime(runner: str) -> str:
+    # A runner that is not a Proton build (plain Wine, or none) launches and
+    # prepares with umu's UMU-Proton default; see proton_path_value.
+    if not proton_path_value(runner):
+        runner = "UMU-Proton"
     # umu resolves codenames to a concrete build before it reads the manifest,
     # so a GE-Proton build may still need sniper (steamrt3).
-    if not runner or runner in ("GE-Proton", "UMU-Proton"):
+    if runner in ("GE-Proton", "UMU-Proton"):
         try:
-            runner = resolve_codename(runner or "UMU-Proton")
+            runner = resolve_codename(runner)
         except ValueError:
             return "steamrt4"
     folder = runner if os.path.isdir(runner) else os.path.dirname(runner)

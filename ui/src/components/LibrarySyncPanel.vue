@@ -220,6 +220,7 @@ onBeforeUnmount(() => {
       <p v-if="location === 'dropbox' && !status.dropbox_available" class="sync-description">{{ status.dropbox_unavailable_reason }}</p>
       <p v-if="location === 'gdrive' && !status.gdrive_available" class="sync-description">{{ status.gdrive_unavailable_reason }}</p>
       <p v-if="status.connecting" role="status">Finish {{ location === 'gdrive' ? 'Google' : 'Dropbox' }} sign-in in your browser.</p>
+      <p v-if="!status.connecting && status.signin_error" class="sync-error" role="alert">{{ status.signin_error }}</p>
       <p v-if="status.folder_path" class="sync-path">{{ status.folder_path }}</p>
       <p v-if="status.account" class="sync-description">Connected account: {{ status.account }}</p>
     </div>

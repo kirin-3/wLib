@@ -1750,7 +1750,7 @@ def test_sqlite_copy_failure_reports_read_failed(tmp_path, monkeypatch):
         conn.commit()
         conn.close()
         monkeypatch.setattr(
-            "core.external_import.shutil.copy2",
+            "core.external_import._backup_sqlite_snapshot",
             lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")),
         )
         with pytest.raises(BackupValidationError, match="Could not read"):

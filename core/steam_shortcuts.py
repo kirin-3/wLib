@@ -93,9 +93,30 @@ def rungameid(appid: int) -> int:
     return ((appid & 0xFFFFFFFF) << 32) | 0x02000000
 
 
-def atomic_write(path: Path, data: bytes) -> None:
-    """Replace a shortcut file atomically after saving its previous contents."""
+class ShortcutsChanged(Exception):
+    """The shortcut file is no longer the version the caller read."""
+
+
+_UNCHECKED = object()
+
+
+def read_file(path: Path) -> bytes | None:
+    """The file's bytes, or None when it does not exist."""
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def atomic_write(path: Path, data: bytes, expected: object = _UNCHECKED) -> None:
+    """Replace a shortcut file atomically after saving its previous contents.
+
+    `expected` is what the caller read (bytes, or None for no file). When the
+    file differs, Steam saved it in the meantime and `data` was built from the
+    old version, so nothing is written and ShortcutsChanged is raised."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    if expected is not _UNCHECKED and read_file(path) != expected:
+        raise ShortcutsChanged(str(path))
     if path.exists():
         _ = shutil.copy2(path, path.with_name(path.name + ".wlib-bak"))
     fd, temp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -187,7 +208,12 @@ def desired_games(
 
 
 def sync_games(
-    root: Path, account: str, script: Path, *, retry_removed: bool = False
+    root: Path,
+    account: str,
+    script: Path,
+    *,
+    retry_removed: bool = False,
+    _attempt: int = 0,
 ) -> dict[str, object]:
     """Reconcile games for one account, never writing while Steam is running."""
     import time
@@ -198,8 +224,9 @@ def sync_games(
         return {"success": False, "error": "Steam account not found"}
     path = root / "userdata" / account / "config/shortcuts.vdf"
     try:
+        original = read_file(path)
         data: dict[str, VdfValue] = (
-            read_vdf(path.read_bytes()) if path.exists() else {"shortcuts": {}}
+            read_vdf(original) if original is not None else {"shortcuts": {}}
         )
         shortcuts = data.get("shortcuts")
         if not isinstance(shortcuts, dict):
@@ -307,7 +334,7 @@ def sync_games(
                     "success": False,
                     "error": "Steam started during synchronization; retry after it closes",
                 }
-            atomic_write(path, write_vdf(data))
+            atomic_write(path, write_vdf(data), original)
         grid = path.parent / "grid"
         for app_id in removed_art:
             for suffix in ("p.png", ".png", "_hero.png"):
@@ -373,6 +400,18 @@ def sync_games(
                 1 for action in actions.values() if action.startswith("pending_")
             ),
         }
+    except ShortcutsChanged:
+        # Steam saved the file after it was read, so the actions were planned
+        # against an old version. Plan again from the new file: it is fresh, so
+        # the retry waits for it to settle instead of reverting Steam's edit.
+        if _attempt >= 2:
+            return {
+                "success": False,
+                "error": "Steam changed its shortcuts during synchronization; retry later",
+            }
+        return sync_games(
+            root, account, script, retry_removed=retry_removed, _attempt=_attempt + 1
+        )
     except (OSError, ValueError, TypeError) as exc:
         return {"success": False, "error": str(exc)}
 
@@ -450,7 +489,9 @@ def write_art(grid: Path, app_id: int, source: Path | None, old_key: str = "") -
     return key
 
 
-def add_wlib(root: Path, account: str, script: Path, icon: Path) -> dict[str, object]:
+def add_wlib(
+    root: Path, account: str, script: Path, icon: Path, _attempt: int = 0
+) -> dict[str, object]:
     """Add the GUI shortcut, or persist a request until Steam has exited."""
     import time
     from core import database, steam_env
@@ -460,8 +501,9 @@ def add_wlib(root: Path, account: str, script: Path, icon: Path) -> dict[str, ob
     path = root / "userdata" / account / "config/shortcuts.vdf"
     pending_key = f"steam_wlib_pending_{account}"
     try:
+        original = read_file(path)
         data: dict[str, VdfValue] = (
-            read_vdf(path.read_bytes()) if path.exists() else {"shortcuts": {}}
+            read_vdf(original) if original is not None else {"shortcuts": {}}
         )
         shortcuts = data.get("shortcuts")
         if not isinstance(shortcuts, dict):
@@ -511,10 +553,18 @@ def add_wlib(root: Path, account: str, script: Path, icon: Path) -> dict[str, ob
         if steam_env.steam_running(root):
             database.update_setting(pending_key, "true")
             return {"success": True, "pending": True}
-        atomic_write(path, write_vdf(data))
+        atomic_write(path, write_vdf(data), original)
         if icon.is_file():
             _ = write_art(path.parent / "grid", app_id, icon)
         database.update_setting(pending_key, "")
         return {"success": True, "added": True}
+    except ShortcutsChanged:
+        # Steam saved the file after it was read; decide again from the new one.
+        if _attempt >= 2:
+            return {
+                "success": False,
+                "error": "Steam changed its shortcuts while adding wLib; retry later",
+            }
+        return add_wlib(root, account, script, icon, _attempt + 1)
     except (OSError, ValueError, TypeError) as exc:
         return {"success": False, "error": str(exc)}

@@ -263,6 +263,27 @@ def versions_in_title(title: str, game_title: str = "") -> list[str]:
     return found
 
 
+def _without_bare_version(title: str, version: object, game_title: str) -> str:
+    """`title` without the release version that repeats a number of the game name.
+
+    For `Game 2` at version `2`, `Game-2-2-pc` holds the name's `2` and then
+    the version `2`; the version is not part of the name. Dotted versions are
+    already left out of the name words, and a game name without a number keeps
+    its lone number, which may be a sequel's.
+    """
+    wanted = canonical_version(version)
+    if not game_title or not wanted.isdigit() or not re.search(r"\d", game_title):
+        return title
+    text = _BRACKETS.sub(" ", title)
+    name_spans = _name_number_spans(text, game_title)
+    for match in _VERSION_IN_TITLE.finditer(text):
+        if match.span(1) in name_spans:
+            continue
+        if canonical_version(match.group(1)) == wanted:
+            return f"{text[: match.start()]} {text[match.end(1) :]}"
+    return title
+
+
 def listing_has_version(title: str, version: object, game_title: str = "") -> bool:
     wanted = canonical_version(version)
     return bool(wanted) and wanted in versions_in_title(title, game_title)
@@ -315,7 +336,9 @@ def rank(
         has_version = (
             listing_has_version(title, version, game_title) if want_version else None
         )
-        score = title_score(game_title, title)
+        score = title_score(
+            game_title, _without_bare_version(title, version, game_title)
+        )
         if score:
             score += 4 if has_version else 0
             score += min(2, seeders // 10)

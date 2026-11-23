@@ -189,9 +189,16 @@ def build_manifest(
 
 
 def publish(
-    storage: Storage, snapshot: Snapshot, sources: Mapping[str, Mapping[str, object]]
+    storage: Storage,
+    snapshot: Snapshot,
+    sources: Mapping[str, Mapping[str, object]],
+    on_published: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
-    """Snapshot first; the manifest is written only after that upload succeeded."""
+    """Snapshot first; the manifest is written only after that upload succeeded.
+
+    `on_published` gets the manifest once it is live, before retention runs,
+    so a failed prune does not hide a snapshot that clients already see.
+    """
     key = SNAPSHOT_PREFIX + snapshot.name
     storage.put_file(key, snapshot.path, "application/x-xz", SNAPSHOT_CACHE)
     log.info("uploaded %s (%d bytes)", key, snapshot.size)
@@ -199,6 +206,8 @@ def publish(
     data = json.dumps(manifest, indent=2).encode()
     storage.put_bytes(MANIFEST_KEY, data, "application/json", MANIFEST_CACHE)
     log.info("uploaded %s (%d bytes)", MANIFEST_KEY, len(data))
+    if on_published is not None:
+        on_published(manifest)
     _ = prune_snapshots(storage, current=key)
     return manifest
 

@@ -1018,6 +1018,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                         umu=check.get("umu") is True,
                         blocked=check.get("blocked") is True,
                         title=str(check.get("title") or ""),
+                        launch_id=str(check.get("launchId") or ""),
                     )
                     if reason:
                         check_result = {"success": False, "error": reason}
@@ -1059,7 +1060,9 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     and api_ref is not None
                     and isinstance(ended_id, int)
                 ):
-                    api_ref.release_runner_launch(ended_id)
+                    api_ref.release_runner_launch(
+                        ended_id, str(payload.get("launchId") or "")
+                    )
                 active_window = cast(ExtensionWindow, window_ref)
                 _ = active_window.evaluate_js(
                     "window.dispatchEvent(new Event('wlib-refresh-library'))"
