@@ -31,6 +31,7 @@ import { unityActions, unityWarnings, switchWarning } from "../utils/unityTools"
 import { formatLabel } from "../utils/rpgmSaveEditor";
 import { notify, notifyError } from "../utils/toast";
 import RpgmSaveEditor from "./modals/RpgmSaveEditor.vue";
+import RpgmPluginsCard from "./RpgmPluginsCard.vue";
 
 const props = defineProps<{
   gameId: number;
@@ -39,7 +40,7 @@ const props = defineProps<{
   active: boolean;
 }>();
 
-type BusyAction = "" | "console" | "extract" | "decrypt" | "switch" | "urm" | "bepinex_install" | "bepinex_uninstall" | "bepinex_restore";
+type BusyAction = "" | "console" | "extract" | "decrypt" | "switch" | "urm" | "bepinex_install" | "bepinex_uninstall" | "bepinex_restore" | "plugins";
 
 const POLL_MS = 500;
 
@@ -197,6 +198,13 @@ watch(
 );
 
 const isBusy = computed(() => busy.value !== "");
+// The Plugins card shares this lock: its writes lock the other tools, and
+// their runs lock its switches.
+const pluginsLocked = computed(() => isBusy.value && busy.value !== "plugins");
+const setPluginsBusy = (pluginsBusy: boolean) => {
+  if (pluginsBusy) busy.value = "plugins";
+  else if (busy.value === "plugins") busy.value = "";
+};
 const renpy = computed(() => tools.value?.renpy ?? null);
 const rpgm = computed(() => tools.value?.rpgm ?? null);
 const rgss = computed(() => tools.value?.rgss ?? null);
@@ -765,6 +773,14 @@ const useExtractedChecked = computed({
     </template>
 
     <p v-else-if="tools" class="text-xs" style="color: var(--text-muted)">No tools are available for this game.</p>
+
+    <RpgmPluginsCard
+      v-if="engine === 'rpgm'"
+      :game-id="gameId"
+      :active="active"
+      :locked="pluginsLocked"
+      @busy="setPluginsBusy"
+    />
 
     <template v-if="hasSaveEditor">
       <section class="tools-card space-y-3" aria-labelledby="tools-saveeditor-title">

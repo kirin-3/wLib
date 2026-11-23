@@ -17,6 +17,7 @@ import { mockGameSaves } from "./gameSaves";
 import { isRecord, readMockGames } from "./games";
 import { nextMockLaunchTargetId, readMockLaunchTargets, sortMockLaunchTargets, writeMockLaunchTargets } from "./launchTargets";
 import { mockRpgmSaves } from "./rpgm";
+import { MockRpgmPlugins } from "./rpgmPlugins";
 import { MockWebMedia } from "./webMedia";
 import { MockF95Account } from "./f95Account";
 import { DEFAULT_MOCK_SETTINGS, isActionableVersion, isSaveBackupKeep, normalizeMockFilterPresets, normalizeMockSettings, readMockSettings, writeMockSettings } from "./settings";
@@ -81,6 +82,7 @@ export class MockBackend {
   _mockToolStepMs = 350;
   _mockRenpyConsole = new Map<number, RenpyConsoleState>();
   _mockRpgmDecrypted = new Set<number>();
+  _mockRpgmPlugins = new MockRpgmPlugins();
   _mockRpgmUseDecrypted = new Set<number>();
   _mockRgssExtracted = new Set<number>();
   _mockRgssUseExtracted = new Set<number>();
@@ -651,6 +653,31 @@ export class MockBackend {
       case "extract_rgss_archives":
       case "set_rgss_use_extracted":
         return this._mockGameToolAction(method, args);
+      case "get_rpgm_plugins": {
+        const id = Number(args[0]);
+        if (!readMockGames().some((game) => game.id === id)) return { success: false, mock: true, error: "Game not found" };
+        if (this._mockToolEngine(id) !== "rpgm") {
+          return { success: false, mock: true, error: "This game is not a RPG Maker MV/MZ game" };
+        }
+        return this._mockRpgmPlugins.get(id);
+      }
+      case "set_rpgm_plugin_enabled":
+      case "restore_rpgm_plugins": return (async () => {
+        const id = Number(args[0]);
+        const error = this._mockToolGuard(id, "rpgm");
+        if (error) return { success: false, mock: true, error };
+        // Hold the tool lock briefly, like the desktop write, so busy states show.
+        const run: MockToolRun = { action: "plugins", done: 0, total: 0, current: "", cancel: false };
+        this._mockToolRuns.set(id, run);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, Math.min(this._mockToolStepMs, 150)));
+          return method === "restore_rpgm_plugins"
+            ? this._mockRpgmPlugins.restore(id, args[1], args[2])
+            : this._mockRpgmPlugins.setEnabled(id, args[1], args[2], args[3]);
+        } finally {
+          this._mockToolRuns.delete(id);
+        }
+      })();
       case "get_game_tool_status": {
         const run = this._mockToolRuns.get(Number(args[0]));
         return {

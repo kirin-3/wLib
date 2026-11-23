@@ -251,6 +251,9 @@
   "get_rpdl_magnet": [
     "torrent_id"
   ],
+  "get_rpgm_plugins": [
+    "game_id"
+  ],
   "get_rpgmaker_runner_install_status": [],
   "get_running_games": [],
   "get_sandbox_install_info": [],
@@ -473,6 +476,11 @@
     "game_id",
     "backup_name"
   ],
+  "restore_rpgm_plugins": [
+    "game_id",
+    "revision",
+    "replace_changed"
+  ],
   "restore_sync_snapshot": [
     "name"
   ],
@@ -543,6 +551,12 @@
   "set_rgss_use_extracted": [
     "game_id",
     "enabled"
+  ],
+  "set_rpgm_plugin_enabled": [
+    "game_id",
+    "index",
+    "enabled",
+    "revision"
   ],
   "set_rpgm_use_decrypted": [
     "game_id",

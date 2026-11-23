@@ -573,6 +573,96 @@ class GameToolsMixin(ApiBase):
 
         return self._run_game_tool(game_id, "rpgm", "switch", body)
 
+    def get_rpgm_plugins(self, game_id: object = None) -> dict[str, object]:
+        """The plugin list of an RPG Maker MV/MZ game; read only."""
+        from core import rpgm_plugins
+        from core.game_tools import ENGINE_RPGM, detect_engine, rpgm_data_root
+
+        game = self._tool_game(game_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+        _coerced_id, folder, exe_path = game
+        root = (
+            rpgm_data_root(folder)
+            if detect_engine(folder, exe_path) == ENGINE_RPGM
+            else None
+        )
+        if root is None:
+            return {
+                "success": False,
+                "error": "This game is not a RPG Maker MV/MZ game",
+            }
+        try:
+            return {"success": True, **rpgm_plugins.load_plugins(root)}
+        except (OSError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+
+    def _run_plugin_write(
+        self,
+        game_id: object,
+        write: Callable[[str], dict[str, object]],
+    ) -> dict[str, object]:
+        """Run a plugin list write under the tool guard; a stale list gets a code."""
+        from core.game_tools import GameToolError, rpgm_data_root
+        from core.rpgm_plugins import StalePluginList
+
+        stale = False
+
+        def body(folder: str, _p: ProgressFn, _c: CancelFn) -> dict[str, object]:
+            nonlocal stale
+            root = rpgm_data_root(folder)
+            if root is None:
+                raise GameToolError("System.json was not found")
+            try:
+                return write(root)
+            except StalePluginList:
+                stale = True
+                raise
+
+        result = self._run_game_tool(game_id, "rpgm", "plugins", body)
+        if stale:
+            result["code"] = "stale"
+        return result
+
+    def set_rpgm_plugin_enabled(
+        self,
+        game_id: object = None,
+        index: object = None,
+        enabled: object = None,
+        revision: object = None,
+    ) -> dict[str, object]:
+        from core import rpgm_plugins
+
+        if not isinstance(index, int) or isinstance(index, bool):
+            return {"success": False, "error": "Index must be an integer"}
+        if not isinstance(enabled, bool):
+            return {"success": False, "error": "Enabled must be a boolean"}
+        if not isinstance(revision, str):
+            return {"success": False, "error": "Revision must be a string"}
+        return self._run_plugin_write(
+            game_id,
+            lambda root: rpgm_plugins.set_plugin_enabled(
+                root, index, enabled, revision
+            ),
+        )
+
+    def restore_rpgm_plugins(
+        self,
+        game_id: object = None,
+        revision: object = None,
+        replace_changed: object = False,
+    ) -> dict[str, object]:
+        from core import rpgm_plugins
+
+        if not isinstance(revision, str):
+            return {"success": False, "error": "Revision must be a string"}
+        if not isinstance(replace_changed, bool):
+            return {"success": False, "error": "Replace changed must be a boolean"}
+        return self._run_plugin_write(
+            game_id,
+            lambda root: rpgm_plugins.restore_plugins(root, revision, replace_changed),
+        )
+
     def extract_rgss_archives(
         self, game_id: object = None, options: object = None
     ) -> dict[str, object]:

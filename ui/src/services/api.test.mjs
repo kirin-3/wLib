@@ -441,6 +441,94 @@ test("browser mock game tools report support and advance progress across polls",
   }
 });
 
+test("browser mock RPG Maker plugins switch, report stale lists and restore", async () => {
+  const storage = new Map();
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    dispatchEvent() {},
+    addEventListener() {},
+    navigator: { userAgent: "node" },
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    const { mockBackend } = await server.ssrLoadModule("/src/services/mock/backend.ts");
+    mockBackend._mockToolStepMs = 5;
+    const game = (id, engine) => ({ id, title: `G${id}`, engine, exe_path: `/g/${id}/Game.exe` });
+    localStorage.setItem(
+      "wlib-mock-games",
+      JSON.stringify([game(1, "RPGM"), game(2, "RPGM"), game(3, "RPGM"), game(4, "Ren'Py")]),
+    );
+    localStorage.setItem("wlib-mock-rpgm-plugins", JSON.stringify({ 2: "changed", 3: "unreadable" }));
+
+    assert.equal((await api.getRpgmPlugins(4)).success, false);
+    assert.equal((await api.getRpgmPlugins(99)).success, false);
+
+    let state = await api.getRpgmPlugins(1);
+    assert.equal(state.engine, "mz");
+    assert.equal(state.backup.state, "none");
+    const core = state.entries.find((entry) => entry.name === "CoreEngine");
+    assert.deepEqual(core.needed_by, ["MessagePlus", "BattleHud"]);
+    const codes = state.entries.flatMap((entry) => entry.issues.map((issue) => issue.code));
+    for (const code of ["duplicate", "missing_file", "case_mismatch", "wrong_order", "unsafe_name"]) {
+      assert.ok(codes.includes(code), code);
+    }
+
+    // Switch: a backup appears, the users of CoreEngine report the missing dependency.
+    state = await api.setRpgmPluginEnabled(1, core.index, false, state.revision);
+    assert.equal(state.success, true);
+    assert.equal(state.backup.state, "toggles");
+    assert.deepEqual(state.entries[1].issues.map((issue) => issue.code), ["case_mismatch", "missing_dependency"]);
+    const off = state.entries.find((entry) => entry.name === "GoneOff");
+    assert.equal((await api.setRpgmPluginEnabled(1, off.index, true, state.revision)).success, false);
+
+    // Stale: an outside edit makes the old revision fail with code "stale".
+    mockBackend._mockRpgmPlugins.touch(1);
+    const stale = await api.setRpgmPluginEnabled(1, 0, true, state.revision);
+    assert.equal(stale.success, false);
+    assert.equal(stale.code, "stale");
+    state = await api.getRpgmPlugins(1);
+
+    // Restore of toggles runs without confirmation.
+    state = await api.restoreRpgmPlugins(1, state.revision, false);
+    assert.equal(state.success, true);
+    assert.equal(state.backup.state, "same");
+    assert.equal((await api.restoreRpgmPlugins(1, state.revision, false)).success, false);
+
+    // Changed list: refused without confirmation, restored with it.
+    let changed = await api.getRpgmPlugins(2);
+    assert.equal(changed.backup.state, "changed");
+    assert.equal((await api.restoreRpgmPlugins(2, changed.revision, false)).success, false);
+    changed = await api.restoreRpgmPlugins(2, changed.revision, true);
+    assert.equal(changed.backup.state, "same");
+    assert.ok(!changed.entries.some((entry) => entry.name === "UpdateAddon"));
+
+    // Unreadable list: read-only with a reason, Restore puts it back.
+    let unreadable = await api.getRpgmPlugins(3);
+    assert.equal(unreadable.readable, false);
+    assert.match(unreadable.reason, /code after/);
+    assert.equal((await api.setRpgmPluginEnabled(3, 0, false, unreadable.revision)).success, false);
+    unreadable = await api.restoreRpgmPlugins(3, unreadable.revision, true);
+    assert.equal(unreadable.readable, true);
+
+    // Running game: refused.
+    mockBackend._mockRunningGames.add(1);
+    const running = await api.setRpgmPluginEnabled(1, 0, false, state.revision);
+    assert.match(running.error, /Close the game/);
+    mockBackend._mockRunningGames.delete(1);
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});
+
 test("companion tools persist definitions, overrides, run support and duplicate guards", async () => {
   const storage = new Map([
     ["wlib-mock-platform", "linux"],

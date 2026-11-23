@@ -624,3 +624,149 @@ def test_rgss_api_refusals(tmp_path, monkeypatch):
     assert "Close the game" in str(running_switch["error"])
     assert (folder / "Game.rgss3a").is_file()
     assert not (folder / "Game.rgss3a.wlib-backup").exists()
+
+
+# ── RPG Maker plugin manager ──
+
+
+def plugin_game(tmp_path: Path, engine: str = "mz") -> tuple[Path, int]:
+    from test_rpgm_plugins import entry, make_game, write_plugin
+
+    root = make_game(
+        tmp_path, [entry("Core"), entry("User"), entry("Off", False)], engine=engine
+    )
+    write_plugin(root, "User", "/*:\n * @base Core\n */\n")
+    (root / "js" / "plugins.js").write_text(
+        (root / "js" / "plugins.js")
+        .read_text(encoding="utf-8")
+        .replace('"description":""', '"description":"x\\ud800"', 1),
+        encoding="utf-8",
+    )
+    exe = root / "Game.exe"
+    exe.touch()
+    game_id = add_game("Plugins", str(exe))
+    assert game_id is not None
+    return root, game_id
+
+
+@pytest.mark.parametrize("engine", ["mv", "mz"])
+def test_rpgm_plugins_api_success(tmp_path, engine):
+    api = Api()
+    root, game_id = plugin_game(tmp_path, engine)
+    state = api.get_rpgm_plugins(game_id)
+    assert state["success"] is True
+    assert state["engine"] == engine
+    entries = state["entries"]
+    assert [e["name"] for e in entries] == ["Core", "User", "Off"]
+    assert entries[0]["needed_by"] == (["User"] if engine == "mz" else [])
+    assert entries[0]["description"] == "x�"
+    _ = json.dumps(state, ensure_ascii=False).encode("utf-8")
+
+    result = api.set_rpgm_plugin_enabled(game_id, 0, False, state["revision"])
+    assert result["success"] is True
+    assert result["entries"][0]["enabled"] is False
+    assert result["backup"]["state"] == "toggles"
+    issues = result["entries"][1]["issues"]
+    assert [i["code"] for i in issues] == (
+        ["missing_dependency"] if engine == "mz" else []
+    )
+    restored = api.restore_rpgm_plugins(game_id, result["revision"], False)
+    assert restored["success"] is True
+    assert restored["backup"]["state"] == "same"
+    assert (root / "js" / "plugins.js.wlib-backup").exists()
+    assert api.get_game_tool_status(game_id)["running"] is False
+
+
+def test_rpgm_plugins_api_rejects_bad_input(tmp_path):
+    api = Api()
+    _root, game_id = plugin_game(tmp_path)
+    revision = api.get_rpgm_plugins(game_id)["revision"]
+    assert api.get_rpgm_plugins(999)["error"] == "Game not found"
+    assert api.set_rpgm_plugin_enabled(999, 0, False, revision)["success"] is False
+    renpy_folder, renpy_id = renpy_game(tmp_path)
+    assert "not a RPG Maker" in str(api.get_rpgm_plugins(renpy_id)["error"])
+    assert "not a RPG Maker" in str(
+        api.set_rpgm_plugin_enabled(renpy_id, 0, False, "")["error"]
+    )
+    for args in (
+        (True, False, revision),
+        ("0", False, revision),
+        (0.0, False, revision),
+        (0, "false", revision),
+        (0, False, None),
+    ):
+        result = api.set_rpgm_plugin_enabled(game_id, *args)
+        assert result["success"] is False
+    assert api.restore_rpgm_plugins(game_id, None, True)["success"] is False
+    assert api.restore_rpgm_plugins(game_id, revision, "yes")["success"] is False
+    assert api.set_rpgm_plugin_enabled(game_id, 7, False, revision)["success"] is False
+
+
+def test_rpgm_plugins_api_stale_and_refused_restore(tmp_path):
+    api = Api()
+    root, game_id = plugin_game(tmp_path)
+    path = root / "js" / "plugins.js"
+    state = api.get_rpgm_plugins(game_id)
+    path.write_bytes(path.read_bytes() + b"\n")
+    result = api.set_rpgm_plugin_enabled(game_id, 0, False, state["revision"])
+    assert result["success"] is False
+    assert result["code"] == "stale"
+    assert not (root / "js" / "plugins.js.wlib-backup").exists()
+    assert api.restore_rpgm_plugins(game_id, "x", False)["code"] == "stale"
+
+    (root / "js" / "plugins.js.wlib-backup").write_text(
+        'var $plugins = [{"name":"Core","status":true}];', encoding="utf-8"
+    )
+    revision = api.get_rpgm_plugins(game_id)["revision"]
+    before = path.read_bytes()
+    refused = api.restore_rpgm_plugins(game_id, revision, False)
+    assert refused["success"] is False
+    assert "code" not in refused
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("busy", ["running", "installing", "moving", "tool"])
+def test_rpgm_plugins_api_refused_while_busy(tmp_path, monkeypatch, busy):
+    api = Api()
+    root, game_id = plugin_game(tmp_path)
+    path = root / "js" / "plugins.js"
+    before = path.read_bytes()
+    revision = api.get_rpgm_plugins(game_id)["revision"]
+    if busy == "running":
+        monkeypatch.setattr(api, "get_running_games", lambda: [game_id])
+    elif busy == "installing":
+        api._archive_install_status["running"] = True
+        api._archive_install_game_id = game_id
+    elif busy == "moving":
+        monkeypatch.setattr(
+            api, "_game_files_busy_reason", lambda _gid, **_kw: "Moving"
+        )
+    else:
+        api._tool_status[game_id] = {"running": True, "action": "decrypt"}
+    result = api.set_rpgm_plugin_enabled(game_id, 0, False, revision)
+    assert result["success"] is False
+    restore = api.restore_rpgm_plugins(game_id, revision, True)
+    assert restore["success"] is False
+    assert path.read_bytes() == before
+    assert not (root / "js" / "plugins.js.wlib-backup").exists()
+
+
+def test_launch_refused_during_plugin_write(tmp_path, monkeypatch):
+    from core import rpgm_plugins
+
+    api = Api()
+    _root, game_id = plugin_game(tmp_path)
+    revision = api.get_rpgm_plugins(game_id)["revision"]
+    seen: list[str | None] = []
+    real = rpgm_plugins.set_plugin_enabled
+
+    def spy(*args):
+        with api._status_lock:
+            seen.append(api._game_busy_reason(game_id))
+        return real(*args)
+
+    monkeypatch.setattr(rpgm_plugins, "set_plugin_enabled", spy)
+    assert api.set_rpgm_plugin_enabled(game_id, 0, False, revision)["success"] is True
+    assert seen and "mod tool" in str(seen[0])
+    with api._status_lock:
+        assert api._game_busy_reason(game_id) is None

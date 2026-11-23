@@ -1580,6 +1580,55 @@ export interface UnityToolsState { build: UnityBuild; platform: "windows" | "lin
 export interface BepInExBuild { id: string; major: number; backend: "mono" | "il2cpp"; channel: "stable" | "pre" | "be"; date: string }
 export interface BepInExVersions extends ApiBasicResponse { builds?: BepInExBuild[]; recommended?: BepInExBuild | null; warnings?: string[] }
 
+export type RpgmPluginEngine = "mv" | "mz" | "unknown";
+export type RpgmPluginIssueCode =
+  | "missing_file"
+  | "unsafe_name"
+  | "missing_dependency"
+  | "wrong_order"
+  | "case_mismatch"
+  | "duplicate";
+
+export interface RpgmPluginIssue {
+  code: RpgmPluginIssueCode;
+  level: "warning" | "note";
+  // plugins that a dependency or order issue names
+  names: string[];
+  // only for wrong_order
+  direction?: "after" | "before";
+}
+
+export interface RpgmPluginEntry {
+  // position in js/plugins.js; a switch acts on this entry
+  index: number;
+  name: string;
+  description: string;
+  enabled: boolean;
+  // true when the engine loads this entry (on, and not a duplicate)
+  loaded: boolean;
+  can_enable: boolean;
+  // loaded MZ plugins that declare this one with @base
+  needed_by: string[];
+  issues: RpgmPluginIssue[];
+}
+
+export type RpgmPluginBackupState = "none" | "invalid" | "same" | "toggles" | "changed";
+
+export interface RpgmPluginsBackup {
+  state: RpgmPluginBackupState;
+  reason: string;
+}
+
+export interface RpgmPluginsState extends ApiBasicResponse {
+  engine?: RpgmPluginEngine;
+  readable?: boolean;
+  reason?: string;
+  // SHA-256 of js/plugins.js; empty when the file is missing
+  revision?: string;
+  entries?: RpgmPluginEntry[];
+  backup?: RpgmPluginsBackup;
+}
+
 export interface GameToolsResponse extends ApiBasicResponse {
   engine?: GameToolEngine;
   renpy?: RenpyToolsState;
@@ -2204,6 +2253,24 @@ class ApiService {
 
   async setRgssUseExtracted(gameId: number, enabled: boolean): Promise<GameToolResult> {
     return this.invoke<GameToolResult>("set_rgss_use_extracted", gameId, enabled);
+  }
+
+  async getRpgmPlugins(gameId: number): Promise<RpgmPluginsState> {
+    return this.invoke<RpgmPluginsState>("get_rpgm_plugins", gameId);
+  }
+
+  // `code: "stale"` means the file changed after `revision` was loaded.
+  async setRpgmPluginEnabled(
+    gameId: number,
+    index: number,
+    enabled: boolean,
+    revision: string,
+  ): Promise<RpgmPluginsState> {
+    return this.invoke<RpgmPluginsState>("set_rpgm_plugin_enabled", gameId, index, enabled, revision);
+  }
+
+  async restoreRpgmPlugins(gameId: number, revision: string, replaceChanged: boolean): Promise<RpgmPluginsState> {
+    return this.invoke<RpgmPluginsState>("restore_rpgm_plugins", gameId, revision, replaceChanged);
   }
 
   async getGameToolStatus(gameId: number): Promise<GameToolStatus> {

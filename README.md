@@ -71,7 +71,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 
 - Save backups with restore and merge after an update. Backups stay on your computer and are never synced.
 - **Ren'Py:** developer console switch, `.rpa` extraction and the URM toggle.
-- **RPG Maker MV/MZ:** decrypt encrypted assets and switch the game to load them, and edit saves (gold, items, actors, switches, variables, or the raw data) with a backup before each write.
+- **RPG Maker MV/MZ:** decrypt encrypted assets and switch the game to load them, edit saves (gold, items, actors, switches, variables, or the raw data) with a backup before each write, and switch plugins on or off with a backup and one-click restore. The plugin list warns about missing files, duplicates and, for MZ only, declared dependencies and load order. Game updates do not keep plugin changes.
 - **Unity:** install, update or remove BepInEx 5 or 6, with a backup.
 
 ### Launching
