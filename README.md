@@ -37,7 +37,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - **Updates in one click.** Check the whole library against F95Zone, download the new build through the browser extension or as an RPDL torrent, and install it over the old one with your saves moved across.
 - **Made for Linux.** Wine, Proton through umu-launcher, an RPG Maker runner, GameMode, MangoHud, gamescope, Winetricks and per-game sandboxing are built in.
 - **Steam Deck ready.** Controller navigation, a TV mode that turns on in Gaming Mode, and games added to Steam as shortcuts.
-- **Light.** About 137 MB of RAM when idle on Windows, about half of what the Electron-based managers use ([details](docs/feature-comparison.md)).
+- **Light.** About 137 MB of RAM when idle on Windows, about half of what the Electron-based managers use ([details](https://github.com/kirin-3/wLib/wiki/Comparison)).
 - **Your data stays yours.** Back up to a single JSON file, sync through a folder, Dropbox or Google Drive with optional encryption, and import from F95Checker, Atlas, XLibrary, f69, Game-List or Playnite.
 
 ## Features
@@ -109,7 +109,7 @@ Light and dark themes, an accent color, text size, interface scale from 80% to 1
 
 ## How it compares
 
-A short version of the [full feature comparison](docs/feature-comparison.md), read from each app's source on 2026-11-16.
+A short version of the [comparison on the wiki](https://github.com/kirin-3/wLib/wiki/Comparison), checked on 2026-11-16. The wiki also has one page for each app: [wLib vs XLibrary](https://github.com/kirin-3/wLib/wiki/wLib-vs-XLibrary), [wLib vs Atlas](https://github.com/kirin-3/wLib/wiki/wLib-vs-Atlas) and [wLib vs f69](https://github.com/kirin-3/wLib/wiki/wLib-vs-f69).
 
 | | wLib | XLibrary | Atlas | f69 |
 |---|---|---|---|---|
@@ -131,7 +131,7 @@ A short version of the [full feature comparison](docs/feature-comparison.md), re
 
 \* Tested on 2026-11-16 on a Windows 11 VM with empty libraries, using wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.14 and f69 0.14.1. The number is the median RAM that the app and its child processes hold over 4 minutes.
 
-Other apps have things wLib doesn't yet, such as browsing the full catalog, machine translation and applying patches with rollback. The [full comparison](docs/feature-comparison.md) lists them.
+Other apps have things wLib doesn't yet, such as browsing the full catalog, machine translation and applying patches with rollback. The [comparison pages](https://github.com/kirin-3/wLib/wiki/Comparison) list them.
 
 ## Screenshots
 
