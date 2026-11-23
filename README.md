@@ -111,26 +111,26 @@ Light and dark themes, an accent color, text size, interface scale from 80% to 1
 
 A short version of the [comparison on the wiki](https://github.com/kirin-3/wLib/wiki/Comparison), checked on 2026-11-23. The wiki also has one page for each app: [wLib vs XLibrary](https://github.com/kirin-3/wLib/wiki/wLib-vs-XLibrary), [wLib vs Atlas](https://github.com/kirin-3/wLib/wiki/wLib-vs-Atlas), [wLib vs f69](https://github.com/kirin-3/wLib/wiki/wLib-vs-f69), [wLib vs F95Checker](https://github.com/kirin-3/wLib/wiki/wLib-vs-F95Checker) and [wLib vs XDir](https://github.com/kirin-3/wLib/wiki/wLib-vs-XDir).
 
-| | wLib | XLibrary | Atlas | f69 | F95Checker | XDir |
-|---|---|---|---|---|---|---|
-| Source | Open, GPLv3+ | Closed | Open, GPLv3 | Open, MIT | Open, GPLv3 | Public, no license |
-| Ads | No | Yes | No | No | No | No |
-| RAM when idle (Windows)\* | ~137 MB | ~294 MB | ~246 MB | ~69 MB | Not measured | Not measured |
-| Platforms | Linux, Windows | Windows, Linux, macOS | Windows, Linux | Linux, Windows | Windows, Linux, macOS | Windows |
-| In-app update downloads | Yes | Yes | Yes | Yes | F95 Donor DDL only | No |
-| Torrents (RPDL) | Yes | Yes | No | Yes | Opens in your torrent client | No |
-| Proton / umu-launcher | Yes | Yes | Manual | No | Manual | No |
-| Sandbox and per-game internet block | Yes | Yes (sandbox Windows only) | No | Sandbox only | No | No |
-| Controller / Steam Deck UI | Yes | Yes | No | No | No | No |
-| Add games to Steam | Yes (Linux) | Yes | No | No | No | No |
-| Ren'Py and RPG Maker tools | Yes | No | No | Yes | No | No |
-| Save editor, RPG Maker plugin manager | Yes | No | No | No | No | No |
-| GameMode, MangoHud, Winetricks | Yes | No | No | No | No | No |
-| Cloud sync | Folder, Dropbox, Google Drive | Google Drive | No | No | No | No |
-| LewdCorner | Yes | Yes | Yes | No | No | No |
-| Import from other apps | 6 apps | 4 apps | 2 apps | 2 apps | None | None |
+| | wLib | XLibrary | Atlas | f69 | F95Checker |
+|---|---|---|---|---|---|
+| Source | Open, GPLv3+ | Closed | Open, GPLv3 | Open, MIT | Open, GPLv3 |
+| Ads | No | Yes | No | No | No |
+| RAM when idle (Windows)\* | ~137 MB | ~294 MB | ~246 MB | ~69 MB | Not measured |
+| Platforms | Linux, Windows | Windows, Linux, macOS | Windows, Linux | Linux, Windows | Windows, Linux, macOS |
+| In-app update downloads | Yes | Yes | Yes | Yes | F95 Donor DDL only |
+| Torrents (RPDL) | Yes | Yes | No | Yes | Opens in your torrent client |
+| Proton / umu-launcher | Yes | Yes | Manual | No | Manual |
+| Sandbox and per-game internet block | Yes | Yes (sandbox Windows only) | No | Sandbox only | No |
+| Controller / Steam Deck UI | Yes | Yes | No | No | No |
+| Add games to Steam | Yes (Linux) | Yes | No | No | No |
+| Ren'Py and RPG Maker tools | Yes | No | No | Yes | No |
+| Save editor, RPG Maker plugin manager | Yes | No | No | No | No |
+| GameMode, MangoHud, Winetricks | Yes | No | No | No | No |
+| Cloud sync | Folder, Dropbox, Google Drive | Google Drive | No | No | No |
+| LewdCorner | Yes | Yes | Yes | No | No |
+| Import from other apps | 6 apps | 4 apps | 2 apps | 2 apps | None |
 
-\* Tested on 2026-11-16 on a Windows 11 VM with empty libraries, using wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.14 and f69 0.14.1. F95Checker and XDir were not part of this test. The number is the median RAM that the app and its child processes hold over 4 minutes.
+\* Tested on 2026-11-16 on a Windows 11 VM with empty libraries, using wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.14 and f69 0.14.1. F95Checker was not part of this test. The number is the median RAM that the app and its child processes hold over 4 minutes.
 
 Other apps have things wLib doesn't yet, such as browsing the full catalog, machine translation and applying patches with rollback. The [comparison pages](https://github.com/kirin-3/wLib/wiki/Comparison) list them.
 
