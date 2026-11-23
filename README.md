@@ -22,6 +22,7 @@
   <a href="#features">Features</a> ·
   <a href="#how-it-compares">Comparison</a> ·
   <a href="#browser-extension">Browser extension</a> ·
+  <a href="https://github.com/kirin-3/wLib/wiki">User guide</a> ·
   <a href="docs/README.md">Developer docs</a>
 </p>
 
@@ -235,7 +236,7 @@ Other apps have things wLib doesn't yet, such as browsing the full catalog, mach
 
 ## Installing
 
-Download wLib from the [Releases](https://github.com/kirin-3/wLib/releases) page.
+Download wLib from the [Releases](https://github.com/kirin-3/wLib/releases) page. The [user guide](https://github.com/kirin-3/wLib/wiki) on the wiki explains each step, with screenshots.
 
 | System | Download |
 |---|---|
@@ -323,6 +324,8 @@ It only talks to wLib on your own computer (port `8183`), so wLib has to be runn
 If you installed the extension before wLib 0.3.9, restart Chrome once, or install the Firefox `.xpi` one more time, to get automatic updates. If the extension says wLib is out of date, update the app.
 
 ## Troubleshooting
+
+More problems and fixes are on the wiki's [Troubleshooting](https://github.com/kirin-3/wLib/wiki/Troubleshooting) page.
 
 **The window is blank or crashes on startup (Linux).** wLib checks your GPU when it starts, and after a crash with hardware acceleration it switches to software rendering on the next launch. Details are in `renderer-diagnostics.log` in the data folder.
 
