@@ -435,7 +435,7 @@ def test_a_carried_save_folder_is_journalled_in_one_write(tmp_path):
 
     # One record write names every file before any of them changes.
     assert len(writes) == 1
-    assert writes[0]["saved"] == ["saves/file0.sav"]
+    assert writes[0]["saved"] == [os.path.join("saves", "file0.sav")]
     assert len(writes[0]["created"]) == 199
     # The copy step then needs no more journal writes.
     for index in range(200):
