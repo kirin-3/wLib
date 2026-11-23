@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 from collections.abc import Mapping
 from typing import NamedTuple, cast
 
@@ -17,6 +18,14 @@ MAX_SIDE = 16384
 MAX_PLUGINS_BYTES = 4 * 1024 * 1024
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MV_DEFAULT = (816, 624)
+# O_NONBLOCK and O_NOCTTY do not exist on Windows; O_BINARY exists only there
+# and keeps the C runtime from changing line ends.
+_OPEN_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_NONBLOCK", 0)
+    | getattr(os, "O_NOCTTY", 0)
+    | getattr(os, "O_BINARY", 0)
+)
 
 # Plugin name -> (width parameter, height parameter). Plugins load in list
 # order and each sets the screen size, so the last enabled one wins.
@@ -160,13 +169,26 @@ def _valid_side(value: object) -> bool:
 
 
 def _read_text(path: str, limit: int) -> str | None:
+    """The text of a regular file of at most `limit` bytes; None otherwise.
+
+    A named pipe or a device would make open() or read() wait for a writer
+    and stall the launch: the open does not wait (O_NONBLOCK where it
+    exists), and only a regular file is read.
+    """
     try:
-        if os.path.getsize(path) > limit:
+        fd = os.open(path, _OPEN_FLAGS)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
             return None
-        with open(path, encoding="utf-8-sig", errors="replace") as handle:
+        with open(fd, encoding="utf-8-sig", errors="replace", closefd=False) as handle:
             return handle.read(limit + 1)
     except OSError:
         return None
+    finally:
+        os.close(fd)
 
 
 def _read_json(path: str, limit: int) -> object:

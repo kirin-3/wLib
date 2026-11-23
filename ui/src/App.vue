@@ -199,11 +199,15 @@ const pollSyncStatus = async () => {
 const showInstallModal = ref(false);
 watch(showInstallModal, value => {
   updateDownloads.setInstallDialogOpen(value);
-  if (!value) installArchivePassword.value = "";
+  if (!value) {
+    installArchivePassword.value = "";
+    installVersion.value = "";
+  }
 });
 const installGame = ref<GameRecord | null>(null);
 const installArchivePath = ref("");
 const installArchivePassword = ref("");
+const installVersion = ref("");
 const installSeed = ref<InstallArchiveSeed | undefined>();
 
 let installRequestId = 0;
@@ -226,6 +230,7 @@ const handleInstallArchiveRequest = async (event: Event) => {
   installGame.value = game;
   installArchivePath.value = detail.archivePath || "";
   installArchivePassword.value = detail.archivePassword || "";
+  installVersion.value = detail.version || "";
   installSeed.value = detail.seed;
   showInstallModal.value = true;
 };
@@ -893,6 +898,7 @@ onUnmounted(() => {
         @installed="updateDownloads.markInstalled"
         :preselected-archive="installArchivePath"
         :archive-password="installArchivePassword"
+        :download-version="installVersion"
         :seed="installSeed"
       />
     </main>

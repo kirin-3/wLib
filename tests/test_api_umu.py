@@ -123,7 +123,12 @@ def test_prefix_tools_wine_commands_and_locks(tmp_path, monkeypatch):
     from core.database import add_game
 
     patch_api_name(monkeypatch, "is_linux", lambda: True)
-    patch_api_name(monkeypatch, "host_which", lambda name: f"/usr/bin/{name}")
+    patch_api_name(
+        monkeypatch,
+        "host_which",
+        # Like the real host_which, an absolute path comes back as it is.
+        lambda name: name if name.startswith("/") else f"/usr/bin/{name}",
+    )
     process = MagicMock()
     process.poll.return_value = None
     popen = MagicMock(return_value=process)
@@ -215,9 +220,11 @@ def test_prefix_tool_refusals(tmp_path, monkeypatch):
     api = Api()
     prefix = str(tmp_path / "prefix")
     patch_api_name(monkeypatch, "host_which", lambda _: None)
+    # The default "wine" runner is looked up on PATH; a selected Wine path is
+    # used as it is (test_bughunt_modtools02).
     assert (
         "Wine is not installed"
-        in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
+        in api.open_wine_prefix_tool("winecfg", prefix, "wine")["error"]
     )
     assert (
         "Wine is not installed"
@@ -226,13 +233,18 @@ def test_prefix_tool_refusals(tmp_path, monkeypatch):
     patch_api_name(
         monkeypatch,
         "host_which",
-        lambda name: "/usr/bin/wine" if name == "wine" else None,
+        lambda name: "/usr/bin/wine" if name in ("wine", "/usr/bin/wine") else None,
     )
     assert (
         "zenity or kdialog"
         in api.open_wine_prefix_tool("winetricks", prefix, "/usr/bin/wine")["error"]
     )
-    patch_api_name(monkeypatch, "host_which", lambda name: f"/usr/bin/{name}")
+    patch_api_name(
+        monkeypatch,
+        "host_which",
+        # Like the real host_which, an absolute path comes back as it is.
+        lambda name: name if name.startswith("/") else f"/usr/bin/{name}",
+    )
     api._deps_install_status["running"] = True
     assert (
         "install"
@@ -267,7 +279,12 @@ def test_runtime_installs_and_launches_respect_shared_prefix(tmp_path, monkeypat
     from core.launcher import RunningGame
 
     patch_api_name(monkeypatch, "is_linux", lambda: True)
-    patch_api_name(monkeypatch, "host_which", lambda name: f"/usr/bin/{name}")
+    patch_api_name(
+        monkeypatch,
+        "host_which",
+        # Like the real host_which, an absolute path comes back as it is.
+        lambda name: name if name.startswith("/") else f"/usr/bin/{name}",
+    )
     api = Api()
     prefix = str(tmp_path / "prefix")
     api.launcher._running[1] = RunningGame(

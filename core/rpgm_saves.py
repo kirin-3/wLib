@@ -32,6 +32,7 @@ from core._save_io import (
     atomic_replace_checked,
     read_fingerprint as _read_fingerprint,
     reject_symlink,
+    revision_of,
 )
 from core.lzstring import LZStringError, compress_to_base64, decompress_from_base64
 
@@ -843,8 +844,8 @@ def resolve_slot(data_root: str, effective: str, name: object) -> tuple[str, str
 def load_save(path: str, names: Mapping[str, object]) -> JsonDict:
     """Decode a slot file into the payload the editor shows."""
     try:
-        stat = os.stat(path)
         with open(path, "rb") as handle:
+            stat = os.fstat(handle.fileno())
             data = handle.read()
     except OSError as exc:
         raise RpgmSaveError("The save file could not be read", "read_failed") from exc
@@ -854,6 +855,7 @@ def load_save(path: str, names: Mapping[str, object]) -> JsonDict:
         "format": fmt,
         "size": stat.st_size,
         "mtime_ns": str(stat.st_mtime_ns),  # string: a JS number would lose digits
+        "revision": revision_of(data),
         "view": build_view(tree, names),
         "names": dict(names),
         "raw": tree,
@@ -867,12 +869,18 @@ def write_save(
     mtime_ns: int,
     names: Mapping[str, object],
     backup: Callable[[], str],
+    *,
+    revision: str | None = None,
 ) -> str:
     """Apply `patches` to the slot file safely and return the backup name.
 
-    Order: read and fingerprint, size/mtime check, decode and apply, backup,
-    encode, verify, write a temp file, recheck the fingerprint, then an atomic
-    replace. Any failure leaves the original file untouched.
+    Order: read and fingerprint, size/mtime and revision check, decode and
+    apply, backup, encode, verify, write a temp file, recheck the fingerprint,
+    then an atomic replace. Any failure leaves the original file untouched.
+
+    `revision` is the `load_save()` revision of the bytes the editor showed.
+    It catches a slot replaced after it was opened with the same size and
+    mtime (for example by a sync tool), which the size/mtime check misses.
 
     The recheck right before the replace makes sure that a game which wrote
     the slot after it was read (for example during the backup) does not lose
@@ -882,6 +890,8 @@ def write_save(
     reject_symlink(path)
     data, fingerprint = _read_fingerprint(path)
     if fingerprint[0] != size or fingerprint[1] != mtime_ns:
+        raise SaveChanged(_CHANGED)
+    if revision is not None and fingerprint[4] != revision:
         raise SaveChanged(_CHANGED)
     fmt = format_for_name(os.path.basename(path))
     tree = decode_save(data, fmt)

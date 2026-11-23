@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {orderBuilds,preselect,downloadFailureMessage,needsExtensionSwitch,bulkDownloadDecision,pickerTargetVersion,platformLabel,selectableBuild,siteUnavailable,visibleArchivePassword} from './updateDownloads.ts';
+import {orderBuilds,preselect,settlePickerStart,downloadFailureMessage,needsExtensionSwitch,bulkDownloadDecision,pickerTargetVersion,platformLabel,selectableBuild,siteUnavailable,visibleArchivePassword} from './updateDownloads.ts';
 import type {UpdateBuild} from '../services/api.ts';
 const build = (platform: string, kind = 'full'): UpdateBuild => ({label:platform,section:'',platform,kind,mirrors:[{link_id:platform,host:'mega',label:'MEGA',part:'',split:false}]});
 test('prefers native full builds and separates unsuitable platforms',()=>{
@@ -117,4 +117,37 @@ test('archive password visibility trims whitespace and hides empty values', () =
   assert.equal(visibleArchivePassword(''), '');
   assert.equal(visibleArchivePassword('   '), '');
   assert.equal(visibleArchivePassword(undefined), '');
+});
+
+test('a late download answer only changes the picker that started it',async()=>{
+  const run = async (response: {success: boolean; error?: string}, stillOpen: boolean) => {
+    const events: string[] = [];
+    let release: (value: {success: boolean; error?: string}) => void = () => {};
+    const request = new Promise<{success: boolean; error?: string}>(resolve => { release = resolve; });
+    const settled = settlePickerStart(request, {
+      stillOpen: () => stillOpen,
+      refresh: () => { events.push('refresh'); },
+      close: () => { events.push('close'); },
+      notify: () => { events.push('notify'); },
+      showError: message => { events.push(`error:${message}`); },
+    });
+    release(response);
+    await settled;
+    return events;
+  };
+  // The picker that started the download is still open.
+  assert.deepEqual(await run({success: true}, true), ['refresh','close','notify']);
+  assert.deepEqual(await run({success: false, error: 'Already queued'}, true), ['error:Already queued']);
+  assert.deepEqual(await run({success: false}, true), ['error:Could not start download']);
+  // Game A's picker closed and game B's opened before A's answer came.
+  assert.deepEqual(await run({success: true}, false), ['refresh','notify']);
+  assert.deepEqual(await run({success: false, error: 'Already queued'}, false), []);
+  const thrown = await (async () => {
+    const events: string[] = [];
+    await settlePickerStart(Promise.reject(new Error('Bridge gone')), {
+      stillOpen: () => false, refresh() {}, close() {}, notify() {}, showError: message => { events.push(message); },
+    });
+    return events;
+  })();
+  assert.deepEqual(thrown, []);
 });

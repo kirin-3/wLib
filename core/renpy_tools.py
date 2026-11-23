@@ -28,6 +28,7 @@ from core.game_tools import (
     check_free_space,
     create_temp_file,
     export_root,
+    planned_key,
     resolve_destination,
     validate_output_folder,
 )
@@ -455,10 +456,11 @@ def extract_archives(
                 if entry.name.lower().endswith(SCRIPT_EXTENSIONS):
                     skipped_scripts += 1
                     continue
-                if os.path.lexists(destination) or destination in planned:
+                key = planned_key(destination)
+                if os.path.lexists(destination) or key in planned:
                     skipped_existing += 1
                     continue
-                planned.add(destination)
+                planned.add(key)
             tasks.append(_Task(path, entry, destination, entry.name))
 
     check_free_space(

@@ -5,7 +5,7 @@ import {IconAlertTriangle, IconCheck, IconChevronRight, IconCircleCheck, IconCop
 import {useRouter} from 'vue-router';
 import {api, type DownloadSite, type DownloadSiteOption, type RpdlSearchResponse, type RpdlTorrent, type UpdateBuild, type UpdateMirror} from '../../services/api';
 import {useUpdateDownloads} from '../../composables/useUpdateDownloads';
-import {downloadFailureMessage, inAppMirror, needsExtensionSwitch, orderBuilds, pickerTargetVersion, platformLabel, preselect, selectableBuild, siteUnavailable, suitable, visibleArchivePassword, type HostPlatform} from '../../utils/updateDownloads';
+import {downloadFailureMessage, inAppMirror, needsExtensionSwitch, orderBuilds, pickerTargetVersion, platformLabel, preselect, selectableBuild, settlePickerStart, siteUnavailable, suitable, visibleArchivePassword, type HostPlatform} from '../../utils/updateDownloads';
 import {isWishlisted} from '../../utils/libraryGames';
 import {loadPlatformCapabilities} from '../../utils/platformCapabilities';
 import {formatSize, formatUploadDate, rpdlMarks, rpdlNote, rpdlPreselected, rpdlPrimaryAction, rpdlPrimaryLabel, torrentSentMessage} from '../../utils/torrentDownloads';
@@ -50,6 +50,8 @@ const primaryAction = computed(()=>chosenTorrent.value ? rpdlPrimaryAction(watch
 const platform = ref<HostPlatform>('linux');
 const modal = useTemplateRef<HTMLElement>("modal");
 let generation = 0;
+// One number per opened picker; a download start answers only the picker that sent it.
+let pickerSession = 0;
 const wishlisted = computed(() => !!game.value && isWishlisted(game.value));
 const updateVersion = computed(() => game.value ? pickerTargetVersion(game.value) : '');
 const canSelect = (build: UpdateBuild) => selectableBuild(build, wishlisted.value);
@@ -57,7 +59,7 @@ const rpdlNoteText = computed(() => rpdlNote(rpdl.value));
 const ordered = computed(()=>orderBuilds(builds.value,platform.value));
 const onlySuitablePatches = computed(() => wishlisted.value && ordered.value.suitable.length > 0
   && ordered.value.suitable.every(build => !canSelect(build)));
-const close = () => { generation++; rpdlGeneration++; if (passwordCopyTimer) { clearTimeout(passwordCopyTimer); passwordCopyTimer = null; } passwordCopied.value = false; if (game.value) void api.closeUpdateDownloadLinks(game.value.id); downloads.close(); };
+const close = () => { generation++; rpdlGeneration++; pickerSession++; if (passwordCopyTimer) { clearTimeout(passwordCopyTimer); passwordCopyTimer = null; } passwordCopied.value = false; if (game.value) void api.closeUpdateDownloadLinks(game.value.id); downloads.close(); };
 const openSiteSettings = () => {
   close();
   void router.push(SITE_SETTINGS_ROUTE);
@@ -96,6 +98,9 @@ async function loadLinks(site: DownloadSite | '' = activeSite.value) {
   }
 }
 function openPicker() {
+  pickerSession++;
+  // A start still running for a closed picker does not block this one.
+  busy.value = false;
   sites.value = [];
   chosenTorrent.value = null;
   userChose = false;
@@ -187,19 +192,24 @@ async function start(inApp = false) {
   busy.value=true; error.value=''; exportError.value=''; exportNotice.value=''; sentMessage.value='';
   const current = game.value;
   const replaces = downloads.replacing.value;
+  const session = pickerSession;
+  const stillOpen = () => session === pickerSession;
   try {
-    const response = chosenTorrent.value
-      ? await api.startRpdlDownload(current.id,chosenTorrent.value.id,updateVersion.value,replaces)
-      : await api.startUpdateDownload(current.id,chosenMirror.value!.link_id,replaces);
-    // On a refusal the picker stays open and shows why.
-    if (!response.success) throw new Error(response.error || 'Could not start download');
-    downloads.refresh();
-    close();
-    const settings = downloads.queue.value?.settings;
-    const waits = !!settings?.download_pause_while_playing && downloads.runningGames.value.includes(current.id);
-    notify(addedNotice(current.title, waits), 'success', '', {label: 'Open Downloads', run: () => { void router.push('/downloads'); }});
-  } catch (e) { error.value=String(e instanceof Error ? e.message : e); }
-  finally { busy.value=false; }
+    const request = chosenTorrent.value
+      ? api.startRpdlDownload(current.id,chosenTorrent.value.id,updateVersion.value,replaces)
+      : api.startUpdateDownload(current.id,chosenMirror.value!.link_id,replaces);
+    await settlePickerStart(request, {
+      stillOpen,
+      refresh: () => { downloads.refresh(); },
+      close,
+      notify: () => {
+        const settings = downloads.queue.value?.settings;
+        const waits = !!settings?.download_pause_while_playing && downloads.runningGames.value.includes(current.id);
+        notify(addedNotice(current.title, waits), 'success', '', {label: 'Open Downloads', run: () => { void router.push('/downloads'); }});
+      },
+      showError: message => { error.value = message; },
+    });
+  } finally { if (stillOpen()) busy.value=false; }
 }
 async function openBrowser() {
   const current = game.value;

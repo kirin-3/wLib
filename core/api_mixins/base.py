@@ -266,6 +266,8 @@ class ApiBase:
         self._archive_install_cancel: threading.Event = threading.Event()
         # Games whose uninstall runs now; guarded by _status_lock.
         self._uninstalling: set[int] = set()
+        # Games that "Remove from library" deletes now; guarded by _status_lock.
+        self._removing: set[int] = set()
         from core.game_files import MoveQueue
 
         # Background game moves, one at a time; polled by get_move_status().
@@ -2697,6 +2699,19 @@ class ApiBase:
         except ValueError:
             return coerced_id, "", ""
 
+    def _plain_wine_binary(self, target: RuntimeInstallTarget) -> str | None:
+        """The Wine build a plain Wine target selects, like the launcher runs it.
+
+        A path (such as a Lutris or custom build) is used as it is; a bare name
+        such as the default `wine` is looked up on the host PATH. None when
+        the build is missing or not executable (also on the Flatpak host), so
+        callers can say that Wine is not installed before any work starts.
+        """
+        runner = target["proton_path"] or "wine"
+        if os.sep in runner:
+            runner = os.path.abspath(runner)
+        return host_which(runner)
+
     def _winetricks_command(
         self, target: RuntimeInstallTarget, env: dict[str, str]
     ) -> tuple[list[str], dict[str, str]]:
@@ -2715,11 +2730,28 @@ class ApiBase:
                 runner=runner,
                 environment=env,
             )
+        # Winetricks runs the selected Wine build, like winecfg, the RTP
+        # installer and the launcher, so one prefix never gets two Wines.
+        wine = self._plain_wine_binary(target)
+        if not wine:
+            raise ValueError(
+                "Wine is not installed. Install Wine first, then try again."
+            )
         path = host_which("winetricks")
         if not path:
             raise ValueError(
                 "Winetricks is not installed. Install it first, then try again."
             )
+        env = dict(env)
+        env["WINE"] = wine
+        # Wine builds ship wineserver beside wine; otherwise use the one on PATH.
+        wineserver = host_which(
+            os.path.join(os.path.dirname(wine), "wineserver")
+        ) or host_which("wineserver")
+        if wineserver:
+            env["WINESERVER"] = wineserver
+        else:
+            _ = env.pop("WINESERVER", None)
         return [path], env
 
     def _prefix_tool_conflict(
@@ -2833,6 +2865,8 @@ class ApiBase:
 
         if game_id in self._uninstalling:
             return UNINSTALLING_BUSY
+        if game_id in self._removing:
+            return "This game is being removed from the library."
         if not ignore_move and self._game_moves.state(game_id):
             return MOVING_BUSY
         if game_id in self._web_media_jobs:

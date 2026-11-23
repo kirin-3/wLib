@@ -83,14 +83,52 @@ class StringNode(MarshalNode):
         except UnicodeDecodeError:
             return None
 
+    def edit_codec(self) -> str | None:
+        """The Python codec for edits that fits the string's encoding marker.
+
+        `:E => true` is UTF-8 and `:E => false` is US-ASCII. A string without
+        a marker (all XP/VX strings, and binary ones) is edited as UTF-8.
+        A named `:encoding` (for example Shift_JIS) returns None: wLib cannot
+        check that new bytes are valid in it, so the string is read-only.
+        """
+        for key, value in self.ivars or ():
+            if key.name == b"E":
+                if isinstance(value, BoolNode):
+                    return "utf-8" if value.value else "ascii"
+                return None
+            if key.name == b"encoding":
+                return None
+        return "utf-8"
+
+    def encode_text(self, text: str) -> bytes | None:
+        """`text` in the string's own encoding, or None if it cannot hold it."""
+        codec = self.edit_codec()
+        if codec is None:
+            return None
+        try:
+            return text.encode(codec)
+        except UnicodeEncodeError:
+            return None
+
     def is_editable_utf8(self) -> bool:
-        return self.decode_utf8() is not None
+        codec = self.edit_codec()
+        if codec is None:
+            return False
+        try:
+            _ = self.data.decode(codec)
+        except UnicodeDecodeError:
+            return False
+        return True
 
     def display_text(self) -> str:
         return self.data.decode("utf-8", errors="replace")
 
     def set_text(self, text: str) -> None:
-        self.data = text.encode("utf-8")
+        """Replace the text; raises ValueError if the encoding cannot hold it."""
+        encoded = self.encode_text(text)
+        if encoded is None:
+            raise ValueError("The text does not fit the string's encoding")
+        self.data = encoded
 
 
 @dataclass(eq=False)

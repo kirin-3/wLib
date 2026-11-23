@@ -295,10 +295,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 const data = readWLibResponse(result);
                 // Pairing errors arrive with HTTP 200 so version checks still work.
                 maybeReloadForNewExtensionVersion(data);
-                if (data.error_code) {
+                // A failed lookup arrives without `matches`; reading it as an
+                // empty map would remove the badges and stop the retries.
+                const matches = data.matches;
+                if (data.error_code || !matches || typeof matches !== "object" || Array.isArray(matches)) {
                     throw new WLibServerError(result.response.status, data);
                 }
-                sendResponse({ success: true, matches: data.matches || {} });
+                sendResponse({ success: true, matches });
             })
             .catch(error => sendResponse(wlibFailure(message.action, error)));
         return true;
@@ -1266,6 +1269,9 @@ function resolveEntryFor(sender, url) {
         if (entry.finished || !sameUrl(entry.url, url)) continue;
         // For LC, a matching URL outside the window we opened does not confer ownership.
         if (entry.site === 'lc' && sender.tab.windowId !== entry.windowId) continue;
+        // Outside the resolve window, only a tab the browser created for this
+        // resolve can be ours; a tab the user already had open is left alone.
+        if (sender.tab.windowId !== entry.windowId && !resolveSpawnedTabs.has(tabId)) continue;
         if (entry.bound) {
             entry.duplicates.add(tabId);
             closeTab(tabId);

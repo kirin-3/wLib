@@ -475,7 +475,10 @@ export interface UninstallResult {
   game_id: number;
   success: boolean;
   error: string;
-  trash?: "library" | "recorded" | "in_place";
+  /** "kept": the library change is saved, but the files could not be deleted. */
+  trash?: "library" | "recorded" | "in_place" | "kept";
+  /** Set on a successful uninstall whose cleanup failed; names the kept folder. */
+  warning?: string;
 }
 export interface UninstallGamesResponse extends ApiBasicResponse {
   results?: UninstallResult[];
@@ -1193,6 +1196,8 @@ export interface RpgmSaveLoadResponse extends ApiBasicResponse {
   size: number;
   // a string: nanosecond timestamps exceed JS's safe integer range
   mtime_ns: string;
+  // SHA-256 of the loaded bytes; writeRpgmSave must send it back
+  revision: string;
   view: RpgmSaveView;
   names: RpgmNames;
   raw: Record<string, unknown> | RgssRawNodeData[];
@@ -2817,8 +2822,9 @@ class ApiService {
     patches: RpgmPatch[],
     size: number,
     mtimeNs: string,
+    revision: string,
   ): Promise<RpgmSaveWriteResponse | ApiErrorResult> {
-    return this.invoke<RpgmSaveWriteResponse | ApiErrorResult>("write_rpgm_save", gameId, file, patches, size, mtimeNs);
+    return this.invoke<RpgmSaveWriteResponse | ApiErrorResult>("write_rpgm_save", gameId, file, patches, size, mtimeNs, revision);
   }
 
   async openGameSaveBackup(gameId: number, backupName: string): Promise<ApiBasicResponse> {

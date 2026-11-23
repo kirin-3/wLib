@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch, type Component, type Ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type Component, type Ref } from "vue";
 import {
   IconAlertTriangle,
   IconBookmark,
@@ -24,7 +24,7 @@ import {
 import { api } from "../services/api";
 import PathStatus from "../components/PathStatus.vue";
 import {
-  F95AccountImport, f95AccountPreviewNote, f95AccountProgressText, f95AccountResultText,
+  F95AccountImport, createF95AccountPolling, f95AccountPreviewNote, f95AccountProgressText, f95AccountResultText,
 } from "../utils/f95AccountImport";
 import type {
   ExternalLibraryImportResponse,
@@ -482,28 +482,17 @@ watch(externalPath, () => {
 
 const f95Account = reactive(new F95AccountImport(api));
 const F95_POLL_MS = 500;
-let f95PollTimer: ReturnType<typeof setTimeout> | undefined;
-const stopF95Poll = () => {
-  if (f95PollTimer) clearTimeout(f95PollTimer);
-  f95PollTimer = undefined;
-};
-const pollF95Account = () => {
-  stopF95Poll();
-  f95PollTimer = setTimeout(async () => {
-    f95PollTimer = undefined;
-    if (await f95Account.poll()) pollF95Account();
-  }, F95_POLL_MS);
-};
-const readF95Lists = async () => {
-  if (await f95Account.start()) pollF95Account();
-};
+const f95Polling = createF95AccountPolling(f95Account, F95_POLL_MS);
+const readF95Lists = () => f95Polling.read();
+// A read keeps running in the backend while the user is on another page; show it again.
+onMounted(() => { void f95Polling.attach(); });
 const importF95Lists = async () => {
   if (await f95Account.importLists()) window.dispatchEvent(new Event("wlib-refresh-library"));
 };
 const f95ProgressText = computed(() => f95AccountProgressText(f95Account.progress));
 const f95PreviewNote = computed(() => f95AccountPreviewNote(f95Account.preview));
 const f95ResultText = computed(() => (f95Account.result ? f95AccountResultText(f95Account.result) : ""));
-onBeforeUnmount(stopF95Poll);
+onBeforeUnmount(f95Polling.dispose);
 
 const runImport = async () => {
   if (importing.value || !inspectResult.value) return;

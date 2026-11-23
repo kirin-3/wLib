@@ -199,6 +199,16 @@ def resolve_destination(root: str, root_real: str, name: str) -> str | None:
     return destination
 
 
+def planned_key(destination: str) -> str:
+    """The real file a destination writes, so two aliases count as one target.
+
+    An in-root symlinked folder (`alias/` -> `images/`) makes `alias/a.png`
+    and `images/a.png` the same file; only the first one may be written.
+    """
+    folder, name = os.path.split(destination)
+    return os.path.join(os.path.realpath(folder), name)
+
+
 def export_root(
     output_real: str, game_real: str, stem: str, used_targets: set[str]
 ) -> str:

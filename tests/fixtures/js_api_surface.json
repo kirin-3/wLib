@@ -633,6 +633,7 @@
     "file",
     "patches",
     "size",
-    "mtime_ns"
+    "mtime_ns",
+    "revision"
   ]
 }

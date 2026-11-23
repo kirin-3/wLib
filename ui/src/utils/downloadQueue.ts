@@ -379,17 +379,31 @@ export function installSource(
   return null;
 }
 
-/** Builds the install-dialog request for a finished download, including its saved password if any. */
+// Placeholder versions, as in core/versions.py actionable_remote_version.
+const NO_VERSION = new Set(["", "unknown", "n/a", "na", "none", "null"]);
+
+/**
+ * Builds the install-dialog request for a finished download, including its saved
+ * password and the version it downloaded, if any. The version keeps a later update
+ * check's newer latest version from labelling these files.
+ */
 export function installRequestForJob(job: DownloadQueueJob): {
   gameId: number;
   archivePath: string;
   archivePassword?: string;
+  version?: string;
 } | null {
   const source = installSource(job);
   if (!source) return null;
-  return source.archivePassword
-    ? { gameId: job.game_id, archivePath: source.archivePath, archivePassword: source.archivePassword }
-    : { gameId: job.game_id, archivePath: source.archivePath };
+  // Older jobs saved a placeholder such as "Unknown"; that must not label the files.
+  const saved = job.version?.trim() || "";
+  const version = NO_VERSION.has(saved.toLowerCase()) ? "" : saved;
+  return {
+    gameId: job.game_id,
+    archivePath: source.archivePath,
+    ...(source.archivePassword ? { archivePassword: source.archivePassword } : {}),
+    ...(version ? { version } : {}),
+  };
 }
 
 /** Polyline points for the speed chart; the highest sample touches the top. */

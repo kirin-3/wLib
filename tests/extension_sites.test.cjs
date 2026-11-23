@@ -217,3 +217,84 @@ test('widget sizes are fixed px, so the host root font size does not change them
     const container = css.match(/^\.wlib-add-container \{([\s\S]*?)^\}/m)[1];
     assert.match(container, /box-shadow: 0 4px 12px rgba\(0, 0, 0, 0\.35\), 0 0 0 1px rgba\(255, 255, 255, 0\.04\) inset;/);
 });
+
+test('a LewdCorner batch answer without matches is a failed check, not an empty library', async () => {
+    let listener, body;
+    const context = vm.createContext({console,AbortController,setTimeout,clearTimeout,URL,URLSearchParams,
+        chrome:{runtime:{onMessage:{addListener(fn){listener = fn;}}}},
+        fetch:async()=>({ok:true,status:200,json:async()=>body}),
+    });
+    vm.runInContext(readFileSync(path.join(__dirname,'../extension/background.js'),'utf8'),context);
+    const ask = () => new Promise(resolve=>listener({action:'checkLewdCornerThreads',threadIds:['25455']},{},resolve));
+    const lc = 'https://lewdcorner.com/threads/25455/';
+    for (const answer of [
+        {exists:false,app_version:'0.0.1'},
+        {exists:false,app_version:'0.0.1',error:'wLib could not check the library. Try again.',error_code:'lookup_failed'},
+    ]) {
+        body = answer;
+        const response = await ask();
+        assert.equal(response.success,false);
+        assert.equal(response.matches,undefined);
+    }
+    body = {exists:false,app_version:'0.0.1',matches:{[lc]:4}};
+    assert.deepEqual(JSON.parse(JSON.stringify(await ask())),{success:true,matches:{[lc]:4}});
+});
+
+test('a failed LewdCorner library lookup keeps the badge and checks again', async () => {
+    // An older app answers a failed lookup without `matches`; this one adds `lookup_failed`.
+    for (const failure of [
+        {exists:false,app_version:'0.0.1'},
+        {exists:false,app_version:'0.0.1',error:'wLib could not check the library. Try again.',error_code:'lookup_failed'},
+    ]) {
+        const makeNode = (extra = {}) => {
+            const node = {children:[], classList:{add(){}}, isConnected:true, dataset:{},
+                append(child){child.parent = node; node.children.push(child);},
+                remove(){if (node.parent) node.parent.children = node.parent.children.filter(child=>child!==node);},
+                querySelector(selector){
+                    if (selector === '.lcCardMedia') return node.media || null;
+                    if (selector === '.wlib-library-badge') return [node, ...(node.media ? [node.media] : [])]
+                        .flatMap(owner=>owner.children).find(child=>child.className === 'wlib-library-badge') || null;
+                    return null;
+                }, ...extra};
+            return node;
+        };
+        const media = makeNode();
+        const card = makeNode({dataset:{cardId:'25455'}, media});
+        card.append(media);
+        media.append(makeNode({className:'wlib-library-badge', dataset:{wlibId:'25455'}}));
+        const lc = 'https://lewdcorner.com/threads/25455/';
+        // The real background worker answers the page, so the server's answer goes the whole way.
+        let background, body = failure;
+        const worker = vm.createContext({console,AbortController,setTimeout,clearTimeout,URL,URLSearchParams,
+            chrome:{runtime:{onMessage:{addListener(fn){background = fn;}}}},
+            fetch:async()=>({ok:true,status:200,json:async()=>body}),
+        });
+        vm.runInContext(readFileSync(path.join(__dirname,'../extension/background.js'),'utf8'),worker);
+        const timers = [], calls = [];
+        let answered;
+        const page = vm.createContext({
+            location:{pathname:'/latest-updates/'},
+            setTimeout:fn=>{timers.push(fn); return timers.length;},
+            MutationObserver:class { observe(){} },
+            document:{querySelectorAll:()=>[card], createElement:()=>makeNode()},
+            chrome:{runtime:{lastError:null, sendMessage(message, reply){
+                calls.push(message);
+                answered = new Promise(done=>background(message,{},value=>{reply(value); done();}));
+            }}},
+            globalThis:{},
+        });
+        vm.runInContext(readFileSync(path.join(__dirname,'../extension/sites/lewdcorner.js'),'utf8'),page);
+        await answered;
+        const badges = () => media.children.filter(child=>child.className === 'wlib-library-badge');
+        assert.equal(calls.length,1);
+        assert.equal(badges().length,1, 'a failed lookup does not read as "not in the library"');
+        assert.equal(card.dataset.wlibChecked,undefined);
+        assert.equal(timers.length,1, 'a retry is scheduled');
+        body = {exists:false,app_version:'0.0.1',matches:{[lc]:4}};
+        timers.shift()();
+        await answered;
+        assert.equal(calls.length,2);
+        assert.equal(badges().length,1);
+        assert.equal(card.dataset.wlibChecked,'25455');
+    }
+});

@@ -339,14 +339,14 @@ def suggest_library_folder(
 
 
 def check_volume_set(volumes: VolumeSet) -> None:
-    """Refuse a multi-part archive with parts missing, naming them."""
+    """Refuse a multi-part archive with parts missing or ambiguous, naming them."""
     if volumes.complete:
         return
     if volumes.ambiguous:
         names = ", ".join(os.path.basename(part) for part in volumes.ambiguous[:4])
         more = "…" if len(volumes.ambiguous) > 4 else ""
         raise ArchiveInstallError(
-            f"Some parts of this multi-part archive have names that differ only in letter case ({names}{more}). Keep only one set of parts in the folder first."
+            f"Some parts of this multi-part archive have names that differ only in letter case or in the zeros of the part number ({names}{more}). Keep only one set of parts in the folder first."
         )
     numbers = ", ".join(str(n) for n in volumes.missing[:5])
     more = "…" if len(volumes.missing) > 5 else ""
@@ -2244,9 +2244,14 @@ def write_moved_record(
     staging: str, source: str, wrapper: str = "", flattened: bool = False
 ) -> None:
     """Record (atomically) that `staging` holds the download moved from `source`."""
+    _write_moved_record_data(
+        staging, {"source": source, "wrapper": wrapper, "flattened": flattened}
+    )
+
+
+def _write_moved_record_data(staging: str, data: Mapping[str, object]) -> None:
     path = _moved_record_path(staging)
     temp = f"{path}.tmp"
-    data = {"source": source, "wrapper": wrapper, "flattened": flattened}
     with open(temp, "w", encoding="utf-8") as handle:
         json.dump(data, handle)
         handle.flush()
@@ -2276,6 +2281,125 @@ def _read_moved_record(staging: str) -> dict[str, object] | None:
     if not isinstance(data, dict):
         return {}
     return cast(dict[str, object], data)
+
+
+def _record_save_undo(staging: str, undo: Mapping[str, object]) -> None:
+    """Add the save carry-over journal (`undo`) to the moved record of `staging`.
+
+    Written before each change, so a crash leaves enough to undo it.
+    """
+    data = dict(_read_moved_record(staging) or {})
+    data["undo"] = dict(undo)
+    _write_moved_record_data(staging, data)
+
+
+def _undo_recorded_saves(staging: str, undo: object) -> bool:
+    """Take saves carried into a moved download out again after a crash.
+
+    `undo` is the record's journal: the hidden folder that keeps the replaced
+    originals and the relative paths the carry created or replaced. A journal
+    names every path before it changes, so a replaced file whose original is
+    not in the folder was never moved and stays. Safe to run again. False
+    (keep the staging folder) when the journal is not valid or a file could
+    not be put back.
+    """
+    if undo is None:
+        return True
+    if not isinstance(undo, dict):
+        return False
+    journal = cast(dict[str, object], undo)
+    folder = journal.get("folder")
+    created = journal.get("created", [])
+    saved = journal.get("saved", [])
+    if (
+        not isinstance(folder, str)
+        or not folder.startswith(_SAVE_UNDO_PREFIX)
+        or os.path.basename(folder) != folder
+        or (os.altsep and os.altsep in folder)
+        or not isinstance(created, list)
+        or not isinstance(saved, list)
+    ):
+        return False
+    root = os.path.abspath(staging)
+
+    def checked(entries: list[object]) -> list[str] | None:
+        rels: list[str] = []
+        for rel in entries:
+            if (
+                not isinstance(rel, str)
+                or _rel_below(os.path.join(root, rel), root) != os.path.normpath(rel)
+                or _relative_inside(os.path.join(root, rel), root) in (None, "")
+            ):
+                return None
+            rels.append(rel)
+        return rels
+
+    created_rels = checked(cast(list[object], created))
+    saved_rels = checked(cast(list[object], saved))
+    if created_rels is None or saved_rels is None:
+        return False
+    return _undo_save_copies(root, folder, created_rels, saved_rels, strict=False)
+
+
+def _rel_below(path: str, root: str) -> str | None:
+    """`path` relative to `root` when it lies below it (no links resolved)."""
+    rel = os.path.relpath(os.path.normpath(os.path.abspath(path)), root)
+    if rel == "." or rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return None
+    return rel
+
+
+def _undo_save_copies(
+    root: str,
+    folder: str,
+    created: Sequence[str],
+    saved: Sequence[str],
+    *,
+    strict: bool,
+) -> bool:
+    """Remove the `created` files and put the `saved` originals back from `folder`.
+
+    With `strict` False, a saved path whose original is not in `folder` was
+    never replaced (or is already back) and is skipped.
+    """
+    ok = True
+    for rel in reversed(created):
+        path = os.path.join(root, rel)
+        try:
+            if os.path.lexists(path) and not (
+                os.path.isdir(path) and not os.path.islink(path)
+            ):
+                os.remove(path)
+        except OSError as exc:
+            _log.warning("Could not remove carried save %s: %s", path, exc)
+            ok = False
+            continue
+        # Folders the copies made. A torrent holds no empty folders.
+        parent = os.path.dirname(path)
+        while parent != root and _rel_below(parent, root) is not None:
+            try:
+                os.rmdir(parent)
+            except OSError:
+                break
+            parent = os.path.dirname(parent)
+    for rel in reversed(saved):
+        path = os.path.join(root, rel)
+        kept = os.path.join(root, folder, rel)
+        if not strict and not os.path.lexists(kept):
+            continue
+        try:
+            if os.path.lexists(path) and not (
+                os.path.isdir(path) and not os.path.islink(path)
+            ):
+                os.remove(path)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            os.rename(kept, path)
+        except OSError as exc:
+            _log.warning("Could not put back %s: %s", path, exc)
+            ok = False
+    if ok:
+        shutil.rmtree(os.path.join(root, folder), ignore_errors=True)
+    return ok
 
 
 def restore_moved_staging(staging: str, record: Mapping[str, object]) -> bool:
@@ -2322,6 +2446,68 @@ def restore_moved_staging(staging: str, record: Mapping[str, object]) -> bool:
     return True
 
 
+def _put_back_moved(staging: str, record: Mapping[str, object]) -> bool:
+    """Put the moved download in `staging` back at its source, as it was.
+
+    Saves carried in before a crash or a failed rollback come out first. False
+    (staging and its record kept) when that or the move back fails.
+    """
+    if not _undo_recorded_saves(staging, record.get("undo")):
+        _log.warning(
+            "Kept %s: saves carried into the moved download could not be taken out",
+            staging,
+        )
+        return False
+    if not restore_moved_staging(staging, record):
+        _log.warning(
+            "Kept %s: it holds a moved download that could not be put back", staging
+        )
+        return False
+    remove_moved_record(staging)
+    _log.info("Put the moved download %s back", record.get("source"))
+    return True
+
+
+def recover_moved_download(source: str, library_folders: Sequence[str]) -> bool:
+    """Put back a torrent download that a failed install left in staging.
+
+    A failed install keeps the download in `.wlib-staging-*` when the carried
+    saves could not all come out; its torrent folder is then missing, so a
+    retry must bring it back first. Only a staging folder whose moved record
+    names `source` is touched. True when the download is back at `source`.
+    The caller makes sure no install is running.
+    """
+    target = os.path.abspath(os.path.expanduser(str(source or "").strip()))
+    if os.path.lexists(target) or not in_torrent_area(target):
+        return False
+    wanted = os.path.normcase(target)
+    for library_folder in dict.fromkeys(library_folders):
+        if not library_folder:
+            continue
+        try:
+            base = os.path.abspath(os.path.expanduser(library_folder))
+            names = sorted(os.listdir(base))
+        except OSError:
+            continue
+        for name in names:
+            if not name.startswith(STAGING_PREFIX):
+                continue
+            candidate = os.path.join(base, name)
+            try:
+                if os.path.islink(candidate) or not os.path.isdir(candidate):
+                    continue
+                record = _read_moved_record(candidate)
+                source_value = str((record or {}).get("source") or "")
+                if record is None or not source_value:
+                    continue
+                if os.path.normcase(os.path.abspath(source_value)) != wanted:
+                    continue
+                return _put_back_moved(candidate, record)
+            except OSError:
+                return False
+    return False
+
+
 def cleanup_stale_staging(library_folder: str) -> int:
     """Remove leftover `.wlib-staging-*` folders from crashed installs.
 
@@ -2343,16 +2529,7 @@ def cleanup_stale_staging(library_folder: str) -> int:
                     continue
                 record = _read_moved_record(candidate)
                 if record is not None:
-                    if restore_moved_staging(candidate, record):
-                        remove_moved_record(candidate)
-                        _log.info(
-                            "Put the moved download %s back", record.get("source")
-                        )
-                    else:
-                        _log.warning(
-                            "Kept %s: it holds a moved download that could not be put back",
-                            candidate,
-                        )
+                    _ = _put_back_moved(candidate, record)
                     continue
                 shutil.rmtree(_long_path_safe(candidate), ignore_errors=True)
                 removed += 1
@@ -3092,6 +3269,9 @@ def _place_folder(
     return ""
 
 
+_SAVE_UNDO_PREFIX = ".wlib-undo-"
+
+
 class _SaveCarryUndo:
     """Makes the save copies into a moved download reversible.
 
@@ -3099,42 +3279,87 @@ class _SaveCarryUndo:
     its files. Before a carried save replaces one of them, the original is
     renamed into a hidden folder inside staging; rollback() puts the
     originals back and removes the files the copies added, so a cancelled or
-    failed install returns the download as it was.
+    failed install returns the download as it was. With `journal`, each path
+    is recorded (in the moved record) before it changes, so the cleanup after
+    a crash can do the same.
     """
 
-    def __init__(self, root: str) -> None:
+    def __init__(
+        self, root: str, journal: Callable[[Mapping[str, object]], None] | None = None
+    ) -> None:
         self.root: str = os.path.abspath(root)
-        self.name: str = f".wlib-undo-{time.time_ns()}"
+        self.name: str = f"{_SAVE_UNDO_PREFIX}{time.time_ns()}"
+        self._journal: Callable[[Mapping[str, object]], None] | None = journal
         self._seen: set[str] = set()
         self._created: list[str] = []
         self._saved: list[str] = []
+        # What the journal names: also paths whose change did not finish.
+        self._logged_created: list[str] = []
+        self._logged_saved: list[str] = []
+
+    def _log_changes(self, changes: Sequence[tuple[str, bool]]) -> None:
+        """Record `(rel, replaced)` changes in the journal with one write.
+
+        A whole save folder is journalled at once, so carrying hundreds of
+        files costs one record write, not one per file.
+        """
+        if not changes:
+            return
+        created = [rel for rel, replaced in changes if not replaced]
+        saved = [rel for rel, replaced in changes if replaced]
+        self._logged_created.extend(created)
+        self._logged_saved.extend(saved)
+        if self._journal is None:
+            return
+        try:
+            self._journal(
+                {
+                    "folder": self.name,
+                    "created": list(self._logged_created),
+                    "saved": list(self._logged_saved),
+                }
+            )
+        except BaseException:
+            del self._logged_created[len(self._logged_created) - len(created) :]
+            del self._logged_saved[len(self._logged_saved) - len(saved) :]
+            raise
 
     def _rel(self, path: str) -> str | None:
-        rel = os.path.relpath(os.path.normpath(os.path.abspath(path)), self.root)
-        if rel == "." or rel == os.pardir or rel.startswith(os.pardir + os.sep):
-            return None
-        return rel
+        return _rel_below(path, self.root)
 
-    def before_write(self, dst: str) -> None:
+    def _plan(self, dst: str, planned: set[str]) -> tuple[str, bool] | None:
+        """`(rel, replaced)` for a write to `dst`, or None when it needs no undo."""
         rel = self._rel(dst)
-        if rel is None or rel in self._seen:
-            return
+        if rel is None or rel in self._seen or rel in planned:
+            return None
         path = os.path.join(self.root, rel)
         if os.path.isdir(path) and not os.path.islink(path):
-            return
+            return None
+        return rel, os.path.lexists(path)
+
+    def _apply(self, rel: str, replaced: bool) -> None:
         self._seen.add(rel)
-        if os.path.lexists(path):
+        if replaced:
             saved = os.path.join(self.root, self.name, rel)
             os.makedirs(os.path.dirname(saved), exist_ok=True)
-            os.rename(path, saved)
+            os.rename(os.path.join(self.root, rel), saved)
             self._saved.append(rel)
         else:
             self._created.append(rel)
+
+    def before_write(self, dst: str) -> None:
+        change = self._plan(dst, set())
+        if change is None:
+            return
+        self._log_changes([change])
+        self._apply(*change)
 
     def before_tree(self, source: str, destination: str) -> None:
         """Prepare for copy_folder_contents(source, destination)."""
         if not os.path.isdir(source):
             return
+        changes: list[tuple[str, bool]] = []
+        planned: set[str] = set()
         for current, dirnames, filenames in os.walk(source, followlinks=False):
             dirnames[:] = [
                 name
@@ -3146,7 +3371,14 @@ class _SaveCarryUndo:
                 full = os.path.join(current, name)
                 if os.path.islink(full) or not os.path.isfile(full):
                     continue
-                self.before_write(os.path.join(destination, rel_dir, name))
+                change = self._plan(os.path.join(destination, rel_dir, name), planned)
+                if change is not None:
+                    planned.add(change[0])
+                    changes.append(change)
+        # One journal write names every change before any of them happens.
+        self._log_changes(changes)
+        for change in changes:
+            self._apply(*change)
 
     def copy(self, src: str, dst: str) -> object:
         if os.path.isdir(dst) and not os.path.islink(dst):
@@ -3156,42 +3388,9 @@ class _SaveCarryUndo:
 
     def rollback(self) -> bool:
         """Undo the copies; False when something could not be put back."""
-        ok = True
-        for rel in reversed(self._created):
-            path = os.path.join(self.root, rel)
-            try:
-                if os.path.lexists(path) and not (
-                    os.path.isdir(path) and not os.path.islink(path)
-                ):
-                    os.remove(path)
-            except OSError as exc:
-                _log.warning("Could not remove carried save %s: %s", path, exc)
-                ok = False
-                continue
-            # Folders the copies made. A torrent holds no empty folders.
-            parent = os.path.dirname(path)
-            while parent != self.root and self._rel(parent) is not None:
-                try:
-                    os.rmdir(parent)
-                except OSError:
-                    break
-                parent = os.path.dirname(parent)
-        for rel in reversed(self._saved):
-            path = os.path.join(self.root, rel)
-            saved = os.path.join(self.root, self.name, rel)
-            try:
-                if os.path.lexists(path) and not (
-                    os.path.isdir(path) and not os.path.islink(path)
-                ):
-                    os.remove(path)
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                os.rename(saved, path)
-            except OSError as exc:
-                _log.warning("Could not put back %s: %s", path, exc)
-                ok = False
-        if ok:
-            shutil.rmtree(os.path.join(self.root, self.name), ignore_errors=True)
-        return ok
+        return _undo_save_copies(
+            self.root, self.name, self._created, self._saved, strict=True
+        )
 
     def discard(self, root: str) -> None:
         """Drop the kept originals once the tree moved to `root` for good."""
@@ -3262,6 +3461,12 @@ def install_archive(
     archive_path = os.path.expanduser(str(archive_path or "").strip())
     volumes: VolumeSet | None = None
     if folder_source:
+        # An earlier failed install can still hold this download in staging.
+        from core.database import get_library_folders as _library_folders
+
+        _ = recover_moved_download(
+            archive_path, [library_folder, *_library_folders()[0]]
+        )
         archive_path = _checked_torrent_folder(archive_path)
         fmt = "folder"
     else:
@@ -3641,7 +3846,11 @@ def install_archive(
             skipped_saves: list[str] = []
             save_copy: Callable[[str, str], object] = shutil.copy2
             if moved_from:
-                save_undo = _SaveCarryUndo(staging)
+                undo_root = staging
+                save_undo = _SaveCarryUndo(
+                    staging,
+                    journal=lambda undo: _record_save_undo(undo_root, undo),
+                )
                 save_copy = save_undo.copy
             _ = copy_infolder_saves(
                 old_root,
@@ -3759,13 +3968,14 @@ def install_archive(
         if staging:
             if moved_from and os.path.isdir(staging):
                 # Saves carried into the download are taken out again first.
-                if save_undo is not None:
-                    _ = save_undo.rollback()
+                # A download whose saves could not all come out stays in
+                # staging; the record's journal lets the next cleanup retry.
+                rolled_back = save_undo is None or save_undo.rollback()
                 # A moved download must survive a failed install, in its own
                 # layout: a retry's chosen launch file and the torrent's file
                 # list are both relative to it. When it cannot go back now,
                 # the record keeps it for the next install's cleanup.
-                if restore_moved_staging(
+                if rolled_back and restore_moved_staging(
                     staging,
                     {"source": moved_from, "wrapper": wrapper_name, "flattened": True},
                 ):

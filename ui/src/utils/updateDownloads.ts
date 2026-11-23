@@ -97,3 +97,34 @@ export function needsExtensionSwitch(error: string, code?: string, site?: Downlo
   const message = downloadFailureMessage(error, site);
   return message === LC_DOWNLOAD_SWITCH_HINT || message.endsWith(`. ${BUZZHEAVIER_DOWNLOAD_SWITCH_HINT}`);
 }
+
+/** What the build picker does once a download start answers. */
+export interface PickerStartEffects {
+  /** True while the picker that started the download is still open (not closed, not reopened). */
+  stillOpen(): boolean;
+  refresh(): void;
+  close(): void;
+  notify(): void;
+  showError(message: string): void;
+}
+
+/**
+ * Settles a picker's download start. A queued download always refreshes the queue
+ * and says so; closing the picker or showing a refusal applies only to the picker
+ * that started it, so a late answer never closes or marks another game's picker.
+ */
+export async function settlePickerStart(
+  request: Promise<{ success?: boolean | undefined; error?: string | undefined }>,
+  effects: PickerStartEffects,
+): Promise<void> {
+  try {
+    const response = await request;
+    // On a refusal the picker stays open and shows why.
+    if (!response.success) throw new Error(response.error || "Could not start download");
+    effects.refresh();
+    if (effects.stillOpen()) effects.close();
+    effects.notify();
+  } catch (e) {
+    if (effects.stillOpen()) effects.showError(String(e instanceof Error ? e.message : e));
+  }
+}

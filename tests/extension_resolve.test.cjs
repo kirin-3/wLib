@@ -295,3 +295,33 @@ test('finishResolve includes navigator.userAgent only on successful results', ()
     assert.equal(messages[1].ok, false);
     assert.equal('user_agent' in messages[1], false);
 });
+
+test('a tab the user already had open is never claimed or closed during a resolve', async () => {
+    const messages = [], removedTabs = [], listeners = [];
+    let tabCreated;
+    const chrome = {
+        runtime:{onMessage:{addListener(fn){listeners.push(fn);}}},
+        permissions:{contains:async()=>false},
+        tabs:{remove:async id=>{removedTabs.push(id);},update:async()=>{},onRemoved:{addListener(){}},onCreated:{addListener(fn){tabCreated=fn;}}},
+        windows:{create:async()=>{tabCreated?.({id:9,windowId:7}); return {id:7,state:'minimized',tabs:[{id:9}]};},
+            update:async()=>{},remove:async()=>{},onRemoved:{addListener(){}}},
+    };
+    const context = vm.createContext({chrome,console,URL,AbortController,setTimeout,clearTimeout,output:messages});
+    vm.runInContext(source('background.js'),context);
+    vm.runInContext('bridgeSocket = {readyState:1,send: value => output.push(JSON.parse(value))}',context);
+    const url = 'https://f95zone.to/dl/1/?u=fake&k=a&r=1&t=b';
+    await vm.runInContext(`bridgeHandleResolve({id:"own",url:${JSON.stringify(url)},host:"mega"})`,context);
+    let reply;
+    // Tab 30 existed before the resolve and the user navigates it to the same link.
+    listeners[0]({type:'dl-owned?',url},{tab:{id:30,windowId:3}},value=>reply=value);
+    assert.equal(reply.owned,false, 'a pre-existing tab is not claimed while the resolve is unbound');
+    assert.ok(!removedTabs.includes(30));
+    listeners[0]({type:'dl-owned?',url},{tab:{id:9,windowId:7}},value=>reply=value);
+    assert.equal(reply.owned,true);
+    listeners[0]({type:'dl-owned?',url},{tab:{id:31,windowId:3}},value=>reply=value);
+    assert.equal(reply.owned,false);
+    assert.ok(!removedTabs.includes(31), 'a pre-existing tab is not closed as a duplicate');
+    listeners[0]({type:'dl-result',ok:true,url:'https://mega.nz/file/a#key'},{tab:{id:9,windowId:7}},()=>{});
+    assert.equal(messages.at(-1).url,'https://mega.nz/file/a#key');
+    assert.ok(!removedTabs.includes(30) && !removedTabs.includes(31));
+});

@@ -365,31 +365,52 @@ def scan_games_folder(root: str) -> list[GameGuess]:
     # store paths that only resolve from the app's working directory.
     root = os.path.abspath(os.path.expanduser(root))
     try:
+        # Symlinked game folders count too (entry.is_dir() follows them).
         subdirs = sorted(
             (
-                entry.path
+                (entry.path, entry.is_symlink())
                 for entry in os.scandir(root)
                 if entry.is_dir()
                 # A crashed or kept archive-install tree stays in the library;
                 # it is internal state, not a game.
                 and not _is_internal_dir(entry.name)
             ),
-            key=str.lower,
+            key=lambda item: item[0].lower(),
         )
     except OSError:
         return []
-    games: list[GameGuess] = []
-    for subdir in subdirs:
+    found: list[tuple[str, bool, GameGuess]] = []
+    for subdir, is_link in subdirs:
         exe_path = find_launcher(subdir)
         if not exe_path:
             continue
         title, version = guess_title_and_version(os.path.basename(subdir))
-        games.append(
-            {
-                "title": title,
-                "version": version,
-                "engine": detect_engine(os.path.dirname(exe_path), exe_path),
-                "exe_path": exe_path,
-            }
+        found.append(
+            (
+                _real_key(exe_path),
+                is_link,
+                {
+                    "title": title,
+                    "version": version,
+                    "engine": detect_engine(os.path.dirname(exe_path), exe_path),
+                    "exe_path": exe_path,
+                },
+            )
         )
-    return games
+    # A game folder and a symlink to it (or two symlinks) give the same
+    # executable; list it once, through the folder itself when it is here.
+    chosen: dict[str, tuple[bool, int]] = {}
+    for index, (key, is_link, _game) in enumerate(found):
+        best = chosen.get(key)
+        if best is None or (best[0] and not is_link):
+            chosen[key] = (is_link, index)
+    keep = {index for _is_link, index in chosen.values()}
+    return [game for index, (_k, _l, game) in enumerate(found) if index in keep]
+
+
+def _real_key(path: str) -> str:
+    """The real path of `path` (symlinks resolved), for duplicate checks."""
+    try:
+        return os.path.normcase(os.path.realpath(path))
+    except (OSError, ValueError):
+        return os.path.normcase(os.path.abspath(path))

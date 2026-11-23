@@ -49,7 +49,12 @@ def _edit(api: Api, game_id: int) -> str:
     payload = api.load_rpgm_save(game_id, "file1.rpgsave")
     assert payload["success"], payload
     result = api.write_rpgm_save(
-        game_id, "file1.rpgsave", PATCH, payload["size"], payload["mtime_ns"]
+        game_id,
+        "file1.rpgsave",
+        PATCH,
+        payload["size"],
+        payload["mtime_ns"],
+        payload["revision"],
     )
     assert result["success"], result
     return str(result["backup"])

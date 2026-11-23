@@ -504,37 +504,30 @@ class SettingsMixin(ApiBase):
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
         # Collect every write and commit them together, so a locked database
-        # cannot leave only some of the settings saved.
+        # cannot leave only some of the settings saved. Only fields in the
+        # request are written: each field autosaves on its own, and writing
+        # back a stale value read here would undo a save that committed since.
         pending: dict[str, str] = {}
 
         def update_setting_fn(key: str, value: str) -> None:
             pending[key] = value
 
-        def get_payload_or_existing(key: str, default: str = "") -> str:
-            if key in settings_map:
-                return str(settings_map.get(key, "") or "")
-            return str(get_setting_fn(key) or default)
+        def payload_text(key: str) -> str:
+            return str(settings_map.get(key, "") or "")
 
         try:
-            rpgmaker_linux_runner_path = str(
-                get_payload_or_existing(RPGMAKER_LINUX_RUNNER_SETTING) or ""
-            ).strip()
-            raw_enable_logging = (
-                settings_map.get("enable_logging")
-                if "enable_logging" in settings_map
-                else get_setting_fn("enable_logging")
-            )
-            enable_logging = (
-                "true"
-                if raw_enable_logging is True
-                or str(raw_enable_logging).strip().lower() == "true"
-                else "false"
-            )
-            update_setting_fn("proton_path", get_payload_or_existing("proton_path"))
-            update_setting_fn(
-                "wine_prefix_path", get_payload_or_existing("wine_prefix_path")
-            )
-            update_setting_fn("enable_logging", enable_logging)
+            for path_key in ("proton_path", "wine_prefix_path"):
+                if path_key in settings_map:
+                    update_setting_fn(path_key, payload_text(path_key))
+            if "enable_logging" in settings_map:
+                raw_enable_logging = settings_map["enable_logging"]
+                update_setting_fn(
+                    "enable_logging",
+                    "true"
+                    if raw_enable_logging is True
+                    or str(raw_enable_logging).strip().lower() == "true"
+                    else "false",
+                )
             for tool_key in (
                 "gamemode_enabled",
                 "mangohud_enabled",
@@ -565,10 +558,9 @@ class SettingsMixin(ApiBase):
                     "update_notifications",
                     "off" if settings_map["update_notifications"] is False else "on",
                 )
-            update_setting_fn(RPGMAKER_LINUX_RUNNER_SETTING, rpgmaker_linux_runner_path)
-            update_setting_fn(
-                "urm_rpa_path", get_payload_or_existing("urm_rpa_path").strip()
-            )
+            for trimmed_key in (RPGMAKER_LINUX_RUNNER_SETTING, "urm_rpa_path"):
+                if trimmed_key in settings_map:
+                    update_setting_fn(trimmed_key, payload_text(trimmed_key).strip())
             if folder_pair is not None:
                 update_setting_fn("library_folders", json.dumps(folder_pair[0]))
                 update_setting_fn("library_folder", folder_pair[1])

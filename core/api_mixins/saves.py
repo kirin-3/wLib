@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from collections.abc import Sequence
@@ -24,6 +25,8 @@ from core.api_mixins.base import ApiBase
 _GAME_SAVE_SOURCE = "rpgm_game_save"
 _RGSS_SAVE_SOURCE_PREFIX = "rgss_game_save:"
 _NOTE_SUFFIX = ".source.json"
+# The save editor's slot revision: the SHA-256 hex digest from `load_save()`.
+_REVISION = re.compile(r"[0-9a-f]{64}")
 
 
 def _source_note_path(backup_dir: str, name: str) -> str:
@@ -626,6 +629,7 @@ class SavesMixin(ApiBase):
         patches: object = None,
         size: object = None,
         mtime_ns: object = None,
+        revision: object = None,
     ) -> dict[str, object]:
         from core.database import get_save_backup_keep
         from core.game_saves import GameSavesError, backup_saves, loose_save_files
@@ -661,6 +665,12 @@ class SavesMixin(ApiBase):
         ):
             return self._rpgm_save_failure(
                 InvalidPatch("The edit request is not valid")
+            )
+        # The load's revision is required: without it a slot replaced with
+        # the same size and mtime after it was opened would get stale edits.
+        if not isinstance(revision, str) or _REVISION.fullmatch(revision) is None:
+            return self._rpgm_save_failure(
+                InvalidPatch("The edit request has no save revision. Reopen the slot.")
             )
         try:
             if engine == ENGINE_RGSS:
@@ -699,7 +709,12 @@ class SavesMixin(ApiBase):
                         return info.name
 
                     backup_name = write_rgss_save(
-                        path, cast("list[object]", patches), size, stamp, rgss_backup
+                        path,
+                        cast("list[object]", patches),
+                        size,
+                        stamp,
+                        rgss_backup,
+                        revision=revision,
                     )
             else:
                 path, folder = resolve_slot(root, effective, file)
@@ -737,6 +752,7 @@ class SavesMixin(ApiBase):
                         stamp,
                         load_names(root),
                         backup,
+                        revision=revision,
                     )
         except GameSavesError as exc:
             running = "Close the game" in str(exc)

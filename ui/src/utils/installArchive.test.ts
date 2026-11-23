@@ -12,6 +12,7 @@ import {
   preselectLibraryFolder,
   formatLibraryFreeSpace,
   createInstallPreview,
+  knownInstallVersion,
   type InstallArchiveRequest,
 } from "./installArchive.ts";
 
@@ -164,4 +165,13 @@ test("formatInstallError maps password and cancellation codes to clear messages"
   );
   assert.equal(formatInstallError({ error: "Disk full" }), "Disk full");
   assert.equal(formatInstallError(null), "Install failed.");
+});
+
+test("a queued download's version wins over the game's newer latest version", () => {
+  // v2 was queued, then an update check found v3: the v2 files install as v2.
+  assert.equal(knownInstallVersion(" 2.0 ", "3.0"), "2.0");
+  // Manual installs and old jobs with no version fall back to the latest version.
+  assert.equal(knownInstallVersion(undefined, " 3.0 "), "3.0");
+  assert.equal(knownInstallVersion("  ", "3.0"), "3.0");
+  assert.equal(knownInstallVersion("", ""), "");
 });

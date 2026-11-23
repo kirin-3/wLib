@@ -12,7 +12,6 @@ from typing import cast
 from core.host_platform import (
     get_rtp_dir,
     host_command,
-    host_which,
     is_linux,
     unsupported_on_host,
 )
@@ -456,7 +455,7 @@ class RpgmRuntimeMixin(ApiBase):
             except (OSError, ValueError) as exc:
                 return {"success": False, "error": str(exc)}
         else:
-            wine_binary = host_which("wine")
+            wine_binary = self._plain_wine_binary(target)
             if not wine_binary:
                 return {
                     "success": False,

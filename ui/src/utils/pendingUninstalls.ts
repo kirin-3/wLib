@@ -66,6 +66,11 @@ export const scheduleUninstall = (games: GameRecord[], options: UninstallOptions
         const reason = failed[0]?.error || result.error || "";
         notifyError(`Could not uninstall ${failed.length} game${failed.length === 1 ? "" : "s"}.${reason ? ` ${reason}` : ""}`);
       }
+      // The game is uninstalled, but its files were kept: the toast stays
+      // until dismissed, so the user can read the folder to delete.
+      for (const item of results) {
+        if (item.success && item.warning) notifyError(item.warning);
+      }
       if (typeof window !== "undefined") window.dispatchEvent(new Event("wlib-refresh-library"));
     },
   });

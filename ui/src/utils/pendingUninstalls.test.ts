@@ -64,3 +64,22 @@ test("a failed game comes back and an error toast names the reason", async (cont
   assert.equal(isPendingUninstall(4), false);
   for (const toast of [...toasts]) dismissToast(toast.id);
 });
+
+test("a cleanup warning on an uninstalled game shows a toast that names the kept folder", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const warning = "The game was uninstalled, but its files could not be deleted: disk full. They were kept in /games/.wlib-uninstall-1. Delete that folder.";
+  scheduleUninstall([game(6)], keep, async () => ({
+    success: true,
+    uninstalled: 1,
+    failed: 0,
+    results: [{ game_id: 6, success: true, error: "", trash: "kept", warning }],
+  }));
+  context.mock.timers.tick(8000);
+  await flush();
+  // The uninstall counts: the game stays changed and no failure toast shows.
+  assert.equal(isPendingUninstall(6), true);
+  assert.ok(!toasts.some((toast) => toast.message.startsWith("Could not uninstall")));
+  assert.ok(toasts.some((toast) => toast.type === "error" && toast.message === warning));
+  settleUninstalls([game(6, "")]);
+  for (const toast of [...toasts]) dismissToast(toast.id);
+});

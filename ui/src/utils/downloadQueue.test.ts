@@ -329,6 +329,7 @@ test("finished host download carries its saved archive password into the install
     gameId: 7,
     archivePath: "/tmp/game.zip",
     archivePassword: "f95zone",
+    version: "1.0",
   });
 
   const withoutPass = job({
@@ -340,6 +341,7 @@ test("finished host download carries its saved archive password into the install
   assert.deepEqual(installRequestForJob(withoutPass), {
     gameId: 8,
     archivePath: "/tmp/other.zip",
+    version: "1.0",
   });
 
   const torrentFolder = job({
@@ -352,5 +354,19 @@ test("finished host download carries its saved archive password into the install
   assert.deepEqual(installRequestForJob(torrentFolder), {
     gameId: 9,
     archivePath: "/tmp/torrent-folder",
+    version: "1.0",
   });
+});
+
+test("finished download installs under the version it downloaded, not a newer latest version", () => {
+  const queuedV2 = job({ game_id: 7, state: "ready", version: " 2.0 ", details: { archive_path: "/tmp/game-v2.zip" } });
+  assert.equal(installRequestForJob(queuedV2)?.version, "2.0");
+  // An older saved job with no version leaves the dialog's own fallback in place.
+  const noVersion = job({ game_id: 7, state: "ready", version: "", details: { archive_path: "/tmp/game.zip" } });
+  assert.deepEqual(installRequestForJob(noVersion), { gameId: 7, archivePath: "/tmp/game.zip" });
+  // Older jobs saved "Unknown" when the title had no version; that is no version either.
+  for (const placeholder of ["Unknown", " n/a ", "None"]) {
+    const saved = job({ game_id: 7, state: "ready", version: placeholder, details: { archive_path: "/tmp/game.zip" } });
+    assert.deepEqual(installRequestForJob(saved), { gameId: 7, archivePath: "/tmp/game.zip" });
+  }
 });

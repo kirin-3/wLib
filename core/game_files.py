@@ -914,8 +914,24 @@ def run_uninstall(
                     + (f" {kept}" if kept else "")
                 )
                 continue
-            result["trash"] = finish_removal(staged)
+            # The library change is saved: from here the uninstall is done,
+            # and a failed cleanup (the jobs file cannot be written, the
+            # delete thread cannot start) only keeps the hidden folder.
             result["success"] = True
+            try:
+                result["trash"] = finish_removal(staged)
+            except Exception as exc:
+                _log.exception(
+                    "Uninstall of game %s could not start deleting %s",
+                    game_id,
+                    staged.staged or staged.root,
+                )
+                result["trash"] = "kept"
+                result["warning"] = (
+                    "The game was uninstalled, but its files could not be"
+                    f" deleted: {str(exc) or type(exc).__name__}. They were kept"
+                    f" in {staged.staged or staged.root}. Delete that folder."
+                )
         except Exception as exc:
             _log.exception("Uninstall of game %s failed", game_id)
             result["error"] = str(exc) or type(exc).__name__
@@ -1153,10 +1169,11 @@ class MoveQueue:
             busy = {job.game_id for job in self._queue}
             if self._current is not None:
                 busy.add(self._current.game_id)
-            if self._current is None and not self._queue:
-                # A summary the UI has not read yet stays; _finish_locked()
-                # adds this batch to it.
-                self._totals = _Totals()
+            # The totals are not reset here: _finish_locked() resets them when
+            # it publishes a batch. Between two jobs the worker has added an
+            # outcome but not published it yet, so a reset here would lose it.
+            # A summary the UI has not read yet stays; _finish_locked() adds
+            # the next batch to it.
             for job in jobs:
                 if job.game_id in busy:
                     continue

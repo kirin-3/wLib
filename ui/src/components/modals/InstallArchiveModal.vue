@@ -11,7 +11,7 @@ import {
 } from "../../services/api";
 import { notifyError } from "../../utils/toast";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
-import { choicesAfterInspect, createInstallPreview, formatInstallError, mergeArchiveFields, openInstallArchive, preselectLibraryFolder, formatLibraryFreeSpace, type InstallArchiveSeed } from "../../utils/installArchive";
+import { choicesAfterInspect, createInstallPreview, formatInstallError, knownInstallVersion, mergeArchiveFields, openInstallArchive, preselectLibraryFolder, formatLibraryFreeSpace, type InstallArchiveSeed } from "../../utils/installArchive";
 import { defaultTargetLabel, isWishlisted } from "../../utils/libraryGames";
 import PathStatus from "../PathStatus.vue";
 
@@ -20,6 +20,8 @@ const props = defineProps<{
   game?: GameRecord | null;
   preselectedArchive?: string;
   archivePassword?: string;
+  /** The version a queued download fetched; it wins over the game's latest version. */
+  downloadVersion?: string;
   seed?: InstallArchiveSeed | undefined;
 }>();
 const emit = defineEmits<{ installed: [archivePath: string] }>();
@@ -138,6 +140,7 @@ const inspecting = ref(false);
 const target = ref<GameRecord | null>(null);
 const seededArchive = ref("");
 const seededArchivePassword = ref("");
+const seededVersion = ref("");
 const isUpdate = computed(() => !!target.value);
 // A wishlisted game has no installed files: the archive installs it, not an update.
 const isWishlistTarget = computed(() => !!target.value && isWishlisted(target.value));
@@ -363,8 +366,9 @@ const inspect = async () => {
     const replaceable = (field: "title" | "version", value: string) =>
       !edited.has(field) && (!value.trim() || value === archiveGuess[field]);
     if (replaceable("title", title.value)) title.value = isUpdate.value ? (target.value?.title || info.title || "") : (info.title || "");
-    if (target.value?.latest_version?.trim() && !edited.has("version")) {
-      version.value = target.value.latest_version.trim();
+    const knownVersion = target.value ? knownInstallVersion(seededVersion.value, target.value.latest_version) : "";
+    if (knownVersion && !edited.has("version")) {
+      version.value = knownVersion;
     } else if (replaceable("version", version.value)) {
       version.value = info.version || "";
     }
@@ -594,14 +598,16 @@ const seedForm = () => {
   seededArchive.value = props.preselectedArchive || "";
   seededArchivePassword.value = props.archivePassword || "";
   archivePassword.value = seededArchivePassword.value;
+  seededVersion.value = props.downloadVersion || "";
   requestSeed.value = props.seed;
   if (target.value) {
     title.value = target.value.title || "";
     creator.value = target.value.developer || "";
     engine.value = target.value.engine || "";
     f95Url.value = target.value.f95_url || "";
-    // The installed version is never the update's version; let the archive name fill it.
-    version.value = target.value.latest_version?.trim() || "";
+    // The installed version is never the update's version. A queued download's own
+    // version comes first, so a newer version found later does not label these files.
+    version.value = knownInstallVersion(seededVersion.value, target.value.latest_version);
   }
   else if (requestSeed.value) {
     const values = requestSeed.value;
@@ -629,13 +635,14 @@ const hasPendingRequest = () =>
   (props.game?.id ?? null) !== (target.value?.id ?? null) ||
   (props.preselectedArchive || "") !== seededArchive.value ||
   (props.archivePassword || "") !== seededArchivePassword.value ||
+  (props.downloadVersion || "") !== seededVersion.value ||
   props.seed !== requestSeed.value;
 
 // Re-seed when the dialog opens or a new request (another game or archive) lands
 // while it is open; a superseded inspection is cheap to cancel. A running install
 // owns the form, so the request waits until the install ends (see below).
 watch(
-  () => [isOpen.value, props.game?.id ?? null, props.preselectedArchive, props.archivePassword, props.seed] as const,
+  () => [isOpen.value, props.game?.id ?? null, props.preselectedArchive, props.archivePassword, props.downloadVersion, props.seed] as const,
   ([open]) => {
     if (!open) {
       stopPolling();
@@ -643,6 +650,7 @@ watch(
       target.value = null;
       seededArchive.value = "";
       seededArchivePassword.value = "";
+      seededVersion.value = "";
       requestSeed.value = undefined;
       return;
     }

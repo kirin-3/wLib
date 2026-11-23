@@ -671,7 +671,15 @@ class LibraryMixin(ApiBase):
 
         try:
             if attach_lc_id is not None:
-                if not attach_lc_thread(attach_lc_id, normalized_lc, partner_url):
+                # Adding with an executable installs a wishlisted partner,
+                # as the F95 attach below does.
+                if not attach_lc_thread(
+                    attach_lc_id,
+                    normalized_lc,
+                    partner_url,
+                    exe_path=exe_path,
+                    version=version,
+                ):
                     return self._integrity_error_response(
                         sqlite3.IntegrityError(
                             f"LewdCorner thread could not be attached: {normalized_lc}"
@@ -832,18 +840,26 @@ class LibraryMixin(ApiBase):
                     "error_code": "game_not_found",
                 }
             # A running game would keep writing playtime to a deleted row, and
-            # an install or mod tool would recreate files for it.
-            if coerced_id in self.get_running_games():
+            # an install or mod tool would recreate files for it. The game stays
+            # reserved until removal ends, so none of them can start meanwhile.
+            with self._status_lock:
+                running = coerced_id in self.get_running_games()
+                busy = None if running else self._game_busy_reason(coerced_id)
+                if not running and not busy:
+                    self._removing.add(coerced_id)
+            if running:
                 return {
                     "success": False,
                     "error": "Close the game before removing it.",
                     "error_code": "game_running",
                 }
-            with self._status_lock:
-                busy = self._game_busy_reason(coerced_id)
             if busy:
                 return {"success": False, "error": busy, "error_code": "game_busy"}
-            self._remove_game_entry(coerced_id, previous_game)
+            try:
+                self._remove_game_entry(coerced_id, previous_game)
+            finally:
+                with self._status_lock:
+                    self._removing.discard(coerced_id)
         except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
             return {"success": False, "error": str(exc) or "Could not delete game"}
         return {"success": True}

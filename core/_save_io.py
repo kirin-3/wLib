@@ -52,6 +52,15 @@ def reject_symlink(path: str) -> None:
         )
 
 
+def revision_of(data: bytes) -> str:
+    """The editor's revision token for slot bytes: their SHA-256 hex digest.
+
+    `load_save()` returns it for the bytes it decoded, and `write_save()`
+    compares it with the digest in `read_fingerprint()`.
+    """
+    return hashlib.sha256(data).hexdigest()
+
+
 def read_fingerprint(
     path: str, *, max_bytes: int | None = None
 ) -> tuple[bytes, Fingerprint]:
@@ -74,7 +83,7 @@ def read_fingerprint(
         raise RpgmSaveError("The save file could not be read", "read_failed") from exc
     if max_bytes is not None and len(data) > max_bytes:
         raise UnsupportedSaveFormat("This save file is too large to open")
-    digest = hashlib.sha256(data).hexdigest()
+    digest = revision_of(data)
     return data, (len(data), stat.st_mtime_ns, stat.st_dev, stat.st_ino, digest)
 
 

@@ -82,3 +82,69 @@ test("optimistic save, clear and rollback on failure", async () => {
   await clear;
   assert.equal(state.colorForTag("sandbox"), undefined);
 });
+
+test("a refresh during a pending save neither undoes the save nor resurrects a cleared color", async () => {
+  let stored: Record<string, string> = { sandbox: "green", rpg: "red" };
+  const saves: Array<() => void> = [];
+  // When set, the next settings read takes its snapshot now and answers later.
+  let heldLoad: ((release: () => void) => void) | null = null;
+  const state = createTagColors(async () => ({
+    getSettings: () => {
+      const snapshot = { tag_colors: { ...stored } };
+      if (!heldLoad) return Promise.resolve(snapshot);
+      const hold = heldLoad;
+      heldLoad = null;
+      return new Promise(resolve => hold(() => resolve(snapshot)));
+    },
+    // The save commits only when the test lets it.
+    setTagColor: (tag: string, swatch: string | null) => new Promise(resolve => {
+      saves.push(() => {
+        const next = { ...stored };
+        if (swatch) next[tag] = swatch; else delete next[tag];
+        stored = next;
+        resolve({ success: true, tag_colors: { ...stored } });
+      });
+    }),
+  }));
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+  await state.load();
+
+  // A library refresh reads and applies settings before the save commits.
+  const blue = state.set("sandbox", "blue");
+  await tick();
+  stored = { ...stored, puzzle: "teal" };
+  await state.load(true);
+  assert.equal(state.colorForTag("sandbox"), "blue", "the pending edit stays on screen");
+  assert.equal(state.colorForTag("puzzle"), "teal", "refreshed colors for other tags apply");
+  saves.shift()!();
+  await blue;
+  assert.equal(state.colorForTag("sandbox"), "blue", "the successful save shows");
+
+  // A refresh that read settings before a clear committed answers after it.
+  const clear = state.set("rpg", null);
+  await tick();
+  let releaseLoad: () => void = () => {};
+  heldLoad = release => { releaseLoad = release; };
+  const staleLoad = state.load(true);
+  await tick();
+  saves.shift()!();
+  await clear;
+  releaseLoad();
+  await staleLoad;
+  assert.equal(state.colorForTag("rpg"), undefined, "the cleared color is not resurrected");
+  assert.equal(state.colorForTag("sandbox"), "blue");
+  assert.equal(state.colorForTag("puzzle"), "teal");
+
+  // A newer edit survives an older save that succeeds after a refresh.
+  const pink = state.set("sandbox", "pink");
+  const purple = state.set("sandbox", "purple");
+  await tick();
+  await state.load(true);
+  saves.shift()!();
+  await pink;
+  assert.equal(state.colorForTag("sandbox"), "purple", "the newer edit stays");
+  await tick();
+  saves.shift()!();
+  await purple;
+  assert.equal(state.colorForTag("sandbox"), "purple");
+});

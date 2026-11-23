@@ -26,7 +26,16 @@ export interface InstallArchiveRequest {
   gameId?: number | undefined;
   archivePath?: string | undefined;
   archivePassword?: string | undefined;
+  /** The version a queued download fetched; it labels the install unless the user edits it. */
+  version?: string | undefined;
 }
+
+/**
+ * The version an install for a library game starts with: the version the download
+ * fetched, else the game's latest version (manual installs and old jobs).
+ */
+export const knownInstallVersion = (downloadVersion: string | undefined, latestVersion: string | null | undefined): string =>
+  downloadVersion?.trim() || latestVersion?.trim() || "";
 
 export function formatInstallError(res: { error?: string | undefined; error_code?: string | undefined } | null | undefined): string {
   if (res?.error_code === "install_cancelled") return "Install cancelled. Nothing was changed.";

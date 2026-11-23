@@ -131,6 +131,37 @@ export class F95AccountImport {
     }
   }
 
+  /**
+   * Join the backend's current read when the tab opens again: a running read
+   * shows its progress and Cancel, a finished one its held preview. Any other
+   * state (idle, cancelled, failed, expired, imported) leaves the tab idle.
+   * Returns true when the read still runs and the caller should poll.
+   */
+  async attach(): Promise<boolean> {
+    if (this.phase !== "idle") return false;
+    let status: F95AccountReadStatus;
+    try {
+      status = await this.client.getF95AccountReadStatus();
+    } catch {
+      return false;
+    }
+    // The user started a read meanwhile; that read owns the tab.
+    if (this.phase !== "idle" || !status?.read_id) return false;
+    if (status.state === "running") {
+      this.readId = status.read_id;
+      this.progress = status.progress ?? {};
+      this.phase = "reading";
+      return true;
+    }
+    if (status.state === "done" && status.preview) {
+      this.readId = status.read_id;
+      this.progress = status.progress ?? {};
+      this.preview = status.preview;
+      this.phase = "preview";
+    }
+    return false;
+  }
+
   /** Read the status once. Returns true while the read still runs. */
   async poll(): Promise<boolean> {
     if (this.phase !== "reading") return false;
@@ -192,4 +223,41 @@ export class F95AccountImport {
       return false;
     }
   }
+}
+
+type F95AccountSteps = Pick<F95AccountImport, "start" | "attach" | "poll">;
+
+/**
+ * Polls the read every `delayMs` until it ends. One timer at a time; after
+ * dispose() (the view unmounted) no answer in flight schedules another poll.
+ */
+export function createF95AccountPolling(account: F95AccountSteps, delayMs = 500) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let disposed = false;
+  const stop = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+  };
+  const schedule = () => {
+    stop();
+    if (disposed) return;
+    timer = setTimeout(async () => {
+      timer = undefined;
+      if ((await account.poll()) && !disposed) schedule();
+    }, delayMs);
+  };
+  return {
+    /** Start a new read and poll it. */
+    async read(): Promise<void> {
+      if ((await account.start()) && !disposed) schedule();
+    },
+    /** Join the backend's current read and poll it while it runs. */
+    async attach(): Promise<void> {
+      if ((await account.attach()) && !disposed) schedule();
+    },
+    dispose(): void {
+      disposed = true;
+      stop();
+    },
+  };
 }

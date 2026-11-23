@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import test, { mock } from "node:test";
 
 import { MockF95Account } from "../services/mock/f95Account.ts";
+import type { F95AccountReadStatus } from "../services/api.ts";
 import type { F95AccountClient } from "./f95AccountImport.ts";
 import {
   F95AccountImport,
+  createF95AccountPolling,
   f95AccountErrorMessage,
   f95AccountPreviewNote,
   f95AccountProgressText,
@@ -118,6 +120,110 @@ test("cancel stops the read", async () => {
   assert.equal(await state.poll(), false);
   assert.equal(state.phase, "cancelled");
   assert.equal(state.canImport, false);
+});
+
+test("a remounted tab reattaches to a running read and then shows its preview", async () => {
+  const client = mockClient();
+  const first = new F95AccountImport(client);
+  assert.equal(await first.start(), true);
+  // The user leaves the page; a new view starts idle against the same backend read.
+  const second = new F95AccountImport(client);
+  assert.equal(await second.attach(), true);
+  assert.equal(second.phase, "reading");
+  assert.equal(second.readId, first.readId);
+  await pollUntilDone(second);
+  assert.equal(second.phase, "preview");
+  assert.equal(second.canImport, true);
+  // Leaving and returning again shows the held preview without a new read.
+  const third = new F95AccountImport(client);
+  assert.equal(await third.attach(), false);
+  assert.equal(third.phase, "preview");
+  assert.equal(third.readId, first.readId);
+  assert.equal(await third.importLists(), true);
+});
+
+test("a remounted tab stays idle for idle, cancelled, expired, imported and failed reads", async () => {
+  const statuses: F95AccountReadStatus[] = [
+    { success: true, read_id: "", state: "idle", progress: {} },
+    { success: false, read_id: "r1", state: "cancelled", error_code: "cancelled", error: "Cancelled." },
+    { success: false, read_id: "r1", state: "expired", error_code: "expired", error: "Expired." },
+    { success: true, read_id: "r1", state: "imported", progress: {} },
+    { success: false, read_id: "r1", state: "error", error_code: "blocked", error: "Blocked." },
+    // A finished read whose preview is gone is not shown as a preview.
+    { success: true, read_id: "r1", state: "done", progress: {} },
+  ];
+  for (const status of statuses) {
+    const client = { ...mockClient(), getF95AccountReadStatus: async () => status };
+    const state = new F95AccountImport(client);
+    assert.equal(await state.attach(), false, status.state);
+    assert.equal(state.phase, "idle", status.state);
+    assert.equal(state.preview, null, status.state);
+    assert.equal(state.error, "", status.state);
+  }
+  const broken = new F95AccountImport({ ...mockClient(), getF95AccountReadStatus: async () => { throw new Error("gone"); } });
+  assert.equal(await broken.attach(), false);
+  assert.equal(broken.phase, "idle");
+});
+
+test("a late reattach answer never replaces a read the user started", async () => {
+  let answer: (status: F95AccountReadStatus) => void = () => {};
+  const client = mockClient();
+  const getStatus = client.getF95AccountReadStatus;
+  let first = true;
+  client.getF95AccountReadStatus = () => {
+    if (!first) return getStatus();
+    first = false;
+    return new Promise((resolve) => { answer = resolve; });
+  };
+  const state = new F95AccountImport(client);
+  const attached = state.attach();
+  assert.equal(await state.start(), true);
+  answer({ success: true, read_id: "old", state: "done", progress: {}, preview: { lists: { watched: { found: 1, new: 1, existing: 0 }, bookmarks: { found: 0, new: 0, existing: 0 } }, total: 1, new: 1, existing: 0, entries: [] } });
+  assert.equal(await attached, false);
+  assert.equal(state.phase, "reading");
+  assert.equal(state.preview, null);
+});
+
+test("after the view unmounts, an answer in flight schedules no more polls", async (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  let polls = 0;
+  let answer: (running: boolean) => void = () => {};
+  const account = {
+    start: async () => true,
+    attach: async () => true,
+    poll: () => { polls += 1; return new Promise<boolean>((resolve) => { answer = resolve; }); },
+  };
+  const polling = createF95AccountPolling(account, 500);
+  await polling.attach();
+  mock.timers.tick(500);
+  assert.equal(polls, 1);
+  // The user leaves while the status call is in flight.
+  polling.dispose();
+  answer(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  mock.timers.tick(5000);
+  assert.equal(polls, 1);
+  // A start that answers after unmount schedules nothing either.
+  await polling.read();
+  mock.timers.tick(5000);
+  assert.equal(polls, 1);
+});
+
+test("one poll loop runs at a time", async (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  let polls = 0;
+  const account = { start: async () => true, attach: async () => true, poll: async () => { polls += 1; return polls < 3; } };
+  const polling = createF95AccountPolling(account, 500);
+  await polling.attach();
+  await polling.read();
+  for (let i = 0; i < 10; i += 1) {
+    mock.timers.tick(500);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(polls, 3);
+  polling.dispose();
 });
 
 const errorCases: [string, RegExp][] = [

@@ -563,6 +563,26 @@ class DownloadsMixin(ApiBase):
         from core.archive_install import in_torrent_area
 
         archive_path = os.path.expanduser((path or "").strip())
+        if (
+            archive_path
+            and not os.path.lexists(archive_path)
+            and in_torrent_area(archive_path)
+        ):
+            # A failed install can have kept this download in staging; put it
+            # back first. Never while an install runs: it may hold that folder.
+            with self._status_lock:
+                install_running = bool(self._archive_install_status["running"])
+            if not install_running:
+                from core.archive_install import recover_moved_download
+                from core.database import get_library_folders as _library_folders
+
+                _ = recover_moved_download(
+                    archive_path,
+                    [
+                        *([library_folder] if library_folder else []),
+                        *_library_folders()[0],
+                    ],
+                )
         folder_source = bool(archive_path) and os.path.isdir(archive_path)
         entry_path = archive_path
         if folder_source:

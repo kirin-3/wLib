@@ -572,6 +572,12 @@ def _merge_move(source: Path, destination: Path, change: _BackupChange) -> list[
     )
 
 
+def _under_any(name: str, folders: list[str]) -> bool:
+    """True when `name` is inside one of `folders` (not equal to it)."""
+    path = Path(name)
+    return any(path != Path(f) and path.is_relative_to(f) for f in folders)
+
+
 def _is_wlib_owned(name: str, owned: list[str] | None, installed: list[str]) -> bool:
     if owned is None:
         return False
@@ -670,7 +676,11 @@ def _move_to_backup(
                             done.append(Path(path_name))
                     for path in _merge_move(root / name, backup / name, change):
                         relative = path.relative_to(backup).as_posix()
-                        if relative not in moved_list:
+                        # A file merged into a folder the backup already
+                        # lists comes back with that folder.
+                        if relative not in moved_list and not _under_any(
+                            relative, moved_list
+                        ):
                             moved_list.append(relative)
             _ = change.manifest_path.write_text(
                 json.dumps(
@@ -683,7 +693,28 @@ def _move_to_backup(
             raise
         return change
     if not unique:
-        return None
+        if existing is None or not installed:
+            return None
+        # Nothing live to back up (an install after "Uninstall" kept user
+        # data), so the uninstall's backup stays. Record the new build's files
+        # so Restore sets them aside instead of colliding with them.
+        installed_value = existing.get("installed")
+        merged = (
+            [p for p in cast(list[object], installed_value) if isinstance(p, str)]
+            if isinstance(installed_value, list)
+            else []
+        )
+        merged += [name for name in installed if name not in merged]
+        change.manifest_path = backup / "manifest.json"
+        change.manifest_before = change.manifest_path.read_text(encoding="utf-8")
+        try:
+            _ = change.manifest_path.write_text(
+                json.dumps({**existing, "installed": merged}), encoding="utf-8"
+            )
+        except Exception:
+            change.rollback()
+            raise
+        return change
     # Keep the previous backup until this operation succeeds.
     previous_backup: Path | None = None
     if backup.exists():
@@ -908,6 +939,9 @@ def restore(folder: str) -> dict[str, object]:
             _ = _safe_target(backup, name)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise GameToolError("Invalid or missing BepInEx backup") from exc
+    # Older builds could list a folder and a file inside it; moving the folder
+    # brings the file back, so moving the file again would fail.
+    moved = [name for name in moved if not _under_any(name, moved)]
     # Check the whole backup before the live install changes.
     for name in moved:
         source = backup / name

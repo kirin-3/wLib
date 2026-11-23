@@ -311,7 +311,14 @@ const doSave = async (): Promise<void> => {
   saving.value = true;
   saveError.value = "";
   try {
-    const result = await api.writeRpgmSave(props.gameId, props.file, buildPatchList(patches.value), save.value.size, save.value.mtime_ns);
+    const result = await api.writeRpgmSave(
+      props.gameId,
+      props.file,
+      buildPatchList(patches.value),
+      save.value.size,
+      save.value.mtime_ns,
+      save.value.revision,
+    );
     if (result.success === false) {
       saveError.value = result.error || "The save could not be written";
       return;

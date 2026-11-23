@@ -25,6 +25,7 @@ from core._save_io import (
     atomic_replace_checked,
     read_fingerprint,
     reject_symlink,
+    revision_of,
 )
 from core.rpgm_saves import (
     MAX_BONUS,
@@ -840,10 +841,10 @@ def decode_save(data: bytes) -> list[MarshalNode]:
 def load_save(path: str, names: Mapping[str, object]) -> JsonDict:
     """Decode an RGSS slot file into the editor payload."""
     try:
-        st = os.stat(path)
-        if st.st_size > MAX_BYTES:
-            raise UnsupportedSaveFormat("This save file is too large to open")
         with open(path, "rb") as handle:
+            st = os.fstat(handle.fileno())
+            if st.st_size > MAX_BYTES:
+                raise UnsupportedSaveFormat("This save file is too large to open")
             data = handle.read(MAX_BYTES + 1)
     except UnsupportedSaveFormat:
         raise
@@ -858,6 +859,7 @@ def load_save(path: str, names: Mapping[str, object]) -> JsonDict:
         "format": fmt,
         "size": st.st_size,
         "mtime_ns": str(st.st_mtime_ns),
+        "revision": revision_of(data),
         "view": build_view(dumps, fmt, names, editable_ids),
         "names": dict(names),
         "raw": raw,
@@ -903,6 +905,16 @@ def _set_int_ivar(obj: ObjectNode, name: bytes, value: int) -> None:
                 obj.attributes[idx] = (sym, IntNode(value))
             return
     raise InvalidPatch("That value does not exist in the save")
+
+
+def _set_string(node: StringNode, value: str) -> None:
+    """Set the text in the string's own encoding (a US-ASCII string keeps
+    its marker, so it takes only ASCII text)."""
+    if node.encode_text(value) is None:
+        if node.edit_codec() == "ascii":
+            raise InvalidPatch("This text can only hold ASCII characters")
+        raise InvalidPatch("This text cannot be edited")
+    node.set_text(value)
 
 
 def _pad_nil(items: list[MarshalNode], ident: int) -> None:
@@ -958,7 +970,7 @@ def _apply_set_node(
             raise InvalidPatch("The text is too long")
         if not target.is_editable_utf8():
             raise InvalidPatch("This text cannot be edited")
-        target.set_text(value)
+        _set_string(target, value)
         return
     raise InvalidPatch("This value is read-only")
 
@@ -1028,7 +1040,7 @@ def _apply_set_variable(
             raise InvalidPatch("The text is too long")
         _pad_nil(arr.items, ident)
         if isinstance(old, StringNode):
-            old.set_text(value)
+            _set_string(old, value)
         else:
             arr.items[ident] = StringNode(
                 value.encode("utf-8"),
@@ -1084,7 +1096,7 @@ def _apply_set_actor(
         name_node = _raw_ivar(actor, b"@name")
         if not isinstance(name_node, StringNode) or not name_node.is_editable_utf8():
             raise InvalidPatch("This actor's name cannot be edited")
-        name_node.set_text(value)
+        _set_string(name_node, value)
         return
 
     if field == "level":
@@ -1202,17 +1214,22 @@ def write_save(
     size: int,
     mtime_ns: int,
     backup: Callable[[], str],
+    *,
+    revision: str | None = None,
 ) -> str:
     """Apply `patches` to an RGSS slot file safely and return the backup name.
 
     Follows the same safety pipeline as `rpgm_saves.write_save`: reject
-    symlinks, read and fingerprint, size/mtime check, decode and patch,
-    back up, encode, decode and compare the tree, write a temp file and
-    fsync, recheck the fingerprint, then atomic replace.
+    symlinks, read and fingerprint, size/mtime and revision check (node ids
+    in `patches` only name the same values in the bytes that were loaded),
+    decode and patch, back up, encode, decode and compare the tree, write a
+    temp file and fsync, recheck the fingerprint, then atomic replace.
     """
     reject_symlink(path)
     data, fingerprint = read_fingerprint(path, max_bytes=MAX_BYTES)
     if fingerprint[0] != size or fingerprint[1] != mtime_ns:
+        raise SaveChanged(CHANGED_MESSAGE)
+    if revision is not None and fingerprint[4] != revision:
         raise SaveChanged(CHANGED_MESSAGE)
     fmt = format_for_name(os.path.basename(path))
     dumps = decode_save(data)

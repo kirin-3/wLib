@@ -830,6 +830,13 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 except Exception as e:
                     print(f"[wLib] Database error during extension check: {e}")
                     check_payload = {"exists": False}
+                    if batch:
+                        # Without `matches` the badges would read "not in the
+                        # library"; an error makes the page keep them and retry.
+                        check_payload.update(
+                            error="wLib could not check the library. Try again.",
+                            error_code="lookup_failed",
+                        )
 
             check_payload["app_version"] = APP_VERSION
             sync_api = getattr(getattr(self, "server", None), "sync_api", None)

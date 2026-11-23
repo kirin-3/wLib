@@ -3,6 +3,17 @@ import type { RgssRawNodeData, RpgmNames, RpgmSaveFormat, RpgmSaveSlot, RpgmSave
 import { readMockGames } from "./games";
 
 let mockRpgmSaveMtime = 1;
+// Stands in for the SHA-256 of the slot bytes; it changes with every mock write.
+const mockRpgmSaveRevision = (): string => mockRpgmSaveMtime.toString(16).padStart(64, "0");
+const mockRpgmWriteRefusal = (args: unknown[], size: number): Record<string, unknown> | null => {
+  if (typeof args[5] !== "string" || !/^[0-9a-f]{64}$/.test(args[5])) {
+    return { success: false, mock: true, error: "The edit request has no save revision. Reopen the slot.", error_code: "invalid_patch" };
+  }
+  if (args[3] !== size || args[4] !== String(mockRpgmSaveMtime) || args[5] !== mockRpgmSaveRevision()) {
+    return { success: false, mock: true, error: "The save changed since it was opened. Reopen the slot.", error_code: "changed" };
+  }
+  return null;
+};
 
 const mockRpgmNames = (): RpgmNames => ({
   items: [
@@ -395,14 +406,14 @@ export const mockRpgmSaves = (method: string, args: unknown[]): unknown => {
         format: selected.format,
         size: selected.slot.size,
         mtime_ns: String(mockRpgmSaveMtime),
+        revision: mockRpgmSaveRevision(),
         view: selected.view,
         names: selected.names,
         raw: selected.raw,
       };
     }
-    if (args[3] !== selected.slot.size || args[4] !== String(mockRpgmSaveMtime)) {
-      return { success: false, mock: true, error: "The save changed since it was opened. Reopen the slot.", error_code: "changed" };
-    }
+    const refusal = mockRpgmWriteRefusal(args, selected.slot.size);
+    if (refusal) return refusal;
     const target = globalThis as { __wlibMockRpgmWrites?: unknown[] };
     (target.__wlibMockRpgmWrites ??= []).push({ file: args[1], patches: args[2] });
     mockRpgmSaveMtime += 1;
@@ -425,6 +436,7 @@ export const mockRpgmSaves = (method: string, args: unknown[]): unknown => {
       format: "mv",
       size: 4096,
       mtime_ns: String(mockRpgmSaveMtime),
+      revision: mockRpgmSaveRevision(),
       view: mockRpgmSaveView(),
       names: mockRpgmNames(),
       raw: {
@@ -433,9 +445,8 @@ export const mockRpgmSaves = (method: string, args: unknown[]): unknown => {
       },
     };
   }
-  if (args[3] !== 4096 || args[4] !== String(mockRpgmSaveMtime)) {
-    return { success: false, mock: true, error: "The save changed since it was opened. Reopen the slot.", error_code: "changed" };
-  }
+  const refusal = mockRpgmWriteRefusal(args, 4096);
+  if (refusal) return refusal;
   const target = globalThis as { __wlibMockRpgmWrites?: unknown[] };
   (target.__wlibMockRpgmWrites ??= []).push({ file: args[1], patches: args[2] });
   mockRpgmSaveMtime += 1;

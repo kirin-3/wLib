@@ -773,8 +773,14 @@ def fill_lc_threads(partners: Mapping[str, tuple[str, str]]) -> int:
     return count
 
 
-def attach_lc_thread(game_id: int, url: str, f95_url: str) -> bool:
-    """Attach to a still-matching, empty row. A concurrent edit wins."""
+def attach_lc_thread(
+    game_id: int, url: str, f95_url: str, *, exe_path: str = "", version: str = ""
+) -> bool:
+    """Attach to a still-matching, empty row. A concurrent edit wins.
+
+    A supplied `exe_path` (and a nonempty `version`) installs a row that still
+    has no executable, as adding the game with that executable would.
+    """
     normalized = lewdcorner.validated_thread_url(url)
     if not normalized:
         return False
@@ -784,7 +790,7 @@ def attach_lc_thread(game_id: int, url: str, f95_url: str) -> bool:
         row = cast(
             sqlite3.Row | None,
             conn.execute(
-                "SELECT f95_url, lc_url FROM games WHERE id = ?", (game_id,)
+                "SELECT f95_url, lc_url, exe_path FROM games WHERE id = ?", (game_id,)
             ).fetchone(),
         )
         if (
@@ -794,8 +800,15 @@ def attach_lc_thread(game_id: int, url: str, f95_url: str) -> bool:
             or _find_lc_game_row(conn, normalized)
         ):
             return False
+        fields: dict[str, str] = {"lc_url": normalized}
+        if exe_path.strip() and not str(cast(object, row["exe_path"]) or "").strip():
+            fields["exe_path"] = exe_path
+            if version.strip():
+                fields["version"] = version
+        set_clause = ", ".join(f"{key} = ?" for key in fields)
         _ = conn.execute(
-            "UPDATE games SET lc_url = ? WHERE id = ?", (normalized, game_id)
+            f"UPDATE games SET {set_clause} WHERE id = ?",
+            (*fields.values(), game_id),
         )
         conn.commit()
     return True

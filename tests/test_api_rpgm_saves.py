@@ -93,6 +93,7 @@ def test_write_success_shows_in_backups(tmp_path):
         [{"op": "set_actor", "id": 1, "field": "hp", "value": 1234}],
         payload["size"],
         payload["mtime_ns"],
+        payload["revision"],
     )
     assert result["success"], result
     assert result["backup"] in [
@@ -114,24 +115,34 @@ def test_write_refusals(tmp_path, monkeypatch):
     original = path.read_bytes()
 
     bad = api.write_rpgm_save(
-        *args, [{"op": "nope"}], payload["size"], payload["mtime_ns"]
+        *args,
+        [{"op": "nope"}],
+        payload["size"],
+        payload["mtime_ns"],
+        payload["revision"],
     )
     assert bad["error_code"] == "invalid_patch"
-    malformed = api.write_rpgm_save(*args, "x", payload["size"], payload["mtime_ns"])
+    malformed = api.write_rpgm_save(
+        *args, "x", payload["size"], payload["mtime_ns"], payload["revision"]
+    )
     assert malformed["error_code"] == "invalid_patch"
 
-    stale = api.write_rpgm_save(*args, patch, payload["size"] + 1, payload["mtime_ns"])
+    stale = api.write_rpgm_save(
+        *args, patch, payload["size"] + 1, payload["mtime_ns"], payload["revision"]
+    )
     assert stale["error_code"] == "changed"
 
     with monkeypatch.context() as scoped:
         scoped.setattr(api, "get_running_games", lambda: [game_id])
         running = api.write_rpgm_save(
-            *args, patch, payload["size"], payload["mtime_ns"]
+            *args, patch, payload["size"], payload["mtime_ns"], payload["revision"]
         )
     assert running["error_code"] == "game_running"
 
     monkeypatch.setattr(Api, "_save_backups_root", staticmethod(lambda: str(path)))
-    failed = api.write_rpgm_save(*args, patch, payload["size"], payload["mtime_ns"])
+    failed = api.write_rpgm_save(
+        *args, patch, payload["size"], payload["mtime_ns"], payload["revision"]
+    )
     assert failed["success"] is False and failed["error_code"] == "backup_failed"
     assert path.read_bytes() == original
 
@@ -142,7 +153,12 @@ def test_write_busy(tmp_path, monkeypatch):
     payload = loaded(api, game_id)
     api._saves_busy.add(game_id)
     result = api.write_rpgm_save(
-        game_id, "file1.rpgsave", [], payload["size"], payload["mtime_ns"]
+        game_id,
+        "file1.rpgsave",
+        [],
+        payload["size"],
+        payload["mtime_ns"],
+        payload["revision"],
     )
     assert result["error_code"] == "busy"
     api._saves_busy.discard(game_id)
@@ -208,6 +224,7 @@ def test_rgss_list_load_and_write_per_engine(
         [{"op": "set_node", "node": gold_ref, "value": 9999}],
         loaded_res["size"],
         loaded_res["mtime_ns"],
+        loaded_res["revision"],
     )
     assert write_res["success"], write_res
     assert write_res["backup"] in [
@@ -233,6 +250,7 @@ def test_rgss_running_and_busy_refusals(tmp_path: Path, monkeypatch) -> None:
             [{"op": "set_switch", "id": 1, "value": False}],
             payload["size"],
             payload["mtime_ns"],
+            payload["revision"],
         )
     assert running["success"] is False and running["error_code"] == "game_running"
 
@@ -244,6 +262,7 @@ def test_rgss_running_and_busy_refusals(tmp_path: Path, monkeypatch) -> None:
             [{"op": "set_switch", "id": 1, "value": False}],
             payload["size"],
             payload["mtime_ns"],
+            payload["revision"],
         )
     finally:
         api._saves_busy.discard(game_id)
@@ -272,6 +291,7 @@ def test_rgss_exe_folder_backup_excludes_game_files_and_restores(
         [{"op": "set_node", "node": gold_ref, "value": 77777}],
         loaded_res["size"],
         loaded_res["mtime_ns"],
+        loaded_res["revision"],
     )
     assert write_res["success"], write_res
     backup_name = write_res["backup"]
@@ -315,6 +335,7 @@ def test_rgss_subfolder_restore_bad_relative_and_missing_folder(
         [{"op": "set_node", "node": gold_ref, "value": 4242}],
         loaded_res["size"],
         loaded_res["mtime_ns"],
+        loaded_res["revision"],
     )
     assert write_res["success"], write_res
     backup_name = write_res["backup"]

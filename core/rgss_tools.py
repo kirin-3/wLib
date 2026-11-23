@@ -25,6 +25,7 @@ from core.game_tools import (
     check_free_space,
     create_temp_file,
     export_root,
+    planned_key,
     resolve_destination,
     validate_output_folder,
 )
@@ -387,10 +388,11 @@ def extract_archives(
                 skipped_unsafe += 1
                 continue
             if mode == "in_place":
-                if os.path.lexists(destination) or destination in planned:
+                key = planned_key(destination)
+                if os.path.lexists(destination) or key in planned:
                     skipped_existing += 1
                     continue
-                planned.add(destination)
+                planned.add(key)
             tasks.append(_Task(archive.path, entry, destination, entry.name))
 
     check_free_space(

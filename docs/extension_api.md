@@ -316,4 +316,4 @@ A check can return `attach_lc_available: true` for an existing F95 partner. To a
 {"action":"attach_lc","url":"https://lewdcorner.com/threads/5583/"}
 ```
 
-A successful attach returns `{"success":true,"attached":true,"id":42}`. An already-owned LC thread returns HTTP 409 with `error_code: "duplicate_url"`. For badges, use `/api/check?batch=1` with repeated `url` parameters. Its `matches` object maps the submitted LC URLs that are already stored in the library to game IDs. Pairing errors trigger the extension's batch retry backoff.
+A successful attach returns `{"success":true,"attached":true,"id":42}`. An already-owned LC thread returns HTTP 409 with `error_code: "duplicate_url"`. For badges, use `/api/check?batch=1` with repeated `url` parameters. Its `matches` object maps the submitted LC URLs that are already stored in the library to game IDs. When the library lookup fails, the answer has no `matches` and carries `error` and `error_code: "lookup_failed"` (still HTTP 200, with the version fields). Pairing errors, lookup failures and answers without `matches` trigger the extension's batch retry backoff and keep the existing badges.

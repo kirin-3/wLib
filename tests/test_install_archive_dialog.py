@@ -121,6 +121,108 @@ def test_archive_dialog_releases_staged_download(scenario: str) -> None:
     assert result.returncode == 0, result.stderr
 
 
+CHECK_DOWNLOAD_VERSION = """
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const { compileScript, parse } = require("@vue/compiler-sfc");
+const ts = require("typescript");
+const { createRenderer, h, nextTick, ref } = require("vue");
+
+const api = {
+  getSettings: async () => ({ library_folder: "/library" }),
+  listLibraryFolders: async () => [{ path: "/library", available: true }],
+  inspectArchive: async () => ({ success: true, title: "Game", version: "2.0", library_folder: "/library" }),
+  releaseDownloadArchive: async () => ({ success: true }),
+  previewInstallDestination: async () => ({ destination: "/library/Game", engine_pending: false }),
+};
+
+function load(source, imports = {}) {
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS },
+  });
+  const exports = {};
+  new Function("require", "exports", outputText)(
+    (name) => Object.hasOwn(imports, name) ? imports[name] : require(name),
+    exports,
+  );
+  return exports;
+}
+
+const filename = process.argv[1];
+const { descriptor } = parse(fs.readFileSync(filename, "utf8"), { filename });
+const component = load(compileScript(descriptor, { id: "archive-dialog" }).content, {
+  "../../services/api": { api },
+  "../../utils/installArchive": load(fs.readFileSync("src/utils/installArchive.ts", "utf8")),
+  "../../utils/toast": { notifyError() {} },
+  "../../utils/modalKeyboard": { useModalKeyboard() {} },
+  "../../utils/libraryGames": { isWishlisted: () => false, defaultTargetLabel: () => "" },
+  "../PathStatus.vue": {},
+}).default;
+component.render = () => null;
+
+const renderer = createRenderer({
+  createComment: () => ({}),
+  parentNode: () => null,
+  nextSibling: () => null,
+  insert() {},
+  remove() {},
+});
+// An update check found 3.0 after the 2.0 download was queued.
+const game = { id: 7, title: "Game", developer: "Dev", engine: "Ren'Py", f95_url: "", version: "1.0", latest_version: "3.0", exe_path: "/g/game.sh" };
+const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0)); };
+
+async function versionFor(downloadVersion) {
+  const isOpen = ref(false);
+  const dialog = ref();
+  const app = renderer.createApp({
+    render: () => h(component, {
+      ref: dialog,
+      modelValue: isOpen.value,
+      "onUpdate:modelValue": (value) => { isOpen.value = value; },
+      game,
+      preselectedArchive: "/downloads/Game-2.0.zip",
+      downloadVersion,
+    }),
+  });
+  app.mount({});
+  isOpen.value = true;
+  await nextTick();
+  await settle();
+  const form = dialog.value.$.setupState;
+  assert.equal(form.phase, "ready");
+  const version = form.version;
+  isOpen.value = false;
+  await nextTick();
+  app.unmount();
+  return version;
+}
+
+async function check() {
+  assert.equal(await versionFor("2.0"), "2.0", "A queued download installs under the version it fetched");
+  assert.equal(await versionFor(undefined), "3.0", "A manual install keeps the latest version");
+}
+
+check().catch((error) => { console.error(error); process.exitCode = 1; });
+"""
+
+
+def test_archive_dialog_keeps_queued_download_version() -> None:
+    node = shutil.which("node")
+    if node is None or not (UI / "node_modules/@vue/compiler-sfc").is_dir():
+        pytest.skip("Node and the frontend development dependencies are required")
+
+    dialog = os.environ.get("WLIB_TEST_INSTALL_ARCHIVE_DIALOG", str(DIALOG))
+    result = subprocess.run(
+        [node, "--input-type=commonjs", "-e", CHECK_DOWNLOAD_VERSION, dialog],
+        cwd=UI,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_release_typed_home_path_allows_deleting_staged_archive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -42,7 +42,8 @@ class RuntimesMixin(ApiBase):
                 prefix_path, proton_path, game_id
             )
             if tool == "winetricks":
-                if not target["is_proton"] and not host_which("wine"):
+                # The selected Wine build, which winetricks runs (not PATH wine).
+                if not target["is_proton"] and not self._plain_wine_binary(target):
                     raise ValueError(
                         "Wine is not installed. Install Wine first, then try again."
                     )
@@ -62,7 +63,7 @@ class RuntimesMixin(ApiBase):
                     environment=env,
                 )
             else:
-                wine = host_which("wine")
+                wine = self._plain_wine_binary(target)
                 if not wine:
                     raise ValueError(
                         "Wine is not installed. Install Wine first, then try again."

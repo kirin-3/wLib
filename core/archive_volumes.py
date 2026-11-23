@@ -27,7 +27,9 @@ class VolumeSet:
     `missing` holds the part numbers absent from the run 1..highest (the old
     `.rar` + `.r00` style counts the `.rar` as part 1, and a spanned zip's
     `.zip` is its last part). `ambiguous` names sibling files that differ only
-    in letter case and could not be told apart; they are never in `parts`.
+    in letter case, or that give one part number with different zero padding
+    (`part01` and `part1`), and could not be told apart; they are never in
+    `parts`.
     """
 
     kind: str
@@ -49,7 +51,9 @@ def volume_set(archive_path: str) -> VolumeSet | None:
     only files with the chosen file's exact base name count, and the chosen
     file itself always stands for its own part number. A part that still has
     more than one candidate goes to `ambiguous`, so nothing installs or
-    deletes a file from another set.
+    deletes a file from another set. Names that give one part number with
+    different zero padding (`part01`, `part1`) always go to `ambiguous`, the
+    chosen file too: the set they belong to cannot be told.
     """
     path = os.path.abspath(str(archive_path or ""))
     folder, name = os.path.split(path)
@@ -63,23 +67,30 @@ def volume_set(archive_path: str) -> VolumeSet | None:
         by_lower.setdefault(entry.lower(), []).append(entry)
     ambiguous: list[str] = []
 
-    def numbered(pattern: re.Pattern[str], base: str) -> dict[int, str]:
-        """Part number -> lowercase sibling name, for every part of `base`."""
-        found: dict[int, str] = {}
+    def numbered(pattern: re.Pattern[str], base: str) -> dict[int, list[str]]:
+        """Part number -> lowercase sibling names, for every part of `base`.
+
+        More than one name for a number means the same part with different
+        zero padding (`part01` and `part1`).
+        """
+        found: dict[int, list[str]] = {}
         for entry_lower in by_lower:
             match = pattern.match(entry_lower)
             if match and match.group("base") == base:
-                found[int(match.group("n"))] = entry_lower
+                found.setdefault(int(match.group("n")), []).append(entry_lower)
         return found
 
-    def resolve(keys: dict[int, str], base: str) -> dict[int, str]:
+    def resolve(keys: dict[int, list[str]], base: str) -> dict[int, str]:
         """Part number -> real path, keeping only files of the chosen set."""
 
         def exact_base(entry: str) -> str:
             # The part suffix is ASCII, so it has the same length in both cases.
             return entry[: len(entry) - (len(entry.lower()) - len(base))]
 
-        groups = {n: by_lower.get(key, []) for n, key in keys.items()}
+        groups = {
+            n: [e for key in names for e in by_lower.get(key, [])]
+            for n, names in keys.items()
+        }
         if any(len(entries) > 1 for entries in groups.values()):
             own = exact_base(name)
             groups = {
@@ -88,7 +99,9 @@ def volume_set(archive_path: str) -> VolumeSet | None:
             }
         resolved: dict[int, str] = {}
         for n, entries in groups.items():
-            if name in entries:
+            # The chosen file wins over names that differ only in letter
+            # case, never over another padding of its part number.
+            if name in entries and len({e.lower() for e in entries}) == 1:
                 entries = [name]
             if len(entries) == 1:
                 resolved[n] = os.path.join(folder, entries[0])
@@ -116,11 +129,11 @@ def volume_set(archive_path: str) -> VolumeSet | None:
     rar_old = RAR_OLD_RE.match(lower)
     if lower.endswith(".rar") or rar_old:
         base = rar_old.group("base") if rar_old else lower[: -len(".rar")]
-        keys = {n + 2: key for n, key in numbered(RAR_OLD_RE, base).items()}
+        keys = {n + 2: names for n, names in numbered(RAR_OLD_RE, base).items()}
         if not keys:
             return None
         if base + ".rar" in by_lower:
-            keys[1] = base + ".rar"
+            keys[1] = [base + ".rar"]
         return build("rar_old", resolve(keys, base), 1)
     zip_span = ZIP_SPAN_RE.match(lower)
     if lower.endswith(".zip") or zip_span:
@@ -131,7 +144,7 @@ def volume_set(archive_path: str) -> VolumeSet | None:
         # .z01 .. .zNN, then the .zip as the last part; 7-Zip opens the .zip.
         last = max(keys) + 1
         if base + ".zip" in by_lower:
-            keys[last] = base + ".zip"
+            keys[last] = [base + ".zip"]
         parts = resolve(keys, base)
         span = build("zip_span", parts, 1)
         if span is None:

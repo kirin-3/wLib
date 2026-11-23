@@ -301,7 +301,14 @@ def set_use_decrypted(root: str, enabled: bool) -> None:
     try:
         backup = path + BACKUP_SUFFIX
         if enabled and not os.path.exists(backup):
-            _ = shutil.copy2(path, backup)
+            # Copy through a temporary file: a copy cut off (a full disk) must
+            # not become the backup, or later "off" restores the wrong flags.
+            fd, temporary = create_temp_file(path)
+            with os.fdopen(fd, "wb") as output, open(path, "rb") as source:
+                shutil.copyfileobj(source, output)
+            shutil.copystat(path, temporary)
+            os.replace(temporary, backup)
+            temporary = ""
         if enabled:
             data["hasEncryptedImages"] = False
             data["hasEncryptedAudio"] = False
