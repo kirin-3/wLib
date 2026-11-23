@@ -113,9 +113,9 @@ function wlibFailure(action, error) {
 
 // Minimum wLib app version this extension works with. Raise by hand only when
 // the extension starts depending on app behavior older apps lack.
-const MIN_APP_VERSION = "0.4.8";
+const MIN_APP_VERSION = "0.4.9";
 // LewdCorner pages need the first app release with LC thread identity (after 0.4.7).
-const MIN_LC_APP_VERSION = "0.4.8";
+const MIN_LC_APP_VERSION = "0.4.9";
 
 // Compare dot-separated numeric release components, treating missing parts as
 // zero. A leading `v` and any `-suffix` (e.g. `-rc1`) are ignored, so
