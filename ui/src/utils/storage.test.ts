@@ -13,11 +13,12 @@ import {
   gameRowParts,
   isCleanupActionAvailable,
   skippedEntriesNote,
+  sortedStorageCategories,
   sortedStorageGames,
   stoppedScanNote,
 } from "./storage.ts";
 import { MockStorage } from "../services/mock/storage.ts";
-import type { StorageGameRow } from "../services/api.ts";
+import type { StorageCategoryReport, StorageGameRow } from "../services/api.ts";
 
 const uiRoot = resolve(import.meta.dirname, "..");
 
@@ -188,4 +189,20 @@ test("cleanup confirmation, availability, result formatting and MockStorage life
   const expired = mock.runCleanup(prev.preview_id);
   assert.equal(expired.success, false);
   assert.equal(expired.code, "preview_expired");
+});
+
+test("sortedStorageCategories puts the largest first and keeps the order of ties", () => {
+  const cat = (id: string, bytes: number): StorageCategoryReport => ({
+    id,
+    label: id,
+    bytes,
+    files: 0,
+    percent: 0,
+  });
+  const input = [cat("games", 10), cat("a", 0), cat("proton", 30), cat("b", 0), cat("catalog", 20)];
+  assert.deepEqual(
+    sortedStorageCategories(input).map((c) => c.id),
+    ["proton", "catalog", "games", "a", "b"],
+  );
+  assert.deepEqual(input.map((c) => c.id), ["games", "a", "proton", "b", "catalog"]);
 });

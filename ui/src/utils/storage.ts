@@ -2,6 +2,7 @@
 import type {
   StorageCleanupAction,
   StorageCleanupPreviewResponse,
+  StorageCategoryReport,
   StorageCleanupRunResponse,
   StorageGameRow,
 } from "../services/api";
@@ -46,6 +47,16 @@ export function formatRelativeAge(epochSeconds: number, nowMs = Date.now()): str
   if (days < 30) return days === 1 ? "1 day ago" : `${days} days ago`;
   const months = Math.round(days / 30);
   return months === 1 ? "1 month ago" : `${months} months ago`;
+}
+
+/** Categories largest first; equal sizes keep the report's order. */
+export function sortedStorageCategories(
+  categories: readonly StorageCategoryReport[],
+): StorageCategoryReport[] {
+  return categories
+    .map((cat, index) => ({ cat, index }))
+    .sort((a, b) => b.cat.bytes - a.cat.bytes || a.index - b.index)
+    .map(({ cat }) => cat);
 }
 
 export function sortedStorageGames(games: Record<string, StorageGameRow>): StorageGameRow[] {

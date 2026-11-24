@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { IconChartPie, IconFolderOpen } from "@tabler/icons-vue";
 import type { StorageCategoryReport } from "../../services/api";
-import { formatStorageBytes } from "../../utils/storage";
+import { formatStorageBytes, sortedStorageCategories } from "../../utils/storage";
 
 const props = defineProps<{
   categories: StorageCategoryReport[];
@@ -46,9 +46,39 @@ const BAR_COLORS: Record<string, string> = {
   logs_and_backups: "#94a3b8",
 };
 
+const sortedCategories = computed(() => sortedStorageCategories(props.categories));
+
 const nonZeroCategories = computed(() =>
-  props.categories.filter((cat) => cat.bytes > 0),
+  sortedCategories.value.filter((cat) => cat.bytes > 0),
 );
+
+const barEl = ref<HTMLElement | null>(null);
+const hoveredId = ref("");
+// Tooltip anchor: the segment centre in pixels from the bar's left edge.
+const tooltipX = ref(0);
+const tooltipAlign = ref<"start" | "center" | "end">("center");
+
+const hoveredCategory = computed(
+  () => nonZeroCategories.value.find((cat) => cat.id === hoveredId.value) ?? null,
+);
+
+function showSegment(event: MouseEvent, id: string) {
+  const bar = barEl.value;
+  const segment = event.currentTarget;
+  hoveredId.value = id;
+  if (!bar || !(segment instanceof HTMLElement)) return;
+  const barRect = bar.getBoundingClientRect();
+  const segRect = segment.getBoundingClientRect();
+  const centre = segRect.left - barRect.left + segRect.width / 2;
+  tooltipX.value = centre;
+  // Keep the label inside the card near the bar's ends.
+  const edge = Math.min(120, barRect.width / 4);
+  tooltipAlign.value = centre < edge ? "start" : centre > barRect.width - edge ? "end" : "center";
+}
+
+function clearSegment() {
+  hoveredId.value = "";
+}
 
 const barColor = (id: string): string => BAR_COLORS[id] ?? "var(--brand)";
 </script>
@@ -65,28 +95,49 @@ const barColor = (id: string): string => BAR_COLORS[id] ?? "var(--brand)";
       </span>
     </div>
 
-    <div
-      v-if="totalBytes > 0"
-      class="storage-bar flex h-3 w-full overflow-hidden rounded-full mb-5"
-      aria-hidden="true"
-    >
+    <div v-if="totalBytes > 0" class="relative mb-5">
       <div
-        v-for="cat in nonZeroCategories"
-        :key="cat.id"
-        class="h-full transition-all duration-300"
-        :style="{
-          width: `${Math.max(cat.percent, 0.8)}%`,
-          backgroundColor: barColor(cat.id),
-        }"
-        :title="`${cat.label}: ${formatStorageBytes(cat.bytes)} (${cat.percent}%)`"
-      ></div>
+        v-if="hoveredCategory"
+        class="storage-bar-tooltip pointer-events-none absolute bottom-full mb-2 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium tabular-nums"
+        :class="`storage-bar-tooltip--${tooltipAlign}`"
+        :style="{ left: `${tooltipX}px` }"
+        role="tooltip"
+      >
+        <span
+          class="inline-block w-2 h-2 rounded-full mr-1.5 align-middle"
+          :style="{ backgroundColor: barColor(hoveredCategory.id) }"
+        ></span>
+        <span style="color: var(--text-primary)">{{ hoveredCategory.label }}</span>
+        <span style="color: var(--text-secondary)">
+          · {{ formatStorageBytes(hoveredCategory.bytes) }} ({{ hoveredCategory.percent.toFixed(1) }}%)
+        </span>
+      </div>
+      <div
+        ref="barEl"
+        class="storage-bar flex h-3 w-full overflow-hidden rounded-full"
+        aria-hidden="true"
+        @mouseleave="clearSegment"
+      >
+        <div
+          v-for="cat in nonZeroCategories"
+          :key="cat.id"
+          class="storage-bar-segment h-full transition-all duration-300"
+          :class="{ 'storage-bar-segment--dim': hoveredId && hoveredId !== cat.id }"
+          :style="{
+            width: `${Math.max(cat.percent, 0.8)}%`,
+            backgroundColor: barColor(cat.id),
+          }"
+          @mouseenter="showSegment($event, cat.id)"
+        ></div>
+      </div>
     </div>
 
     <ul class="divide-y" style="border-color: var(--border)">
       <li
-        v-for="cat in categories"
+        v-for="cat in sortedCategories"
         :key="cat.id"
-        class="py-2.5 flex items-center gap-3 text-sm"
+        class="storage-category-row -mx-2 px-2 py-2.5 flex items-center gap-3 text-sm"
+        :class="{ 'storage-category-row--active': hoveredId === cat.id }"
         style="border-color: var(--border)"
       >
         <span
@@ -125,6 +176,31 @@ const barColor = (id: string): string => BAR_COLORS[id] ?? "var(--brand)";
   border: 1px solid var(--border);
 }
 .storage-bar {
+  background: var(--bg-inset);
+}
+.storage-bar-segment {
+  cursor: default;
+}
+.storage-bar-segment--dim {
+  opacity: 0.45;
+}
+.storage-bar-tooltip {
+  z-index: 10;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+}
+.storage-bar-tooltip--center {
+  transform: translateX(-50%);
+}
+.storage-bar-tooltip--end {
+  transform: translateX(-100%);
+}
+.storage-category-row {
+  border-radius: 0.375rem;
+  transition: background-color 150ms;
+}
+.storage-category-row--active {
   background: var(--bg-inset);
 }
 .storage-icon-btn {
