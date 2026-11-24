@@ -57,6 +57,13 @@ const emit = defineEmits<{
 
 // Compact and banner both draw image-only tiles (cover, overlay, bottom row).
 const isImageTileLayout = computed(() => props.layoutMode === "compact" || props.layoutMode === "banner");
+const ratingText = computed(() => {
+  const rating = props.game.rating || "";
+  const count = props.game.f95_catalog_rating_count;
+  // A rating with saved review text already has a count of its own.
+  if (count == null || !/^\d+(?:\.\d+)?\s*\/\s*5$/.test(rating.trim())) return rating;
+  return `${rating.trim()} (${count} ${count === 1 ? "review" : "reviews"})`;
+});
 const wishlisted = computed(() => isWishlisted(props.game));
 const updateAvailable = computed(() => hasAvailableUpdate(props.game));
 const unplayed = computed(() => hasUnplayedUpdate(props.game));
@@ -182,9 +189,9 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
         v-if="!isImageTileLayout && game.rating"
         class="rating-badge absolute bottom-2 left-2 text-xs font-bold px-2 py-0.5 rounded flex items-center gap-1"
         role="img"
-        :aria-label="`F95 rating ${game.rating}`"
-        :title="`F95 rating ${game.rating}`"
-        ><span class="rating-badge-source" aria-hidden="true">F95</span><span aria-hidden="true">{{ game.rating }}</span></span
+        :aria-label="`F95 rating ${ratingText}`"
+        :title="`F95 rating ${ratingText}`"
+        ><span class="rating-badge-source" aria-hidden="true">F95</span><span aria-hidden="true">{{ ratingText }}</span></span
       >
       <div
         v-if="isImageTileLayout"

@@ -1284,6 +1284,7 @@ export interface GameRecord {
   cover_image?: string;
   tags?: string | string[];
   rating?: string;
+  f95_catalog_rating_count?: number;
   // When the F95 rating was read (UTC ISO); "" when unknown.
   rating_updated_at?: string;
   developer?: string;

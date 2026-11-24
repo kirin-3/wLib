@@ -59,6 +59,8 @@ class LibraryMixin(ApiBase):
         from core.cover_cards import resolve_cover_folders
 
         games = get_all_games()
+        f95_ids = [extract_thread_id(game.get("f95_url")) for game in games]
+        rating_counts = game_lookup.f95_thread_rating_counts(f95_ids)
         lc_ids = [lewdcorner.extract_thread_id(game.get("lc_url")) for game in games]
         lc_tiers = game_lookup.lc_thread_tiers(
             [thread_id for thread_id in lc_ids if thread_id]
@@ -66,7 +68,9 @@ class LibraryMixin(ApiBase):
         with self._metadata_lock:
             pending = set(self._metadata_pending)
         folders = resolve_cover_folders()
-        for game, lc_id in zip(games, lc_ids, strict=True):
+        for game, f95_id, lc_id in zip(games, f95_ids, lc_ids, strict=True):
+            if f95_id in rating_counts:
+                game["f95_catalog_rating_count"] = rating_counts[f95_id]
             if tier := lc_tiers.get(lc_id):
                 game["lc_catalog_tier"] = tier
             self._add_local_cover_url(game, folders)

@@ -641,6 +641,35 @@ def lc_threads_screenshots(thread_ids: Sequence[str]) -> dict[str, list[str]]:
     return _thread_screenshots("lc_threads", thread_ids)
 
 
+def f95_thread_rating_counts(thread_ids: Sequence[str]) -> dict[str, int]:
+    """Known review counts from the installed catalog, including explicit zero."""
+    ids = _sqlite_ids(thread_ids)
+    if not ids or database.get_setting("catalog_enabled") == "0":
+        return {}
+    path = Path(database.DB_PATH).parent / CATALOG_FILE
+    counts: dict[str, int] = {}
+    try:
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+            for offset in range(0, len(ids), 500):
+                chunk = ids[offset : offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = cast(
+                    list[tuple[object, object]],
+                    conn.execute(
+                        "SELECT thread_id, rating_count FROM f95_thread_details "
+                        + f"WHERE status = 'ok' AND thread_id IN ({placeholders})",
+                        chunk,
+                    ).fetchall(),
+                )
+                for thread_id, count in rows:
+                    if isinstance(count, int) and count >= 0:
+                        counts[str(thread_id)] = count
+    except (sqlite3.Error, OSError, ValueError):
+        # Older snapshots may have no review-count column.
+        return {}
+    return counts
+
+
 def f95_thread_ratings(thread_ids: Sequence[int]) -> tuple[str, dict[int, float]]:
     """The catalog's ``built_at`` and its F95 rating for each known thread.
 

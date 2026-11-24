@@ -272,6 +272,32 @@ def _rating(game_id: int) -> tuple[object, object]:
     return game["rating"], game["rating_updated_at"]
 
 
+def test_get_games_exposes_optional_catalog_review_counts(rating_catalog, tmp_path):
+    import sqlite3
+
+    counted = _rated_game(1, "4.3/5 (8 reviews)")
+    zero = _rated_game(2, "3.6/5")
+    unknown = _rated_game(3, "3.0/5")
+    with sqlite3.connect(tmp_path / "catalog.db") as catalog:
+        catalog.executemany(
+            "INSERT INTO f95_thread_details (thread_id, fetched_at, status, rating_count) "
+            + "VALUES (?, '', 'ok', ?)",
+            [(1, 12), (2, 0), (3, None)],
+        )
+    api = Api()
+    games = {game["id"]: game for game in api.get_games()}
+    assert games[counted]["rating"] == "4.3/5 (8 reviews)"
+    assert games[counted]["f95_catalog_rating_count"] == 12
+    assert games[zero]["f95_catalog_rating_count"] == 0
+    assert "f95_catalog_rating_count" not in games[unknown]
+
+    with sqlite3.connect(tmp_path / "catalog.db") as catalog:
+        catalog.execute("ALTER TABLE f95_thread_details DROP COLUMN rating_count")
+    games = {game["id"]: game for game in api.get_games()}
+    assert games[zero]["rating"] == "3.6/5"
+    assert "f95_catalog_rating_count" not in games[zero]
+
+
 def test_catalog_fill_follows_the_rating_rules(rating_catalog, monkeypatch):
     add_thread, _sha = rating_catalog
     empty = _rated_game(1)
