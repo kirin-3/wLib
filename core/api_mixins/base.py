@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from webview import Window
 
     from core.game_files import GameHooks, MoveJob, MoveOutcome
+    from core.storage_cleanup import CleanupContext
     from core.web_video import Converter
     from core.downloads.manager import DownloadManager
     from core.downloads.queue import DownloadQueue
@@ -310,6 +311,21 @@ class ApiBase:
         # Games Discover created in this session; only these may be discarded.
         self._discover_created: set[int] = set()
         self._discover_lock: threading.Lock = threading.Lock()
+        from core.storage_cleanup import (
+            StorageCleanupService,
+            measure_all_actions,
+        )
+        from core.storage_usage import StorageScanService
+
+        self.storage: StorageScanService = hide_from_js(
+            StorageScanService(running_games=self.get_running_games)
+        )
+        self.storage_cleanup: StorageCleanupService = hide_from_js(
+            StorageCleanupService(self.storage, self._storage_cleanup_context)
+        )
+        self.storage.set_action_measurer(
+            lambda budget: measure_all_actions(self._storage_cleanup_context(), budget)
+        )
         if self._catalog_enabled():
             _ = self.catalog.start_background()
 
@@ -3064,7 +3080,12 @@ class ApiBase:
 
     def _game_moved(self, game_id: int) -> None:
         """After a move changed a game's paths: Steam shortcuts and the library view."""
-        _ = game_id
+        from core.storage_usage import notify_storage_game_changed
+
+        try:
+            notify_storage_game_changed(self, game_id, "move")
+        except Exception as exc:
+            print(f"[wLib] Failed to update storage report after move {game_id}: {exc}")
         self._schedule_steam_sync()
         if self.window:
             with suppress(Exception):
@@ -3102,6 +3123,82 @@ class ApiBase:
             return get_setting("catalog_enabled") != "0"
         except sqlite3.Error:
             return True
+
+    def _storage_cleanup_context(self) -> CleanupContext:
+        from core.database import get_all_games, get_save_backup_keep, get_setting
+        from core.downloads.queue import READY
+        from core.downloads.transfer import staging_dir
+        from core.host_platform import get_data_dir
+        from core.storage_cleanup import CleanupContext
+
+        def open_archives() -> list[str]:
+            return [str(p) for p in self._update_downloads.manager.open_archives()]
+
+        def ready_queue_archives() -> list[str]:
+            archives: list[str] = []
+            for job in self._download_queue.jobs():
+                if job.state != READY:
+                    continue
+                detail_path = str(job.details.get("archive_path") or "")
+                if detail_path:
+                    archives.append(detail_path)
+                source_name = str(job.source.get("archive") or "")
+                if source_name:
+                    archives.append(str(staging_dir() / source_name))
+            return archives
+
+        def archive_install_running() -> bool:
+            with self._status_lock:
+                return bool(self._archive_install_status.get("running"))
+
+        def rpgm_runner_preparing() -> bool:
+            with self._status_lock:
+                return bool(self._rpgm_runner_install_status.get("running"))
+
+        def bepinex_running() -> bool:
+            with self._tool_lock:
+                return any(
+                    bool(status.get("running"))
+                    and str(status.get("action") or "").startswith("bepinex")
+                    for status in self._tool_status.values()
+                )
+
+        def saves_busy_games() -> set[int]:
+            with self._saves_busy_lock:
+                return set(self._saves_busy)
+
+        def default_proton_path() -> str:
+            return str(get_setting("proton_path") or "")
+
+        def game_proton_versions() -> list[str]:
+            return [
+                str(game.get("proton_version") or "")
+                for game in get_all_games()
+                if game.get("proton_version")
+            ]
+
+        def purge_covers() -> dict[str, object]:
+            purge_fn = getattr(self, "purge_cover_cache", None)
+            if callable(purge_fn):
+                return cast(dict[str, object], purge_fn())
+            self.cover_cache.purge()
+            self.cover_cards.sweep()
+            return {"success": True}
+
+        return CleanupContext(
+            data_dir=get_data_dir,
+            running_games=self.get_running_games,
+            open_archives=open_archives,
+            ready_queue_archives=ready_queue_archives,
+            archive_install_running=archive_install_running,
+            rpgm_runner_preparing=rpgm_runner_preparing,
+            bepinex_running=bepinex_running,
+            save_backup_keep=get_save_backup_keep,
+            saves_busy_games=saves_busy_games,
+            default_proton_path=default_proton_path,
+            game_proton_versions=game_proton_versions,
+            purge_cover_cache=purge_covers,
+        )
 
     @staticmethod
     def _save_backups_root() -> str:

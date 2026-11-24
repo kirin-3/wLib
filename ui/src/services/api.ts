@@ -1518,6 +1518,7 @@ export interface SettingsPayload extends Partial<GamescopeSettings> {
   library_folder_pattern?: string;
   downloads_folder?: string;
   download_detection_enabled?: boolean;
+  storage_recount_after_changes?: boolean;
   save_backup_keep?: SaveBackupKeep;
   catalog_enabled?: boolean;
   lc_enabled?: boolean;
@@ -1735,6 +1736,7 @@ export interface SettingsResponse extends GamescopeSettings {
   downloads_folder: string;
   downloads_folder_exists: boolean;
   download_detection_enabled: boolean;
+  storage_recount_after_changes: boolean;
   save_backup_keep: SaveBackupKeep;
   catalog_enabled: boolean;
   lc_enabled: boolean;
@@ -1744,6 +1746,118 @@ export interface SettingsResponse extends GamescopeSettings {
   lc_plus_detected: LcPlusTier;
   lc_plus_detected_at: string;
   lc_plus_check: LcPlusCheck;
+}
+
+export type StorageCleanupActionId =
+  | "download_archives"
+  | "unpack_leftovers"
+  | "removed_game_data"
+  | "save_backups"
+  | "proton_builds"
+  | "cover_cache"
+  | "bepinex_cache";
+
+export interface StorageCategoryReport {
+  id: string;
+  label: string;
+  bytes: number;
+  files: number;
+  percent: number;
+}
+
+export interface StorageGameParts {
+  game: number;
+  saves: number;
+  player: number;
+  sandbox: number;
+  prefix: number;
+}
+
+export interface StorageGameRow {
+  game_id: number;
+  title: string;
+  root: string;
+  root_source: "picked" | "pattern" | "climb" | "marker" | "exe_dir" | "";
+  exe_path: string;
+  picked: boolean;
+  uncertain: boolean;
+  unsafe: boolean;
+  unsafe_reason: string;
+  unavailable: boolean;
+  changed: boolean;
+  shared_with: string[];
+  shared_with_ids: number[];
+  parts: StorageGameParts;
+  torrent_bytes: number;
+  total_bytes: number;
+}
+
+export interface StorageActionSummary {
+  bytes: number;
+  count: number;
+}
+
+export interface StorageReport {
+  version: number;
+  scanned_at: string;
+  scanned_at_epoch: number;
+  total_bytes: number;
+  total_files: number;
+  skipped_entries: number;
+  categories: StorageCategoryReport[];
+  games: Record<string, StorageGameRow>;
+  actions: Record<string, StorageActionSummary>;
+}
+
+export interface StorageCleanupAction {
+  id: StorageCleanupActionId;
+  label: string;
+  bytes: number;
+  count: number;
+  blocked_reason: string;
+  what_stays: string;
+  warning: string;
+}
+
+export interface StorageStateResponse extends ApiBasicResponse {
+  task: "idle" | "scan" | "recount" | "cleanup";
+  scanning: boolean;
+  cleanup_running: boolean;
+  game_running: boolean;
+  completed_units: number;
+  total_units: number;
+  files_counted: number;
+  bytes_counted: number;
+  current_label: string;
+  stopped_reason: "" | "user" | "game";
+  last_error: string;
+  report: StorageReport | null;
+  actions: StorageCleanupAction[];
+}
+
+export interface StorageCleanupPreviewResponse extends ApiBasicResponse {
+  preview_id?: string;
+  action?: StorageCleanupActionId;
+  label?: string;
+  count?: number;
+  bytes?: number;
+  what_stays?: string;
+  warning?: string;
+  code?: string;
+}
+
+export interface StorageCleanupRunResponse extends ApiBasicResponse {
+  action?: StorageCleanupActionId;
+  freed_bytes?: number;
+  removed?: number;
+  failed?: number;
+  skipped?: number;
+  code?: string;
+}
+
+export interface StorageGameFolderResponse extends ApiBasicResponse {
+  root?: string;
+  cleared?: boolean;
 }
 
 export type LcPlusMode = "auto" | "yes" | "no";
@@ -3061,6 +3175,38 @@ class ApiService {
 
   async getSystemDepsCommand(): Promise<SystemDepsCommandResponse> {
     return this.invoke<SystemDepsCommandResponse>("get_system_deps_command");
+  }
+
+  async getStorageState(): Promise<StorageStateResponse> {
+    return this.invoke<StorageStateResponse>("get_storage_state");
+  }
+
+  async startStorageScan(): Promise<ApiBasicResponse & { code?: string }> {
+    return this.invoke<ApiBasicResponse & { code?: string }>("start_storage_scan");
+  }
+
+  async stopStorageScan(): Promise<ApiBasicResponse & { stopped?: boolean }> {
+    return this.invoke<ApiBasicResponse & { stopped?: boolean }>("stop_storage_scan");
+  }
+
+  async previewStorageCleanup(action: StorageCleanupActionId): Promise<StorageCleanupPreviewResponse> {
+    return this.invoke<StorageCleanupPreviewResponse>("preview_storage_cleanup", action);
+  }
+
+  async runStorageCleanup(previewId: string): Promise<StorageCleanupRunResponse> {
+    return this.invoke<StorageCleanupRunResponse>("run_storage_cleanup", previewId);
+  }
+
+  async setStorageGameFolder(gameId: number, path: string): Promise<StorageGameFolderResponse> {
+    return this.invoke<StorageGameFolderResponse>("set_storage_game_folder", gameId, path);
+  }
+
+  async clearStorageGameFolder(gameId: number): Promise<StorageGameFolderResponse> {
+    return this.invoke<StorageGameFolderResponse>("clear_storage_game_folder", gameId);
+  }
+
+  async openStorageLocation(target: string): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("open_storage_location", target);
   }
 }
 

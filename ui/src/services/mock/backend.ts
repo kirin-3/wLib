@@ -21,6 +21,7 @@ import { mockRpgmSaves } from "./rpgm";
 import { MockRpgmPlugins } from "./rpgmPlugins";
 import { MockWebMedia } from "./webMedia";
 import { MockF95Account } from "./f95Account";
+import { MockStorage } from "./storage";
 import { DEFAULT_MOCK_SETTINGS, isActionableVersion, isSaveBackupKeep, normalizeMockFilterPresets, normalizeMockSettings, readMockSettings, writeMockSettings } from "./settings";
 
 // Browser preview: gamescope reads as missing unless this key is "installed".
@@ -94,6 +95,7 @@ export class MockBackend {
   _mockWebMedia = new MockWebMedia();
   _mockDiscover = new MockDiscover();
   _mockF95Account = new MockF95Account();
+  _mockStorage = new MockStorage(() => this._mockRunningGames.size > 0);
   _mockWebPlayerExports = new Map<number, number>();
   _mockDownloads = new MockDownloads(() => this._mockRunningGames.size > 0, () => {
     const settings = readMockSettings();
@@ -2359,6 +2361,22 @@ export class MockBackend {
         writeMockAttachments(store);
         return { success: true, mock: true, attachments: store[String(gameId)] || [] };
       }
+      case "get_storage_state":
+        return this._mockStorage.getState();
+      case "start_storage_scan":
+        return this._mockStorage.startScan();
+      case "stop_storage_scan":
+        return this._mockStorage.stopScan("user");
+      case "preview_storage_cleanup":
+        return this._mockStorage.previewCleanup(args[0] as never);
+      case "run_storage_cleanup":
+        return this._mockStorage.runCleanup(String(args[0] ?? ""));
+      case "set_storage_game_folder":
+        return this._mockStorage.setGameFolder(Number(args[0]), String(args[1] ?? ""));
+      case "clear_storage_game_folder":
+        return this._mockStorage.clearGameFolder(Number(args[0]));
+      case "open_storage_location":
+        return { success: true, mock: true };
       default:
         return unavailable;
     }

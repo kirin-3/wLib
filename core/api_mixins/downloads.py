@@ -1179,6 +1179,17 @@ class DownloadsMixin(ApiBase):
                     ).start()
 
         self._refresh_synced_library()
+        if isinstance(installed_id, int):
+            from core.storage_usage import notify_storage_game_changed
+
+            try:
+                notify_storage_game_changed(
+                    self, installed_id, "update" if game_id is not None else "install"
+                )
+            except Exception as exc:
+                print(
+                    f"[wLib] Failed to update storage report after install {installed_id}: {exc}"
+                )
         return {"success": True, **result}
 
     def find_download_offers(self) -> dict[str, object]:

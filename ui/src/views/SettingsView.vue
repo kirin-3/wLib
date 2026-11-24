@@ -199,6 +199,7 @@ const checkLcPlus = async () => {
 const libraryFolderPattern = ref("{creator}/{title}/{version}");
 const downloadsFolder = ref("");
 const downloadDetectionEnabled = ref(true);
+const storageRecountAfterChanges = ref(false);
 // The download queue settings; the Downloads page has the same four (DownloadQuickSettings.vue).
 const downloadLimitKib = ref(0);
 const downloadMaxActive = ref(2);
@@ -510,6 +511,7 @@ const applySettings = (data: SettingsResponse) => {
   libraryFolderPattern.value = data.library_folder_pattern || "{creator}/{title}/{version}";
   downloadsFolder.value = data.downloads_folder || "";
   downloadDetectionEnabled.value = data.download_detection_enabled !== false;
+  storageRecountAfterChanges.value = data.storage_recount_after_changes === true;
   downloadLimitKib.value = data.download_limit_kib ?? 0;
   downloadMaxActive.value = data.download_max_active ?? 2;
   downloadPauseWhilePlaying.value = data.download_pause_while_playing !== false;
@@ -539,6 +541,7 @@ const formValues = () => ({
   libraryFolderPattern: libraryFolderPattern.value,
   downloadsFolder: downloadsFolder.value,
   downloadDetectionEnabled: downloadDetectionEnabled.value,
+  storageRecountAfterChanges: storageRecountAfterChanges.value,
   downloadLimitKib: downloadLimitKib.value,
   downloadMaxActive: downloadMaxActive.value,
   downloadPauseWhilePlaying: downloadPauseWhilePlaying.value,
@@ -557,6 +560,7 @@ const applyFormValues = (values: ReturnType<typeof formValues>) => {
   libraryFolderPattern.value = values.libraryFolderPattern;
   downloadsFolder.value = values.downloadsFolder;
   downloadDetectionEnabled.value = values.downloadDetectionEnabled;
+  storageRecountAfterChanges.value = values.storageRecountAfterChanges;
   downloadLimitKib.value = values.downloadLimitKib;
   downloadMaxActive.value = values.downloadMaxActive;
   downloadPauseWhilePlaying.value = values.downloadPauseWhilePlaying;
@@ -1094,17 +1098,19 @@ const patternSave = makeField(libraryFolderPattern, value => ({ library_folder_p
 const downloadsSave = makeField(downloadsFolder, value => ({ downloads_folder: value }), ["downloadsFolder"], values => values.downloadsFolder);
 const statusesSave = makeField(customStatuses, value => ({ custom_play_statuses: value }), ["customStatuses"], values => values.customStatuses);
 const detectionSave = makeField(downloadDetectionEnabled, value => ({ download_detection_enabled: value }), ["downloadDetectionEnabled"], values => values.downloadDetectionEnabled);
+const storageRecountSave = makeField(storageRecountAfterChanges, value => ({ storage_recount_after_changes: value }), ["storageRecountAfterChanges"], values => values.storageRecountAfterChanges);
 const limitSave = makeField(downloadLimitKib, value => ({ download_limit_kib: clampLimitKib(value) }), ["downloadLimitKib"], values => values.downloadLimitKib);
 const slotsSave = makeField(downloadMaxActive, value => ({ download_max_active: value }), ["downloadMaxActive"], values => values.downloadMaxActive);
 const playingSave = makeField(downloadPauseWhilePlaying, value => ({ download_pause_while_playing: value }), ["downloadPauseWhilePlaying"], values => values.downloadPauseWhilePlaying);
 const batterySave = makeField(downloadPauseOnBattery, value => ({ download_pause_on_battery: value }), ["downloadPauseOnBattery"], values => values.downloadPauseOnBattery);
-const autosaves = [protonSave, prefixSave, runnerSave, urmSave, foldersSave, patternSave, downloadsSave, statusesSave, detectionSave, limitSave, slotsSave, playingSave, batterySave];
+const autosaves = [protonSave, prefixSave, runnerSave, urmSave, foldersSave, patternSave, downloadsSave, statusesSave, detectionSave, storageRecountSave, limitSave, slotsSave, playingSave, batterySave];
 const resetAutosaveBaselines = () => {
   protonSave.resetSaved(protonPath.value); prefixSave.resetSaved(prefixPath.value);
   runnerSave.resetSaved(rpgmakerLinuxRunnerPath.value); urmSave.resetSaved(urmPath.value);
   foldersSave.resetSaved(libraryValue.value); patternSave.resetSaved(libraryFolderPattern.value);
   downloadsSave.resetSaved(downloadsFolder.value); statusesSave.resetSaved(customStatuses.value);
   detectionSave.resetSaved(downloadDetectionEnabled.value);
+  storageRecountSave.resetSaved(storageRecountAfterChanges.value);
   limitSave.resetSaved(downloadLimitKib.value); slotsSave.resetSaved(downloadMaxActive.value);
   playingSave.resetSaved(downloadPauseWhilePlaying.value); batterySave.resetSaved(downloadPauseOnBattery.value);
 };
@@ -1256,7 +1262,7 @@ const shownSectionIds = ref<string[]>([]);
 const route = useRoute();
 const sectionRegistry = computed(() => [
   { id: "general", title: "General", keywords: "logging statuses collections" },
-  { id: "library-downloads", title: "Library & Downloads", keywords: "folders archives download queue speed limit battery" },
+  { id: "library-downloads", title: "Library & Downloads", keywords: "folders archives download queue speed limit battery storage recount disk size" },
   { id: "file-hosts", title: "File host accounts", keywords: "pixeldrain mega rpdl account api key premium download" },
   { id: "torrents", title: "Torrents", keywords: "torrent seed seeding ratio speed limit rpdl" },
   { id: "appearance", title: "Appearance", keywords: "theme dark light color" },
@@ -1809,6 +1815,35 @@ const browseUrm = async () => {
               :disabled="!!settingsLoadError || settingsLoading"
               class="sr-only peer"
               aria-label="Detect downloaded updates"
+            />
+            <div class="ui-toggle"></div>
+          </label>
+        </div>
+
+        <div
+          data-settings-row="library-downloads-storage-recount"
+          data-settings-bound
+          data-keywords="storage recount disk size install update move battery"
+          v-show="settingsRowVisible('library-downloads-storage-recount')"
+          class="ui-card-row flex items-center justify-between gap-4"
+        >
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">
+              Count a game's size again after install, update or move
+            </h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              Recounts only that game in the background at low priority when a storage report exists. Skipped on battery power and stored on this device only.
+            </p>
+          </div>
+          <FieldSaveFeedback :state="storageRecountSave.state.value" :error="storageRecountSave.error.value" />
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              v-model="storageRecountAfterChanges"
+              @change="storageRecountSave.commit()"
+              :disabled="!!settingsLoadError || settingsLoading"
+              class="sr-only peer"
+              aria-label="Count a game's size again after install, update or move"
             />
             <div class="ui-toggle"></div>
           </label>

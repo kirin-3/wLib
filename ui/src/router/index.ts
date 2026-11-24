@@ -8,6 +8,7 @@ import SettingsView from "../views/SettingsView.vue";
 import ExtensionView from "../views/ExtensionView.vue";
 import UpdatesView from "../views/UpdatesView.vue";
 import DownloadsView from "../views/DownloadsView.vue";
+import StorageView from "../views/StorageView.vue";
 import LibraryBackupView from "../views/LibraryBackupView.vue";
 import SyncView from "../views/SyncView.vue";
 import DiagnosticsView from "../views/DiagnosticsView.vue";
@@ -33,6 +34,11 @@ const routes: RouteRecordRaw[] = [
     path: "/downloads",
     name: "downloads",
     component: DownloadsView,
+  },
+  {
+    path: "/storage",
+    name: "storage",
+    component: StorageView,
   },
   {
     path: "/extension",

@@ -62,6 +62,7 @@ export const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   downloads_folder: "",
   downloads_folder_exists: true,
   download_detection_enabled: true,
+  storage_recount_after_changes: false,
   save_backup_keep: "all",
   catalog_enabled: true,
   lc_enabled: false,
@@ -217,6 +218,10 @@ export const normalizeMockSettings = (value: unknown): SettingsResponse => {
       typeof source.download_detection_enabled === "boolean"
         ? source.download_detection_enabled
         : DEFAULT_MOCK_SETTINGS.download_detection_enabled,
+    storage_recount_after_changes:
+      typeof source.storage_recount_after_changes === "boolean"
+        ? source.storage_recount_after_changes
+        : DEFAULT_MOCK_SETTINGS.storage_recount_after_changes,
     save_backup_keep: isSaveBackupKeep(source.save_backup_keep) ? source.save_backup_keep : "all",
     catalog_enabled: source.catalog_enabled !== false,
     lc_enabled: source.lc_enabled === true,

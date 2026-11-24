@@ -17,6 +17,7 @@ from core.api_mixins.rpgm_runtime import RpgmRuntimeMixin
 from core.api_mixins.runtimes import RuntimesMixin
 from core.api_mixins.saves import SavesMixin
 from core.api_mixins.settings import SettingsMixin
+from core.api_mixins.storage import StorageMixin
 from core.api_mixins.sync import SyncMixin
 from core.api_mixins.updates import UpdatesMixin
 from core.api_mixins.web_media import WebMediaMixin
@@ -38,6 +39,7 @@ class Api(
     DownloadsMixin,
     SavesMixin,
     SettingsMixin,
+    StorageMixin,
     WebMediaMixin,
     ApiBase,
 ):

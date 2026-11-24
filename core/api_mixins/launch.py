@@ -575,6 +575,9 @@ class LaunchMixin(ApiBase):
                     f"window.dispatchEvent(new CustomEvent('wlib-playtime-tick', {{ detail: {json.dumps(detail)} }}))"
                 )
 
+        from core.storage_usage import notify_storage_game_starting
+
+        notify_storage_game_starting(self)
         result = launch_tracked(
             self.launcher,
             game_id,
@@ -896,7 +899,12 @@ class LaunchMixin(ApiBase):
                 title=title or f"Game {game_id}",
                 launch_token=launch_id,
             )
-            return self.launcher.reserve_external(game_id, entry)
+            conflict = self.launcher.reserve_external(game_id, entry)
+            if conflict is None:
+                from core.storage_usage import notify_storage_game_starting
+
+                notify_storage_game_starting(self)
+            return conflict
 
     @python_only
     def release_runner_launch(self, game_id: int, launch_id: str = "") -> None:

@@ -101,6 +101,9 @@
   "clear_game_cover": [
     "game_id"
   ],
+  "clear_storage_game_folder": [
+    "game_id"
+  ],
   "close_update_download_links": [
     "game_id"
   ],
@@ -279,6 +282,7 @@
   "get_startup_launch_error": [],
   "get_steam_cover_conversions": [],
   "get_steam_status": [],
+  "get_storage_state": [],
   "get_sync_status": [],
   "get_system_deps_command": [],
   "get_umu_download_status": [],
@@ -419,6 +423,9 @@
   ],
   "open_log_folder": [],
   "open_steam_keyboard": [],
+  "open_storage_location": [
+    "target"
+  ],
   "open_update_download_in_browser": [
     "game_id",
     "link_id"
@@ -449,6 +456,9 @@
   "prepare_umu_runtime": [],
   "preview_install_destination": [
     "options"
+  ],
+  "preview_storage_cleanup": [
+    "action"
   ],
   "purge_cover_cache": [],
   "recheck_locale_emulator_status": [],
@@ -510,6 +520,9 @@
   ],
   "revoke_extension_pairing": [
     "pairing_id"
+  ],
+  "run_storage_cleanup": [
+    "preview_id"
   ],
   "save_companion_tool": [
     "tool"
@@ -589,6 +602,10 @@
   "set_steam_games_mode": [
     "mode"
   ],
+  "set_storage_game_folder": [
+    "game_id",
+    "path"
+  ],
   "set_sync_folder": [
     "path"
   ],
@@ -624,6 +641,7 @@
     "version",
     "replaces"
   ],
+  "start_storage_scan": [],
   "start_update_download": [
     "game_id",
     "link_id",
@@ -638,6 +656,7 @@
   "stop_seeding": [
     "job_id"
   ],
+  "stop_storage_scan": [],
   "sync_now": [],
   "sync_steam_shortcuts": [],
   "take_abandoned_notices": [],

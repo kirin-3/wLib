@@ -585,3 +585,14 @@ The focused screen supplies button hints; pointer input hides the controller foc
 Game Detail places collection membership chips and the "+ Collection" picker in the header badge row, and removal in the More actions menu; membership changes are saved with the form. The footer Set up button uses the neutral style and a download icon, and opens the Launch tab. The Launch tab links to Sandbox settings when the tool is missing.
 
 The Library shows active filter chips below the toolbar, with individual removal and Clear all. Sort labels distinguish F95 rating from My rating, and layout controls announce their selected state.
+
+### Storage page
+
+`views/StorageView.vue` (route `/storage`, sidebar link **Storage** with `IconDatabase`) shows disk usage (size on disk) without measuring anything until the user chooses **Scan Now** (or **Scan again** when a saved report is present). While a scan or cleanup runs, the view polls `api.getStorageState()` every 500 ms and stops polling immediately when idle or unmounted. It displays live progress (current part, files and bytes counted) with **Stop**, preserves the previous saved report with a stop note if stopped by the user or by starting a game, shows the report age in relative words, and reports any unreadable entries that were skipped.
+
+Child components in `components/storage/`:
+- `StorageCategoryBreakdown.vue`: stacked usage bar, total size, per-category size and percent, and folder open buttons for data categories.
+- `StorageCleanupSection.vue`: the seven **Free up space** actions with report sizes, "Nothing to free" / blocked explanations, fresh preview + `ConfirmDialog.vue` confirmation (including the save warning for removed game data), result summary (freed size and any failed/skipped count), and in-place report refresh.
+- `StorageGamesList.vue`: games sorted largest first, showing individual parts (`Game`, `Save backups`, `Built-in player`, `Sandbox`, `Wine prefix`), separate torrent data note (not in the game sum), root path, status flags (`may be incomplete`, `not clear`, `not available`, `changed since the scan`, `shared with`), **Open folder**, **Pick folder** / **Clear**, and **Uninstall** (opening the existing `UninstallDialog.vue`).
+
+Pure formatting and presentation helpers live in `utils/storage.ts` (unit-tested in `utils/storage.test.ts`), and browser mocks live in `services/mock/storage.ts` (set `localStorage["wlib-mock-storage-mode"] = "report"` to pre-load a finished report). Settings → Library & Downloads includes the device-local toggle **Count a game's size again after install, update or move** (`storage_recount_after_changes`). Standard focusable buttons and links make the page reachable with keyboard and controller directional navigation in both light and dark themes and TV mode.

@@ -969,6 +969,14 @@ class LibraryMixin(ApiBase):
             print(
                 f"[wLib] Failed to delete the video check of game {coerced_id}: {exc}"
             )
+        from core.storage_usage import notify_storage_game_changed
+
+        try:
+            notify_storage_game_changed(self, coerced_id, "remove")
+        except Exception as exc:
+            print(
+                f"[wLib] Failed to update storage data for removed game {coerced_id}: {exc}"
+            )
         with self._metadata_lock:
             self._metadata_pending.discard(coerced_id)
         self._schedule_steam_sync()
@@ -1106,6 +1114,23 @@ class LibraryMixin(ApiBase):
             hooks=hooks,
         )
         failed = [result for result in results if not result["success"]]
+        removed_from_lib = bool(opts.get("remove_from_library"))
+        from core.storage_usage import notify_storage_game_changed
+
+        for result in results:
+            if result["success"]:
+                res_gid = self._coerce_db_id(result.get("game_id"))
+                if res_gid is not None:
+                    try:
+                        notify_storage_game_changed(
+                            self,
+                            res_gid,
+                            "remove" if removed_from_lib else "uninstall",
+                        )
+                    except Exception as exc:
+                        print(
+                            f"[wLib] Failed to update storage report after uninstall {res_gid}: {exc}"
+                        )
         if len(failed) < len(results):
             self._schedule_steam_sync()
         response: dict[str, object] = {

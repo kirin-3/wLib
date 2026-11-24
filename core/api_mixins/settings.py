@@ -128,6 +128,9 @@ class SettingsMixin(ApiBase):
                 get_setting_fn("download_detection_enabled") or "true"
             )
             == "true",
+            "storage_recount_after_changes": (
+                get_setting_fn("storage_recount_after_changes") == "true"
+            ),
             "catalog_enabled": get_setting_fn("catalog_enabled") != "0",
             **self._lc_plus_settings(get_setting_fn),
         }
@@ -584,6 +587,14 @@ class SettingsMixin(ApiBase):
                     "true"
                     if raw_detection is True
                     or str(raw_detection).strip().lower() == "true"
+                    else "false",
+                )
+            if "storage_recount_after_changes" in settings_map:
+                raw_recount = settings_map.get("storage_recount_after_changes")
+                update_setting_fn(
+                    "storage_recount_after_changes",
+                    "true"
+                    if raw_recount is True or str(raw_recount).strip().lower() == "true"
                     else "false",
                 )
             catalog_change: bool | None = None

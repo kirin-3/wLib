@@ -16,6 +16,7 @@ import {
   IconBrandDiscord,
   IconBrandGithub,
   IconCloud,
+  IconDatabase,
   IconDatabaseExport,
   IconCompass,
   IconLayout2,
@@ -677,6 +678,25 @@ onUnmounted(() => {
               aria-hidden="true"
               data-testid="downloads-warning"
             ></span>
+          </router-link>
+
+          <router-link
+            to="/storage"
+            :title="navCollapsed ? 'Storage' : ''"
+            :aria-label="navCollapsed ? 'Storage' : undefined"
+            :class="[
+              'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium w-full text-left',
+              navCollapsed ? 'justify-center' : 'gap-3',
+            ]"
+            active-class="nav-active"
+            exact-active-class="nav-active"
+          >
+            <IconDatabase class="shrink-0" :size="18" />
+            <span
+              class="whitespace-nowrap transition-opacity duration-150"
+              :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              >Storage</span
+            >
           </router-link>
 
           <router-link

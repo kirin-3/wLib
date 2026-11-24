@@ -438,6 +438,11 @@ class DownloadManager:
 
     # --- staging ----------------------------------------------------------
 
+    def open_archives(self) -> set[Path]:
+        """Resolved paths of archives currently held open by an install dialog."""
+        with self._lock:
+            return set(self._open_archives)
+
     def mark_open(self, path: str) -> None:
         with self._lock:
             self._open_archives.add(Path(path).resolve())
