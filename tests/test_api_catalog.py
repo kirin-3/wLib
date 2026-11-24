@@ -421,3 +421,442 @@ def test_catalog_fill_does_nothing_when_the_catalog_is_off(rating_catalog):
 def test_catalog_fill_is_the_install_callback(started):
     api = Api()
     assert api.catalog.on_installed == api._on_catalog_installed
+
+
+@pytest.fixture
+def f95_metadata_catalog(started, tmp_path, monkeypatch):
+    """A fake installed catalog with rich F95 rows, prefixes, and tags."""
+    import sqlite3
+
+    from catalog_server.store import CATALOG_SCHEMA
+
+    catalog_path = tmp_path / "catalog.db"
+    conn = sqlite3.connect(catalog_path)
+    conn.executescript(CATALOG_SCHEMA)
+    conn.execute("INSERT INTO meta (key, value) VALUES ('built_at', ?)", (BUILT_AT,))
+    conn.executemany(
+        "INSERT INTO f95_prefix_names (id, name) VALUES (?, ?)",
+        [(1, "Ren'Py"), (2, "Completed"), (3, "VN"), (4, "RPGM")],
+    )
+    conn.executemany(
+        "INSERT INTO f95_tag_names (id, name) VALUES (?, ?)",
+        [(10, "3dcg"), (11, "rpg"), (12, "sandbox")],
+    )
+    conn.commit()
+    conn.close()
+    sha = {"value": "sha-meta-1"}
+    monkeypatch.setattr(CatalogClient, "installed_sha256", lambda self: sha["value"])
+
+    def add_f95(
+        thread_id: int,
+        *,
+        title: str = "Catalog Title",
+        creator: str = "Catalog Dev",
+        version: str = "v1.07",
+        cover_url: str = "https://attachments.f95zone.to/cover.jpg",
+        rating: float | None = 4.4,
+        prefixes: list[int] | None = None,
+        tags: list[int] | None = None,
+    ) -> None:
+        with sqlite3.connect(catalog_path) as catalog:
+            catalog.execute(
+                "INSERT OR REPLACE INTO f95_threads "
+                "(thread_id, title, creator, version, rating, prefixes, tags, cover_url, url, first_seen, last_seen) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '')",
+                (
+                    thread_id,
+                    title,
+                    creator,
+                    version,
+                    rating,
+                    json.dumps([1, 2] if prefixes is None else prefixes),
+                    json.dumps([10, 11] if tags is None else tags),
+                    cover_url,
+                    f"https://f95zone.to/threads/{thread_id}/",
+                ),
+            )
+
+    return add_f95, catalog_path, sha
+
+
+def test_fill_missing_f95_from_catalog_all_fields_and_rules(
+    f95_metadata_catalog, monkeypatch
+):
+    from core import database
+
+    add_f95, _catalog_path, _sha = f95_metadata_catalog
+    add_f95(100, creator="Studio A", cover_url="https://f95/a.jpg", rating=4.44)
+    add_f95(101, creator="Studio B", cover_url="https://f95/b.jpg", rating=4.8)
+    add_f95(102, prefixes=[2], tags=[10, 11], rating=0.0)
+    add_f95(103, prefixes=[4], tags=[12], rating=5.5)
+    add_f95(104, prefixes=[1], tags=[10, 11], rating=None)
+    add_f95(105, prefixes=[1], tags=[10, 11], rating=4.2)
+    add_f95(106, prefixes=[1], tags=[10, 11], rating=4.2)
+    add_f95(107, prefixes=[1], tags=[10, 11], rating=4.2)
+
+    # Empty game with NULL f95_tags baseline -> fills all 5 fields, never version.
+    empty_id = database.add_game(
+        "Empty", "", "https://f95zone.to/threads/100/", version="1.05"
+    )
+    # Already populated game (including non-engine "VN") -> untouched.
+    filled_id = database.add_game(
+        "Filled",
+        "",
+        "https://f95zone.to/threads/101/",
+        version="2.0",
+        cover_image="https://mine/cover.jpg",
+        tags="mine",
+        rating="3.9/5",
+        developer="My Dev",
+        engine="VN",
+    )
+    # Status-prefix-only and rating 0 -> engine and rating stay empty.
+    status_zero_id = database.add_game(
+        "StatusZero", "", "https://f95zone.to/threads/102/"
+    )
+    # Rating > 5 -> rating stays empty, engine still fills.
+    over_five_id = database.add_game("OverFive", "", "https://f95zone.to/threads/103/")
+    # Missing rating -> rating stays empty.
+    no_rating_id = database.add_game("NoRating", "", "https://f95zone.to/threads/104/")
+    # Empty-string f95_tags baseline -> tags untouched by this helper (left for details fill).
+    empty_baseline_id = database.add_game(
+        "EmptyBase", "", "https://f95zone.to/threads/105/"
+    )
+    with database.get_connection() as conn:
+        conn.execute(
+            "UPDATE games SET f95_tags = '' WHERE id = ?", (empty_baseline_id,)
+        )
+        conn.commit()
+    # NULL f95_tags baseline, empty tags, user-edited -> tags untouched.
+    user_edited_id = database.add_game(
+        "UserEdited", "", "https://f95zone.to/threads/106/"
+    )
+    with database.get_connection() as conn:
+        conn.execute(
+            "UPDATE games SET tags_user_edited = 1 WHERE id = ?", (user_edited_id,)
+        )
+        conn.commit()
+    # NULL f95_tags baseline, existing tags -> tags and baseline untouched.
+    has_tags_id = database.add_game(
+        "HasTags", "", "https://f95zone.to/threads/107/", tags="rpg"
+    )
+
+    api = Api()
+    refreshes: list[int] = []
+    wakes: list[int] = []
+    monkeypatch.setattr(api.cover_cache, "wake", lambda: wakes.append(1))
+    real_refresh = api._refresh_synced_library
+
+    def track_refresh():
+        refreshes.append(1)
+        real_refresh()
+
+    monkeypatch.setattr(api, "_refresh_synced_library", track_refresh)
+
+    changed = api._fill_missing_f95_from_catalog(None)
+    assert set(changed) == {
+        empty_id,
+        status_zero_id,
+        over_five_id,
+        no_rating_id,
+        empty_baseline_id,
+        user_edited_id,
+        has_tags_id,
+    }
+    assert filled_id not in changed
+    assert refreshes == [1]
+    assert wakes == [1]
+
+    empty = database.get_game(empty_id)
+    assert empty["developer"] == "Studio A"
+    assert empty["cover_image_path"] == "https://f95/a.jpg"
+    assert empty["engine"] == "Ren'Py"
+    assert empty["rating"] == "4.4/5"
+    assert empty["rating_updated_at"] == BUILT_AT
+    assert empty["tags"] == "3dcg, rpg"
+    assert empty["f95_tags"] == "3dcg, rpg"
+    assert empty["version"] == "1.05"
+
+    filled = database.get_game(filled_id)
+    assert filled["developer"] == "My Dev"
+    assert filled["cover_image_path"] == "https://mine/cover.jpg"
+    assert filled["engine"] == "VN"
+    assert filled["rating"] == "3.9/5"
+    assert filled["tags"] == "mine"
+    assert filled["version"] == "2.0"
+
+    status_zero = database.get_game(status_zero_id)
+    assert status_zero["engine"] == ""
+    assert status_zero["rating"] == ""
+    assert status_zero["rating_updated_at"] == ""
+    assert status_zero["tags"] == "3dcg, rpg"
+
+    over_five = database.get_game(over_five_id)
+    assert over_five["engine"] == "RPGM"
+    assert over_five["rating"] == ""
+    assert over_five["rating_updated_at"] == ""
+
+    no_rating = database.get_game(no_rating_id)
+    assert no_rating["rating"] == ""
+    assert no_rating["rating_updated_at"] == ""
+
+    empty_baseline = database.get_game(empty_baseline_id)
+    assert empty_baseline["tags"] == ""
+    assert empty_baseline["f95_tags"] == ""
+
+    user_edited = database.get_game(user_edited_id)
+    assert user_edited["tags"] == ""
+    assert user_edited["f95_tags"] is None
+
+    has_tags = database.get_game(has_tags_id)
+    assert has_tags["tags"] == "rpg"
+    assert has_tags["f95_tags"] is None
+
+    # Second run changes nothing and triggers no refresh.
+    assert api._fill_missing_f95_from_catalog([filled_id]) == []
+    assert refreshes == [1]
+
+
+def test_fill_missing_f95_from_catalog_noop_when_off_or_missing(
+    f95_metadata_catalog, monkeypatch
+):
+    from core import database
+
+    add_f95, catalog_path, _sha = f95_metadata_catalog
+    add_f95(200)
+    game_id = database.add_game("Game", "", "https://f95zone.to/threads/200/")
+    api = Api()
+    refreshes: list[int] = []
+    monkeypatch.setattr(api, "_refresh_synced_library", lambda: refreshes.append(1))
+
+    # Catalog disabled -> no writes.
+    update_setting("catalog_enabled", "0")
+    assert api._fill_missing_f95_from_catalog([game_id]) == []
+    assert database.get_game(game_id)["developer"] == ""
+    assert refreshes == []
+
+    # Catalog enabled, file missing -> no writes.
+    update_setting("catalog_enabled", "1")
+    catalog_path.unlink()
+    assert api._fill_missing_f95_from_catalog([game_id]) == []
+    assert database.get_game(game_id)["developer"] == ""
+    assert refreshes == []
+
+
+def test_fetch_added_game_metadata_fills_from_catalog(
+    f95_metadata_catalog, monkeypatch
+):
+    from core import database
+
+    add_f95, _catalog_path, _sha = f95_metadata_catalog
+    add_f95(
+        300,
+        creator="Cat Dev",
+        version="v9.9",
+        cover_url="https://f95/cat300.jpg",
+        rating=4.4,
+        prefixes=[1],
+        tags=[10, 11],
+    )
+    add_f95(
+        301,
+        creator="Cat Dev 301",
+        cover_url="https://f95/cat301.jpg",
+        rating=4.6,
+        prefixes=[1],
+        tags=[10],
+    )
+
+    api = Api()
+    monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
+    monkeypatch.setattr(api.cover_cache, "wake", lambda: None)
+
+    # 1) Blocked scrape still fills from catalog and keeps saved version.
+    blocked_id = database.add_game(
+        "Blocked", "", "https://f95zone.to/threads/300/", version="1.05"
+    )
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda _url: {"success": False, "code": "blocked", "error": "Cloudflare"},
+    )
+    api._fetch_added_game_metadata(blocked_id, "https://f95zone.to/threads/300/", True)
+    blocked = database.get_game(blocked_id)
+    assert blocked["developer"] == "Cat Dev"
+    assert blocked["cover_image_path"] == "https://f95/cat300.jpg"
+    assert blocked["engine"] == "Ren'Py"
+    assert blocked["tags"] == "3dcg, rpg"
+    assert blocked["f95_tags"] == "3dcg, rpg"
+    assert blocked["rating"] == "4.4/5"
+    assert blocked["version"] == "1.05"
+
+    # 2) Successful scrape keeps page cover and gets only missing developer from catalog.
+    scraped_id = database.add_game("Scraped", "", "https://f95zone.to/threads/301/")
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda _url: {
+            "success": True,
+            "title": "Scraped [v1.0]",
+            "cover_image": "https://page/cover301.jpg",
+            "engine": "Ren'Py",
+            "tags": ["3dcg"],
+        },
+    )
+    api._fetch_added_game_metadata(scraped_id, "https://f95zone.to/threads/301/", True)
+    scraped = database.get_game(scraped_id)
+    assert scraped["cover_image_path"] == "https://page/cover301.jpg"
+    assert scraped["developer"] == "Cat Dev 301"
+
+    # 3) Thread missing from catalog with blocked scrape leaves saved values unchanged.
+    missing_id = database.add_game(
+        "Unknown", "", "https://f95zone.to/threads/999999/", version="0.1"
+    )
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda _url: {"success": False, "code": "blocked", "error": "Cloudflare"},
+    )
+    api._fetch_added_game_metadata(
+        missing_id, "https://f95zone.to/threads/999999/", True
+    )
+    missing = database.get_game(missing_id)
+    assert missing["developer"] == ""
+    assert missing["cover_image_path"] == ""
+    assert missing["engine"] == ""
+    assert missing["tags"] == ""
+    assert missing["rating"] == ""
+    assert missing["version"] == "0.1"
+
+
+def test_on_catalog_installed_runs_one_time_f95_fill(f95_metadata_catalog, monkeypatch):
+    from core import database, lewdcorner_plus
+    from core.library_backup import SUPPORTED_SECTIONS, build_library_backup
+
+    add_f95, catalog_path, _sha = f95_metadata_catalog
+    add_f95(
+        400,
+        creator="OneTime Dev",
+        cover_url="https://f95/onetime.jpg",
+        rating=4.5,
+        prefixes=[1],
+        tags=[10],
+    )
+    game_id = database.add_game("Existing", "", "https://f95zone.to/threads/400/")
+    api = Api()
+    monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
+    monkeypatch.setattr(lewdcorner_plus, "start", lambda _trigger: None)
+
+    # First callback fills existing game and records the device-local setting.
+    api._on_catalog_installed()
+    game = database.get_game(game_id)
+    assert game["developer"] == "OneTime Dev"
+    assert game["cover_image_path"] == "https://f95/onetime.jpg"
+    assert game["engine"] == "Ren'Py"
+    assert game["tags"] == "3dcg"
+    assert game["rating"] == "4.5/5"
+    assert get_setting("catalog_f95_fill_done") == "1"
+
+    # Second callback after user clears cover leaves it empty.
+    database.update_game(game_id, {"cover_image_path": ""})
+    api._on_catalog_installed()
+    assert database.get_game(game_id)["cover_image_path"] == ""
+
+    # Device-local setting is absent from a JSON library export.
+    backup = build_library_backup({"sections": list(SUPPORTED_SECTIONS)})
+    assert "catalog_f95_fill_done" not in json.dumps(backup)
+
+    # No catalog on first callback leaves setting unset; runs on next install.
+    update_setting("catalog_f95_fill_done", "")
+    database.update_game(game_id, {"cover_image_path": "", "developer": ""})
+    backup_bytes = catalog_path.read_bytes()
+    catalog_path.unlink()
+    api._on_catalog_installed()
+    assert get_setting("catalog_f95_fill_done") in (None, "")
+    assert database.get_game(game_id)["cover_image_path"] == ""
+
+    catalog_path.write_bytes(backup_bytes)
+    api._on_catalog_installed()
+    assert get_setting("catalog_f95_fill_done") == "1"
+    assert database.get_game(game_id)["cover_image_path"] == "https://f95/onetime.jpg"
+    assert database.get_game(game_id)["developer"] == "OneTime Dev"
+
+
+def test_api_lookup_lc_partner_returns_f95_catalog_entry(
+    f95_metadata_catalog,
+):
+    import sqlite3
+
+    add_f95, catalog_path, _sha = f95_metadata_catalog
+    add_f95(
+        500,
+        title="Ambrosia",
+        creator="Shimobashira Workshop / Kagura Games",
+        version="v1.07",
+        cover_url="https://f95/ambrosia.jpg",
+        rating=4.5,
+        prefixes=[1, 2],
+        tags=[10, 11],
+    )
+    with sqlite3.connect(catalog_path) as catalog:
+        catalog.execute(
+            "INSERT INTO lc_prefix_names (id, name) VALUES (1, 'Completed'), (2, 'Ren''Py')"
+        )
+        catalog.execute(
+            "INSERT INTO lc_threads "
+            "(thread_id, title, creator, version, tier, prefixes, tags, cover_url, url, first_seen, last_seen) "
+            "VALUES (77, 'Ambrosia LC', 'LC Dev', 'v1.08', 'Free', '[1, 2]', '[\"lc-tag\"]', 'https://lc/cover.jpg', 'https://lewdcorner.com/threads/77/', '', '')"
+        )
+        catalog.execute(
+            "INSERT INTO lc_thread_details "
+            "(thread_id, fetched_at, status, overview, language) "
+            "VALUES (77, ?, 'ok', 'LC overview fallback', 'English')",
+            (BUILT_AT,),
+        )
+        catalog.execute(
+            "INSERT INTO links (src_a, id_a, src_b, id_b, origin) "
+            "VALUES ('f95', '500', 'lc', '77', 'title')"
+        )
+        catalog.commit()
+
+    api = Api()
+    f95_url = "https://f95zone.to/threads/500/"
+    lc_url = "https://lewdcorner.com/threads/77/"
+
+    # 1) F95 URL with "Use LewdCorner" off -> F95 entry, no lc_url.
+    update_setting("lc_enabled", "0")
+    off_result = api.lookup_lc_partner(f95_url)
+    assert "lc_url" not in off_result
+    entry = off_result["catalog_entry"]
+    assert isinstance(entry, dict)
+    assert entry["title"] == "Ambrosia"
+    assert entry["developer"] == "Shimobashira Workshop / Kagura Games"
+    assert entry["version"] == "v1.07"
+    assert entry["coverImage"] == "https://f95/ambrosia.jpg"
+    assert entry["tags"] == "3dcg, rpg"
+    assert entry["rating"] == 4.5
+    assert entry["engine"] == "Ren'Py"
+    assert entry["overview"] == ""
+
+    # 2) F95 URL with "Use LewdCorner" on and a partner -> combined entry + lc_url.
+    update_setting("lc_enabled", "1")
+    on_result = api.lookup_lc_partner(f95_url)
+    assert on_result["lc_url"] == lc_url
+    combined = on_result["catalog_entry"]
+    assert isinstance(combined, dict)
+    assert combined["title"] == "Ambrosia"
+    assert combined["developer"] == "Shimobashira Workshop / Kagura Games"
+    assert combined["tags"] == "3dcg, rpg"
+    assert combined["overview"] == "LC overview fallback"
+    assert combined["language"] == "English"
+
+    # 3) Unknown F95 thread -> no catalog_entry.
+    assert api.lookup_lc_partner("https://f95zone.to/threads/999999/") == {}
+
+    # 4) LC URL result stays unchanged (returns f95_url and combined entry).
+    lc_result = api.lookup_lc_partner(lc_url)
+    assert lc_result["f95_url"] == f95_url
+    lc_combined = lc_result["catalog_entry"]
+    assert isinstance(lc_combined, dict)
+    assert lc_combined["title"] == "Ambrosia"
+    assert lc_combined["overview"] == "LC overview fallback"

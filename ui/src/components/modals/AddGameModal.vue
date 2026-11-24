@@ -17,6 +17,7 @@ import PathStatus from "../PathStatus.vue";
 
 import { normalizeLcThreadUrl } from "../../utils/lewdcorner";
 import { queryText, readQueryScreenshots, readStoreLinks, storeLabel } from "../../utils/storeLinks";
+import { applyCatalogEntry, versionToSave } from "../../utils/addGamePrefill";
 
 interface AddGamePayload {
   links: StoreLink[];
@@ -73,6 +74,38 @@ const threadStatesSeenAt = ref("");
 const findingPartner = ref(false);
 let partnerRequest = 0;
 const version = ref("");
+// Catalog version from the last URL lookup, kept only while that URL stays unchanged.
+const catalogVersion = ref("");
+const catalogVersionSource = ref<"f95" | "lc" | "">("");
+const catalogVersionFor = ref("");
+const activeCatalogVersion = computed(() => {
+  if (!catalogVersion.value) return "";
+  if (catalogVersionSource.value === "f95") {
+    return f95Url.value.trim() === catalogVersionFor.value ? catalogVersion.value : "";
+  }
+  if (catalogVersionSource.value === "lc") {
+    return normalizeLcThreadUrl(lcUrl.value) === catalogVersionFor.value ? catalogVersion.value : "";
+  }
+  return "";
+});
+const showCatalogFields = ref(false);
+
+const clearCatalogVersion = () => {
+  catalogVersion.value = "";
+  catalogVersionSource.value = "";
+  catalogVersionFor.value = "";
+};
+
+watch(f95Url, (value) => {
+  if (catalogVersionSource.value === "f95" && value.trim() !== catalogVersionFor.value) {
+    clearCatalogVersion();
+  }
+});
+watch(lcUrl, (value) => {
+  if (catalogVersionSource.value === "lc" && normalizeLcThreadUrl(value) !== catalogVersionFor.value) {
+    clearCatalogVersion();
+  }
+});
 const coverImage = ref("");
 // Screenshots sent by an LC page add, kept only for that LC thread.
 const screenshots = ref<string[]>([]);
@@ -146,35 +179,60 @@ const lookupPartner = async (source: "f95" | "lc") => {
   const lc = lcUrl.value.trim();
   const url = source === "f95" ? f95 : normalizeLcThreadUrl(lc);
   findingPartner.value = false;
-  if (!url || (source === "f95" && (!lcEnabled.value || lc))) return;
+  if (catalogVersionSource.value === source && url !== catalogVersionFor.value) {
+    clearCatalogVersion();
+  }
+  if (!url) return;
   findingPartner.value = true;
   try {
     const result = await api.lookupLcPartner(url);
     if (request !== partnerRequest || !isOpen.value || f95 !== f95Url.value.trim() || lc !== lcUrl.value.trim()) return;
     if (source === "lc" && !f95) f95Url.value = result.f95_url || "";
-    if (source === "f95" && result.lc_url) {
+    if (source === "f95" && !lc && result.lc_url) {
       lcUrl.value = result.lc_url;
       lcSuggested.value = result.lc_url;
       lcSuggestedFor.value = f95;
     }
     const entry = result.catalog_entry;
     if (!entry) return;
-    title.value ||= entry.title || "";
-    version.value ||= entry.version || "";
-    coverImage.value ||= entry.coverImage || "";
-    tags.value ||= entry.tags || "";
-    rating.value ||= String(entry.rating || "");
-    developer.value ||= entry.developer || "";
-    engine.value ||= entry.engine || "";
-    if (!links.value.length) links.value = readStoreLinks(entry.links);
-    if (typeof entry.thread_completed === "boolean") threadCompleted.value = entry.thread_completed;
-    if (typeof entry.thread_onhold === "boolean" && typeof entry.thread_abandoned === "boolean") {
-      threadOnhold.value = entry.thread_onhold;
-      threadAbandoned.value = entry.thread_abandoned;
-      threadStatesSeenAt.value = entry.thread_states_seen_at || "";
+    const applied = applyCatalogEntry(
+      {
+        title: title.value,
+        developer: developer.value,
+        coverImage: coverImage.value,
+        tags: tags.value,
+        rating: rating.value,
+        engine: engine.value,
+        links: links.value,
+        threadCompleted: threadCompleted.value,
+        threadOnhold: threadOnhold.value,
+        threadAbandoned: threadAbandoned.value,
+        threadStatesSeenAt: threadStatesSeenAt.value,
+      },
+      entry,
+      guessed.value.title,
+    );
+    title.value = applied.title;
+    developer.value = applied.developer;
+    coverImage.value = applied.coverImage;
+    tags.value = applied.tags;
+    rating.value = applied.rating;
+    engine.value = applied.engine;
+    links.value = applied.links;
+    threadCompleted.value = applied.threadCompleted;
+    threadOnhold.value = applied.threadOnhold;
+    threadAbandoned.value = applied.threadAbandoned;
+    threadStatesSeenAt.value = applied.threadStatesSeenAt;
+    if (applied.catalogVersion) {
+      catalogVersion.value = applied.catalogVersion;
+      catalogVersionSource.value = source;
+      catalogVersionFor.value = url;
+    }
+    if (applied.coverImage || applied.tags || applied.catalogVersion || applied.links.length) {
+      showCatalogFields.value = true;
     }
   } catch (error) {
-    console.error("Could not look up the LewdCorner partner", error);
+    console.error("Could not look up the catalog thread", error);
   } finally {
     if (request === partnerRequest) findingPartner.value = false;
   }
@@ -225,6 +283,8 @@ watch(
       threadAbandoned.value = abandoned ? abandoned === "true" : undefined;
       threadStatesSeenAt.value = readQueryValue(query.threadStatesSeenAt);
       version.value = readQueryValue(query.version);
+      clearCatalogVersion();
+      showCatalogFields.value = false;
       coverImage.value = readQueryValue(query.coverImage);
       screenshots.value = readQueryScreenshots(query.screenshots);
       screenshotsFor.value = normalizeLcThreadUrl(lcUrl.value);
@@ -262,6 +322,8 @@ watch(
     findingPartner.value = false;
     partnerRequest++;
     version.value = "";
+    clearCatalogVersion();
+    showCatalogFields.value = false;
     coverImage.value = "";
     screenshots.value = [];
     screenshotsFor.value = "";
@@ -362,7 +424,7 @@ const save = () => {
     ...(threadOnhold.value !== undefined ? { thread_onhold: threadOnhold.value } : {}),
     ...(threadAbandoned.value !== undefined ? { thread_abandoned: threadAbandoned.value } : {}),
     ...(threadStatesSeenAt.value ? { thread_states_seen_at: threadStatesSeenAt.value } : {}),
-    version: version.value,
+    version: versionToSave(version.value, exePath.value, activeCatalogVersion.value),
     cover_image: coverImage.value,
     tags: tags.value,
     rating: rating.value,
@@ -542,10 +604,15 @@ const save = () => {
           </p>
         </div>
 
-        <div v-if="links.length" class="grid grid-cols-2 gap-3">
+        <div v-if="links.length || showCatalogFields || readQueryValue(route.query.action) === 'import'" class="grid grid-cols-2 gap-3">
           <label class="text-sm" style="color: var(--text-secondary)">
             Version
-            <input v-model="version" type="text" class="modal-input w-full mt-1.5" />
+            <input
+              v-model="version"
+              type="text"
+              :placeholder="activeCatalogVersion ? `Latest: ${activeCatalogVersion}` : ''"
+              class="modal-input w-full mt-1.5"
+            />
           </label>
           <label class="col-span-2 text-sm" style="color: var(--text-secondary)">
             Tags

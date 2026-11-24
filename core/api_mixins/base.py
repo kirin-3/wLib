@@ -72,6 +72,7 @@ _torrent_exit_hook = False
 # Device-local: the catalog snapshot SHA-256 whose ratings were last filled.
 CATALOG_RATING_FILL_SETTING = "catalog_rating_fill_sha"
 CATALOG_DETAILS_FILL_SETTING = "catalog_details_fill_sha"
+CATALOG_F95_FILL_DONE_SETTING = "catalog_f95_fill_done"
 
 
 class ApiBase:
@@ -984,6 +985,10 @@ class ApiBase:
             print(f"Failed to fetch metadata for game {game_id}: {e}")
         finally:
             try:
+                _ = self._fill_missing_f95_from_catalog([game_id])
+            except Exception as e:  # catalog metadata is optional
+                print(f"Failed to fill catalog metadata for game {game_id}: {e}")
+            try:
                 _ = self._fill_thread_details_from_catalog([game_id])
             except Exception as e:  # catalog details are optional
                 print(f"Failed to fill catalog details for game {game_id}: {e}")
@@ -1301,10 +1306,143 @@ class ApiBase:
         """Runs on the catalog thread after a snapshot installs and once at startup."""
         _ = self._fill_lc_threads_from_catalog()
         _ = self._fill_ratings_from_catalog()
+        if (
+            self._catalog_enabled()
+            and database.get_setting(CATALOG_F95_FILL_DONE_SETTING) != "1"
+        ):
+            from core.game_lookup import f95_thread_ratings
+
+            built_at, _ = f95_thread_ratings(())
+            if built_at:
+                _ = self._fill_missing_f95_from_catalog(None)
+                database.update_setting(CATALOG_F95_FILL_DONE_SETTING, "1")
         _ = self._fill_thread_details_from_catalog()
         # In Auto, an extension that connected before the first catalog held
         # LC threads found nothing to read; check again now.
         self._start_lc_plus_detection("connect")
+
+    def _fill_missing_f95_from_catalog(
+        self, game_ids: Sequence[int] | None = None
+    ) -> list[int]:
+        """Fill empty F95 metadata fields from the installed catalog.
+
+        Writes only empty developer, cover_image_path, engine, and rating (as
+        ``X.X/5`` with ``rating_updated_at = built_at``), plus ``tags`` and
+        ``f95_tags`` when the tag baseline is NULL, tags are empty, and the
+        user has not edited tags. Never touches version. Returns changed IDs.
+        """
+        import sqlite3
+
+        from core.database import get_connection
+        from core.game_lookup import f95_thread_entries, f95_thread_ratings
+
+        if not self._catalog_enabled():
+            return []
+        wanted = (
+            sorted({int(game_id) for game_id in game_ids})
+            if game_ids is not None
+            else None
+        )
+        if wanted is not None and not wanted:
+            return []
+        built_at, _ = f95_thread_ratings(())
+        if not built_at:
+            return []
+
+        where = "f95_url IS NOT NULL AND f95_url != ''"
+        params: list[object] = []
+        if wanted is not None:
+            marks = ",".join("?" for _ in wanted)
+            where += f" AND id IN ({marks})"
+            params.extend(wanted)
+
+        changed_ids: list[int] = []
+        with closing(get_connection()) as conn:
+            conn.row_factory = sqlite3.Row
+            _ = conn.execute("BEGIN IMMEDIATE")
+            rows = cast(
+                list[sqlite3.Row],
+                conn.execute(
+                    "SELECT id, f95_url, developer, cover_image_path, engine, "
+                    + "rating, tags, f95_tags, tags_user_edited "
+                    + f"FROM games WHERE {where}",
+                    params,
+                ).fetchall(),
+            )
+            targets: list[tuple[sqlite3.Row, int, str]] = []
+            for row in rows:
+                game_id = cast(object, row["id"])
+                thread_id = extract_thread_id(cast(object, row["f95_url"]))
+                if (
+                    not isinstance(game_id, bool)
+                    and isinstance(game_id, int)
+                    and thread_id
+                ):
+                    targets.append((row, game_id, thread_id))
+            if not targets:
+                conn.rollback()
+                return []
+
+            entries = f95_thread_entries([thread_id for _, _, thread_id in targets])
+            for row, game_id, thread_id in targets:
+                entry = entries.get(thread_id)
+                if not entry:
+                    continue
+                fields: dict[str, str] = {}
+                developer_val = str(entry.get("developer") or "").strip()
+                if developer_val and self._is_missing_text(
+                    cast(object, row["developer"])
+                ):
+                    fields["developer"] = developer_val
+
+                cover_val = str(entry.get("coverImage") or "").strip()
+                if cover_val and self._is_missing_text(
+                    cast(object, row["cover_image_path"])
+                ):
+                    fields["cover_image_path"] = cover_val
+
+                engine_val = str(entry.get("engine") or "").strip()
+                if engine_val and self._is_missing_text(cast(object, row["engine"])):
+                    fields["engine"] = engine_val
+
+                raw_rating = entry.get("rating")
+                if (
+                    self._is_missing_text(cast(object, row["rating"]))
+                    and not isinstance(raw_rating, bool)
+                    and isinstance(raw_rating, int | float)
+                    and 0 < raw_rating <= 5
+                ):
+                    fields["rating"] = f"{round(float(raw_rating), 1):.1f}/5"
+                    fields["rating_updated_at"] = built_at
+
+                tags_val = self._normalize_tags_csv(entry.get("tags"))
+                baseline = cast(object, row["f95_tags"])
+                tags_user_edited = bool(cast(object, row["tags_user_edited"]))
+                if (
+                    tags_val
+                    and baseline is None
+                    and not tags_user_edited
+                    and self._is_missing_text(cast(object, row["tags"]))
+                ):
+                    fields["tags"] = tags_val
+                    fields["f95_tags"] = tags_val
+
+                if fields:
+                    assignments = ", ".join(f"{column} = ?" for column in fields)
+                    _ = conn.execute(
+                        f"UPDATE games SET {assignments} WHERE id = ?",
+                        (*fields.values(), game_id),
+                    )
+                    changed_ids.append(game_id)
+
+            if changed_ids:
+                conn.commit()
+            else:
+                conn.rollback()
+
+        if changed_ids:
+            self._refresh_synced_library()
+        return changed_ids
 
     def _start_lc_plus_detection(
         self, trigger: Literal["settings", "connect", "check_now"]

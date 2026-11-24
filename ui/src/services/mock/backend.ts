@@ -1372,8 +1372,34 @@ export class MockBackend {
           schema_version: source === "gamelist" ? "hyperfile-7/2456" : "",
         };
       }
-      case "lookup_lc_partner":
+      case "lookup_lc_partner": {
+        const rawUrl = String(args[0] || "").trim();
+        if (/^https?:\/\/(?:www\.)?f95zone\.to\/threads\/(?:[^/]+\.)?\d+(?:\/|$)/i.test(rawUrl)) {
+          return {
+            catalog_entry: {
+              title: "Ambrosia",
+              developer: "Shimobashira Workshop / Kagura Games",
+              version: "v1.07",
+              coverImage: "https://attachments.f95zone.to/2023/01/ambrosia-cover.jpg",
+              tags: "2d game, adventure, fantasy, rpg",
+              rating: 4.5,
+              engine: "RPGM",
+              thread_completed: true,
+              thread_onhold: false,
+              thread_abandoned: false,
+              thread_states_seen_at: "2026-11-01T12:00:00Z",
+              links: [
+                {
+                  source: "dlsite",
+                  id: "RJ256962",
+                  url: "https://www.dlsite.com/maniax/work/=/product_id/RJ256962.html",
+                },
+              ],
+            },
+          };
+        }
         return {};
+      }
       case "lookup_thread_details": {
         if (!/^https?:\/\/(?:www\.)?f95zone\.to\/threads\/(?:[^/]+\.)?\d+(?:\/|$)/i.test(String(args[0] || ""))) {
           return { success: false, error: "A valid F95Zone thread URL is required." };

@@ -477,6 +477,13 @@ class LibraryMixin(ApiBase):
         return {"success": True, "games": games}
 
     def lookup_lc_partner(self, url: object = "") -> dict[str, object]:
+        """Look up an F95 or LewdCorner thread URL in the installed catalog.
+
+        Returns any unclaimed catalog partner (``lc_url`` for an F95 URL when
+        "Use LewdCorner" is on and the tier is allowed, or ``f95_url`` for an
+        LC URL) together with ``catalog_entry`` for the thread (combining F95
+        and LC entries when both are present, with F95 values taking priority).
+        """
         from core import lewdcorner
         from core.game_lookup import (
             combined_thread_entry,
@@ -495,6 +502,20 @@ class LibraryMixin(ApiBase):
                 result["catalog_entry"] = combined_thread_entry(
                     f95_thread_entries([f95_id]).get(f95_id, {}), entry
                 )
+        else:
+            f95_id = extract_thread_id(url)
+            if f95_id:
+                f95_entry = f95_thread_entries([f95_id]).get(f95_id, {})
+                partner_lc_id = lewdcorner.extract_thread_id(partner.get("lc_url"))
+                lc_entry = (
+                    lc_thread_entries([partner_lc_id]).get(partner_lc_id, {})
+                    if partner_lc_id
+                    else {}
+                )
+                if f95_entry and lc_entry:
+                    result["catalog_entry"] = combined_thread_entry(f95_entry, lc_entry)
+                elif f95_entry:
+                    result["catalog_entry"] = f95_entry
         return result
 
     def add_game(

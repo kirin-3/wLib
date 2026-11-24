@@ -1221,23 +1221,26 @@ export interface NoteLink {
   label: string;
 }
 
+export interface CatalogThreadEntry {
+  title?: string;
+  developer?: string;
+  version?: string;
+  coverImage?: string;
+  tags?: string;
+  rating?: number | string;
+  engine?: string;
+  thread_completed?: boolean | null;
+  thread_onhold?: boolean | null;
+  thread_abandoned?: boolean | null;
+  thread_states_seen_at?: string | null;
+  links?: StoreLink[];
+}
+
 export interface LewdCornerPartner {
   lc_url?: string;
   f95_url?: string;
-  catalog_entry?: {
-    title?: string;
-    developer?: string;
-    version?: string;
-    coverImage?: string;
-    tags?: string;
-    rating?: number | string;
-    engine?: string;
-    thread_completed?: boolean | null;
-    thread_onhold?: boolean | null;
-    thread_abandoned?: boolean | null;
-    thread_states_seen_at?: string | null;
-    links?: StoreLink[];
-  };
+  // Returned for both F95 and LewdCorner thread URLs when the catalog lists them.
+  catalog_entry?: CatalogThreadEntry;
 }
 
 export interface GameRecord {
