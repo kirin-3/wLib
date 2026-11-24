@@ -122,6 +122,8 @@ CREATE TABLE IF NOT EXISTS f95_thread_details (
     fetched_at TEXT NOT NULL,
     status TEXT NOT NULL,
     overview TEXT,
+    rating_count INTEGER,
+    rating_count_attempted INTEGER NOT NULL DEFAULT 0,
     original_title TEXT,
     aliases TEXT NOT NULL DEFAULT '[]',
     language TEXT,
@@ -288,6 +290,11 @@ class CatalogStore:
             str(row[1])
             for row in _rows(self.conn.execute("PRAGMA table_info(f95_thread_details)"))
         }
+        if "rating_count" not in details:
+            with self.conn:
+                _ = self.conn.execute(
+                    "ALTER TABLE f95_thread_details ADD COLUMN rating_count INTEGER"
+                )
         if "languages" not in details:
             with self.conn:
                 _ = self.conn.execute(
@@ -313,6 +320,22 @@ class CatalogStore:
                     _ = self.conn.execute(
                         f"ALTER TABLE {table} ADD COLUMN kept_after_failure INTEGER NOT NULL DEFAULT 0"
                     )
+        if "rating_count_attempted" not in details:
+            with self.conn:
+                # SQLite starts an implicit transaction on UPDATE, so the
+                # cleanup and schema change commit together.
+                _ = self.conn.execute(
+                    "UPDATE f95_thread_details SET rating_count = NULL WHERE rating_count = 0 "
+                    + "OR kept_after_failure = 1"
+                )
+                _ = self.conn.execute(
+                    "ALTER TABLE f95_thread_details ADD COLUMN "
+                    + "rating_count_attempted INTEGER NOT NULL DEFAULT 0"
+                )
+                _ = self.conn.execute(
+                    "UPDATE f95_thread_details SET rating_count_attempted = 1 "
+                    + "WHERE rating_count IS NOT NULL"
+                )
         self.set_meta(META_SCHEMA_VERSION, str(SCHEMA_VERSION))
 
     def _add_origin_columns(self) -> None:
@@ -428,15 +451,17 @@ class CatalogStore:
     def f95_details_queue(self, since_ts: int, limit: int) -> list[tuple[int, int]]:
         """Threads to read: changed ones newest first, then never-read ones most viewed first.
 
+        The backfill also visits successful details with no count attempt.
         Changed means a feed `ts` newer than the stored details, or a thread
         never read whose `ts` is newer than `since_ts`.
         """
-        changed = "(d.thread_id IS NOT NULL OR t.ts > :since)"
+        changed = "(t.ts > d.thread_ts OR (d.thread_id IS NULL AND t.ts > :since))"
         rows = self.conn.execute(
             "SELECT t.thread_id, t.ts FROM f95_threads t "
             + "LEFT JOIN f95_thread_details d ON d.thread_id = t.thread_id "
             + "WHERE t.removed_at IS NULL AND t.ts IS NOT NULL "
-            + "AND (d.thread_id IS NULL OR t.ts > d.thread_ts) "
+            + "AND (d.thread_id IS NULL OR t.ts > d.thread_ts "
+            + "OR (d.status = 'ok' AND d.rating_count_attempted = 0)) "
             + f"ORDER BY CASE WHEN {changed} THEN 0 ELSE 1 END, "
             + f"CASE WHEN {changed} THEN t.ts ELSE COALESCE(t.views, 0) END DESC, "
             + "t.thread_id LIMIT :limit",
@@ -448,11 +473,12 @@ class CatalogStore:
         self, thread_id: int, thread_ts: int, now: str, details: Mapping[str, object]
     ) -> int:
         """Store what F95's page gave. A page without details (`missing`,
-        `unreadable`) keeps stored `ok` details and only records the read."""
+        `unreadable`) keeps stored `ok` details and records an unknown count for this attempt."""
         with self.conn:
             if details["status"] != "ok":
                 kept = self.conn.execute(
-                    "UPDATE f95_thread_details SET thread_ts = ?, fetched_at = ?, kept_after_failure = 1 "
+                    "UPDATE f95_thread_details SET thread_ts = ?, fetched_at = ?, kept_after_failure = 1, "
+                    + "rating_count = NULL, rating_count_attempted = 1 "
                     + "WHERE thread_id = ? AND status = 'ok'",
                     (thread_ts, now, thread_id),
                 )
@@ -460,8 +486,9 @@ class CatalogStore:
                     return 1
             _ = self.conn.execute(
                 "INSERT OR REPLACE INTO f95_thread_details (thread_id, thread_ts, fetched_at, "
-                + "status, overview, original_title, aliases, language, languages, external_ids) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                + "status, overview, original_title, aliases, language, languages, external_ids, "
+                + "rating_count, rating_count_attempted) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
                 (
                     thread_id,
                     thread_ts,
@@ -473,6 +500,7 @@ class CatalogStore:
                     details.get("language"),
                     json.dumps(details.get("languages") or [], ensure_ascii=False),
                     json.dumps(details.get("external_ids") or {}, ensure_ascii=False),
+                    details.get("rating_count") if details["status"] == "ok" else None,
                 ),
             )
         return 1

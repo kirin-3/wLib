@@ -15,6 +15,9 @@ def test_snapshot_decompresses_to_a_readable_catalog(tmp_path):
         [{"thread_id": 1, "title": "A", "url": "u"}],
         "2026-10-26T00:00:00Z",
     )
+    catalog.upsert_f95_details(
+        1, 10, "2026-10-26T00:00:00Z", {"status": "ok", "rating_count": 12}
+    )
     snapshot = build_snapshot(catalog, str(tmp_path / "out"), "2026-10-27T05:12:09Z")
     assert snapshot.name == "catalog-20261027T051209Z.sqlite.xz"
     data = open(snapshot.path, "rb").read()
@@ -31,6 +34,9 @@ def test_snapshot_decompresses_to_a_readable_catalog(tmp_path):
         "built_at": "2026-10-27T05:12:09Z",
     }
     assert conn.execute("SELECT title FROM f95_threads").fetchall() == [("A",)]
+    assert conn.execute(
+        "SELECT rating_count FROM f95_thread_details WHERE thread_id = 1"
+    ).fetchone() == (12,)
     conn.close()
     # Only the compressed file is left behind.
     assert sorted(path.name for path in (tmp_path / "out").iterdir()) == [snapshot.name]

@@ -5,13 +5,16 @@ external IDs with their links.
 
 Threads whose feed `ts` is newer than their stored details are read first,
 newest first. Spare budget then fills in threads that were never read, most
-viewed first. Only logged-in pages are used: F95 hides links from guests.
+viewed first, along with older details needing a count backfill.
+Only logged-in pages are used: F95 hides links from guests.
 """
 
 import logging
 import re
 from html.parser import HTMLParser
 from typing import override
+
+from core.f95_rating import extract_f95_review_count
 
 from ..net import RateLimited
 from .base import SourceContext
@@ -216,6 +219,7 @@ class F95ThreadsSource:
                     "status": "ok",
                     **parse_first_post(first_post_html(response.text())),
                 }
+                details["rating_count"] = extract_f95_review_count(response.text())
             except ValueError:
                 # Kept so one odd page does not block the queue; read again when it changes.
                 log.warning("f95_threads: no first post on thread %s", thread_id)

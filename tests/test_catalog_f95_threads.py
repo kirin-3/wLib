@@ -225,6 +225,38 @@ def test_changed_threads_first_then_most_viewed_old_ones(tmp_path):
     assert transport.requests == []
 
 
+@pytest.mark.parametrize(
+    ("rating", "expected"),
+    [
+        (b'<div class="f95rv-banner-count">1,234 reviews</div>', 1234),
+        (b'<div class="f95rv-banner-count">No reviews yet</div>', 0),
+        (b'<div class="f95rv-banner-count">0 reviews</div>', 0),
+        (
+            b'<div class="br-widget bratr-rating">'
+            b'<span class="bratr-vote-content">1 vote</span></div>',
+            1,
+        ),
+        (b'<div class="f95rv-banner-count">4.7 out of 5</div>', None),
+        (b'<div class="f95rv-banner-count">1,23 reviews</div>', None),
+        (b'<div class="renamed-count">7 reviews</div>', None),
+        (b"", None),
+    ],
+)
+def test_thread_reader_collects_the_f95_review_count(tmp_path, rating, expected):
+    transport = FakeTransport()
+    page = _page()
+    transport.route("/threads/1/", Response(200, page.text().encode() + rating))
+    ctx, _ = make_context(tmp_path, transport)
+    ctx.upsert("f95_threads", "thread_id", [_thread(1, 10)])
+    F95ThreadsSource().incremental(ctx)
+
+    assert ctx.catalog.conn.execute(
+        "SELECT rating_count, rating_count_attempted FROM f95_thread_details WHERE thread_id = 1"
+    ).fetchone() == (expected, 1)
+    assert ctx.catalog.f95_details_queue(since_ts=20, limit=10) == []
+    assert len(transport.requests) == 1
+
+
 def test_missing_and_unreadable_threads_are_kept_so_the_queue_moves(tmp_path):
     transport = FakeTransport()
     # F95's own "not found" page, logged in.

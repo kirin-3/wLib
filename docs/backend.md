@@ -83,6 +83,19 @@ the catalog.
   `_fill_ratings_from_catalog` fills F95 ratings from the catalog. It is guarded by the device-local
   setting `catalog_rating_fill_sha`, so each snapshot is used once.
 
+The publisher stores the F95 review count in the optional
+`f95_thread_details.rating_count` snapshot column. A positive number is a
+count collected from the thread page. Zero means the page explicitly reports
+no reviews. NULL means the count is unknown. Older snapshots may omit the
+column. The publisher resets ambiguous legacy zeros to NULL and uses the
+existing paced queue to backfill counts for previously fetched threads. An
+attempt flag keeps unknown counts from repeatedly entering the backfill queue.
+
+The feed supplies the average rating independently of the count. An available
+count reflects the thread-page read at f95_thread_details.fetched_at. After
+backfill, the thread is reread when its feed timestamp advances. Review
+activity alone can leave a count stale even while the feed rating changes.
+
 ## Library sync and encrypted backups
 
 `core/library_sync.py` contains `SyncManager`, `FolderLocation`, `DropboxLocation`, and `GoogleDriveLocation`. All locations expose revision/read/write methods. Sync shares metadata, user state, and general settings using `wlib.library_migration` v1 plus a UTC `sync.modified_at` and hostname `sync.device`. Machine paths, launch settings, and local cover files are excluded. When only one side changed since the last sync, that side replaces the other for the whole library. When both changed, or when the sync file would remove most of the local games (an empty file from a device whose folder sync had not delivered the real one yet), `_run_once` stops in `needs_choice` with `choice_reason` `conflict` or `removal` and waits for Use sync file, Use this machine or Merge once; push-only runs and the exit push never resolve it. A first sync on an empty library with no sync file pushes nothing. A new revision whose `sync.modified_at` equals `sync_last_synced_at` (a sync tool rewrote the file) counts as unchanged. Simultaneous use from several machines is unsupported.
