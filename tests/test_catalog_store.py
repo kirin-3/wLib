@@ -4,8 +4,6 @@ import sqlite3
 import subprocess
 import sys
 
-import pytest
-
 from catalog_server.store import CatalogStore, StateStore, open_stores
 
 
@@ -66,10 +64,7 @@ def test_upsert_keeps_first_seen_and_clears_removed(tmp_path):
     )
 
 
-@pytest.mark.parametrize("legacy_count_column", [False, True])
-def test_f95_rating_count_migration_backfills_existing_details(
-    tmp_path, legacy_count_column
-):
+def test_f95_rating_count_migration_backfills_existing_details(tmp_path):
     path = str(tmp_path / "catalog.sqlite")
     now = "2026-10-26T00:00:00Z"
     catalog = CatalogStore(path)
@@ -80,16 +75,13 @@ def test_f95_rating_count_migration_backfills_existing_details(
         now,
     )
     catalog.upsert_f95_details(
-        1, 10, now, {"status": "ok", "overview": "Existing text", "rating_count": 0}
+        1, 10, now, {"status": "ok", "overview": "Existing text"}
     )
     with catalog.conn:
         catalog.conn.execute(
             "ALTER TABLE f95_thread_details DROP COLUMN rating_count_attempted"
         )
-        if not legacy_count_column:
-            catalog.conn.execute(
-                "ALTER TABLE f95_thread_details DROP COLUMN rating_count"
-            )
+        catalog.conn.execute("ALTER TABLE f95_thread_details DROP COLUMN rating_count")
     catalog.close()
 
     catalog = CatalogStore(path)
@@ -114,6 +106,29 @@ def test_f95_rating_count_migration_backfills_existing_details(
         assert catalog.conn.execute(
             "SELECT overview, rating_count FROM f95_thread_details WHERE thread_id = 1"
         ).fetchone() == ("Existing text", 12)
+        assert catalog.f95_details_queue(since_ts=20, limit=10) == []
+    finally:
+        catalog.close()
+
+
+def test_failed_f95_read_keeps_the_stored_review_count(tmp_path):
+    catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
+    now = "2026-10-26T00:00:00Z"
+    catalog.upsert(
+        "f95_threads",
+        "thread_id",
+        [{"thread_id": 1, "title": "Game", "url": "u", "ts": 11}],
+        now,
+    )
+    try:
+        catalog.upsert_f95_details(
+            1, 10, now, {"status": "ok", "overview": "Text", "rating_count": 12}
+        )
+        catalog.upsert_f95_details(1, 11, now, {"status": "unreadable"})
+        assert catalog.conn.execute(
+            "SELECT status, overview, rating_count, rating_count_attempted, "
+            + "kept_after_failure FROM f95_thread_details WHERE thread_id = 1"
+        ).fetchone() == ("ok", "Text", 12, 1, 1)
         assert catalog.f95_details_queue(since_ts=20, limit=10) == []
     finally:
         catalog.close()

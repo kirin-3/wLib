@@ -321,20 +321,11 @@ class CatalogStore:
                         f"ALTER TABLE {table} ADD COLUMN kept_after_failure INTEGER NOT NULL DEFAULT 0"
                     )
         if "rating_count_attempted" not in details:
+            # Rows read before review counts existed start at 0, so the queue backfills them.
             with self.conn:
-                # SQLite starts an implicit transaction on UPDATE, so the
-                # cleanup and schema change commit together.
-                _ = self.conn.execute(
-                    "UPDATE f95_thread_details SET rating_count = NULL WHERE rating_count = 0 "
-                    + "OR kept_after_failure = 1"
-                )
                 _ = self.conn.execute(
                     "ALTER TABLE f95_thread_details ADD COLUMN "
                     + "rating_count_attempted INTEGER NOT NULL DEFAULT 0"
-                )
-                _ = self.conn.execute(
-                    "UPDATE f95_thread_details SET rating_count_attempted = 1 "
-                    + "WHERE rating_count IS NOT NULL"
                 )
         self.set_meta(META_SCHEMA_VERSION, str(SCHEMA_VERSION))
 
@@ -473,12 +464,13 @@ class CatalogStore:
         self, thread_id: int, thread_ts: int, now: str, details: Mapping[str, object]
     ) -> int:
         """Store what F95's page gave. A page without details (`missing`,
-        `unreadable`) keeps stored `ok` details and records an unknown count for this attempt."""
+        `unreadable`) keeps stored `ok` details, including the review count,
+        and only records the read."""
         with self.conn:
             if details["status"] != "ok":
                 kept = self.conn.execute(
                     "UPDATE f95_thread_details SET thread_ts = ?, fetched_at = ?, kept_after_failure = 1, "
-                    + "rating_count = NULL, rating_count_attempted = 1 "
+                    + "rating_count_attempted = 1 "
                     + "WHERE thread_id = ? AND status = 'ok'",
                     (thread_ts, now, thread_id),
                 )
