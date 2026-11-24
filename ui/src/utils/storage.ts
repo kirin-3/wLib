@@ -49,6 +49,33 @@ export function formatRelativeAge(epochSeconds: number, nowMs = Date.now()): str
   return months === 1 ? "1 month ago" : `${months} months ago`;
 }
 
+/** Report parts that only exist where Wine and Proton run (Linux). */
+const WINE_PROTON_CATEGORIES = new Set(["proton_builds", "wine_prefixes", "shared_wine_prefix"]);
+const WINE_PROTON_ACTIONS = new Set(["proton_builds"]);
+
+/**
+ * Drop the empty Wine and Proton categories on a platform without Wine and
+ * Proton. A category that holds data always stays visible.
+ */
+export function visibleStorageCategories(
+  categories: readonly StorageCategoryReport[],
+  wineProton: boolean,
+): StorageCategoryReport[] {
+  if (wineProton) return [...categories];
+  return categories.filter((cat) => cat.bytes > 0 || !WINE_PROTON_CATEGORIES.has(cat.id));
+}
+
+/** Drop the empty Proton cleanup on a platform without Wine and Proton. */
+export function visibleStorageActions(
+  actions: readonly StorageCleanupAction[],
+  wineProton: boolean,
+): StorageCleanupAction[] {
+  if (wineProton) return [...actions];
+  return actions.filter(
+    (action) => action.bytes > 0 || action.count > 0 || !WINE_PROTON_ACTIONS.has(action.id),
+  );
+}
+
 /** Categories largest first; equal sizes keep the report's order. */
 export function sortedStorageCategories(
   categories: readonly StorageCategoryReport[],

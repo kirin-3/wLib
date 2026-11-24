@@ -16,9 +16,15 @@ import {
   sortedStorageCategories,
   sortedStorageGames,
   stoppedScanNote,
+  visibleStorageActions,
+  visibleStorageCategories,
 } from "./storage.ts";
 import { MockStorage } from "../services/mock/storage.ts";
-import type { StorageCategoryReport, StorageGameRow } from "../services/api.ts";
+import type {
+  StorageCategoryReport,
+  StorageCleanupAction,
+  StorageGameRow,
+} from "../services/api.ts";
 
 const uiRoot = resolve(import.meta.dirname, "..");
 
@@ -205,4 +211,34 @@ test("sortedStorageCategories puts the largest first and keeps the order of ties
     ["proton", "catalog", "games", "a", "b"],
   );
   assert.deepEqual(input.map((c) => c.id), ["games", "a", "proton", "b", "catalog"]);
+});
+
+test("visibleStorageCategories and visibleStorageActions hide empty Wine and Proton parts without Wine", () => {
+  const cat = (id: string, bytes: number): StorageCategoryReport => ({
+    id,
+    label: id,
+    bytes,
+    files: 0,
+    percent: 0,
+  });
+  const cats = [cat("games", 10), cat("proton_builds", 0), cat("wine_prefixes", 0), cat("shared_wine_prefix", 5)];
+  assert.deepEqual(
+    visibleStorageCategories(cats, false).map((c) => c.id),
+    ["games", "shared_wine_prefix"],
+  );
+  assert.equal(visibleStorageCategories(cats, true).length, 4);
+
+  const action = (id: StorageCleanupAction["id"], bytes: number, count: number): StorageCleanupAction => ({
+    id,
+    label: id,
+    bytes,
+    count,
+    blocked_reason: "",
+    what_stays: "",
+    warning: "",
+  });
+  const actions = [action("cover_cache", 0, 0), action("proton_builds", 0, 0)];
+  assert.deepEqual(visibleStorageActions(actions, false).map((a) => a.id), ["cover_cache"]);
+  assert.equal(visibleStorageActions([action("proton_builds", 4096, 1)], false).length, 1);
+  assert.equal(visibleStorageActions(actions, true).length, 2);
 });

@@ -12,6 +12,7 @@ import {
   api,
   onWebviewReady,
   type GameRecord,
+  type PlatformCapabilities,
   type StorageCleanupAction,
   type StorageCleanupActionId,
   type StorageGameRow,
@@ -25,6 +26,7 @@ import UninstallDialog from "../components/UninstallDialog.vue";
 import { gamesStore } from "../composables/useGamesStore";
 import { confirmAction } from "../utils/confirm";
 import { scheduleUninstall } from "../utils/pendingUninstalls";
+import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 import { notify, notifyError } from "../utils/toast";
 import {
   buildCleanupConfirmOptions,
@@ -33,6 +35,8 @@ import {
   formatStorageBytes,
   skippedEntriesNote,
   stoppedScanNote,
+  visibleStorageActions,
+  visibleStorageCategories,
 } from "../utils/storage";
 
 const state = ref<StorageStateResponse | null>(null);
@@ -48,6 +52,15 @@ let pollTimer: number | null = null;
 let unmounted = false;
 
 const report = computed(() => state.value?.report ?? null);
+const capabilities = ref<PlatformCapabilities | null>(null);
+// Unknown until the capabilities load: keep everything visible meanwhile.
+const wineProton = computed(() => capabilities.value?.wine_proton ?? true);
+const visibleCategories = computed(() =>
+  visibleStorageCategories(report.value?.categories ?? [], wineProton.value),
+);
+const visibleActions = computed(() =>
+  visibleStorageActions(state.value?.actions ?? [], wineProton.value),
+);
 const isScanning = computed(() => Boolean(state.value?.scanning));
 const isCleanupRunning = computed(() => Boolean(state.value?.cleanup_running));
 const isTaskRunning = computed(() => isScanning.value || isCleanupRunning.value);
@@ -251,6 +264,9 @@ function confirmUninstall(targets: GameRecord[], options: UninstallOptions) {
 onMounted(() => {
   onWebviewReady(() => {
     void fetchState();
+    void loadPlatformCapabilities().then((caps) => {
+      if (!unmounted) capabilities.value = caps;
+    });
   });
 });
 
@@ -383,13 +399,13 @@ onBeforeUnmount(() => {
       </div>
 
       <StorageCategoryBreakdown
-        :categories="report.categories"
+        :categories="visibleCategories"
         :total-bytes="report.total_bytes"
         @open-location="handleOpenLocation"
       />
 
       <StorageCleanupSection
-        :actions="state?.actions ?? []"
+        :actions="visibleActions"
         :busy-action="busyAction"
         :result-message="cleanupResult"
         :error-message="cleanupError"
