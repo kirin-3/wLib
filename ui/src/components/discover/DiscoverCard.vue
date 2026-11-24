@@ -53,9 +53,13 @@ const activate = (event: Event) => emit("activate", props.card, event.currentTar
         <IconHeartFilled v-if="card.library?.state === 'wishlisted'" class="w-3 h-3" aria-hidden="true" />
         {{ marker }}
       </span>
-      <span v-if="card.wrating !== null" class="discover-rating absolute top-2 right-2" :title="`Weighted F95 rating from ${card.rating_count ?? 0} reviews`">
+      <span
+        v-if="card.score !== null"
+        class="discover-rating absolute top-2 right-2"
+        :title="card.wrating !== null ? `Weighted F95 rating from ${card.rating_count ?? 0} reviews` : 'F95 rating; the review count is not known yet'"
+      >
         <IconStarFilled class="w-3 h-3" aria-hidden="true" />
-        {{ card.wrating.toFixed(1) }}
+        {{ card.score.toFixed(1) }}
       </span>
     </div>
     <div class="p-3 flex flex-col gap-1 min-w-0 flex-1">

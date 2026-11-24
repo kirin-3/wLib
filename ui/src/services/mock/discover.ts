@@ -41,7 +41,8 @@ const buildCatalog = (): MockEntry[] => {
     const thread = sites.includes("f95") || sites.includes("lc");
     const f95 = sites.includes("f95");
     const title = `${WORDS[i % WORDS.length]} ${WORDS[(i * 7 + 3) % WORDS.length]} ${i + 1}`;
-    const ratingCount = f95 ? (i * 37) % 900 : 0;
+    // Every seventh F95 game has no review count yet, like most of the real catalog.
+    const ratingCount = f95 && i % 7 !== 3 ? (i * 37) % 900 : 0;
     const rating = f95 ? 2.5 + ((i * 13) % 25) / 10 : null;
     games.push({
       key: `${sites[0]}:${1000 + i}`,
@@ -62,6 +63,7 @@ const buildCatalog = (): MockEntry[] => {
       rating,
       rating_count: f95 ? ratingCount : null,
       wrating: rating !== null && ratingCount > 0 ? (ratingCount * rating + 25 * 3.2) / (ratingCount + 25) : null,
+      score: rating !== null && ratingCount > 0 ? (ratingCount * rating + 25 * 3.2) / (ratingCount + 25) : rating,
       released_at: `20${String(10 + (i % 16)).padStart(2, "0")}-${String((i % 12) + 1).padStart(2, "0")}-15`,
       updated_ts: 1_790_000_000 - i * 86_400,
       library: null,
@@ -97,7 +99,7 @@ const card = (entry: MockEntry, games: GameRecord[]): DiscoverCard => {
 
 const SORTS: Record<string, (a: DiscoverCard, b: DiscoverCard) => number> = {
   updated: (a, b) => b.updated_ts - a.updated_ts,
-  rating: (a, b) => (b.wrating ?? -1) - (a.wrating ?? -1),
+  rating: (a, b) => (b.score ?? -1) - (a.score ?? -1),
   released: (a, b) => b.released_at.localeCompare(a.released_at),
   title: () => 0,
 };
@@ -162,7 +164,7 @@ export class MockDiscover {
             && ![...exclude].some((tag) => tags.has(tag))
             && (!query.statuses?.length || query.statuses.includes(entry.status as DiscoverStatus))
             && (!query.engines?.length || query.engines.includes(entry.engine))
-            && (!query.min_rating || (entry.wrating ?? 0) >= query.min_rating)
+            && (!query.min_rating || (entry.score ?? 0) >= query.min_rating)
             && (!query.hide_library || !libraryMark(entry, games));
         }).map((entry) => card(entry, games));
         const sort = SORTS[query.sort || "updated"] ?? SORTS.updated!;

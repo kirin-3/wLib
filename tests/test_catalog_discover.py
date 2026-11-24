@@ -316,6 +316,26 @@ def test_search_words(index: Path, text: str, expected: list[str]) -> None:
     assert _keys(_search(index, search=text)) == expected
 
 
+def test_plain_rating_stands_in_while_the_review_count_is_unknown(
+    tmp_path: Path,
+) -> None:
+    catalog = make_catalog(tmp_path)
+    with closing(sqlite3.connect(catalog)) as conn, conn:
+        _ = conn.execute("UPDATE f95_threads SET rating = 4.2 WHERE thread_id = 200")
+    target = tmp_path / "index.db"
+    _ = build_index(catalog, target)
+    games = _games(target)
+    assert games["f95:200"]["wrating"] is None
+    assert games["f95:200"]["score"] == pytest.approx(4.2)
+    assert games["f95:100"]["score"] == games["f95:100"]["wrating"]
+    assert _keys(_search(target, min_rating=4.0)) == ["f95:100", "f95:200"]
+    assert _keys(_search(target, min_rating=4.5)) == ["f95:100"]
+    assert _keys(_search(target, sort="rating"))[:2] == ["f95:100", "f95:200"]
+    cards = cast(list[dict[str, object]], _search(target)["games"])
+    card = next(c for c in cards if c["key"] == "f95:200")
+    assert (card["score"], card["wrating"]) == (pytest.approx(4.2), None)
+
+
 def test_search_ignores_accents(tmp_path: Path) -> None:
     catalog = make_catalog(tmp_path)
     with closing(sqlite3.connect(catalog)) as conn, conn:

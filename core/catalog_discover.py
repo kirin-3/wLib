@@ -29,7 +29,7 @@ from core.store_links import MATCHABLE_SOURCES
 
 INDEX_FILE = "discover-index.db"
 # Raise when the index layout changes, so the next start builds it again.
-INDEX_FORMAT = 1
+INDEX_FORMAT = 2
 META_FORMAT = "format"
 META_CATALOG_SHA256 = "catalog_sha256"
 META_BUILT_AT = "built_at"
@@ -66,13 +66,16 @@ CREATE TABLE games (
     rating REAL,
     rating_count INTEGER,
     wrating REAL,
+    -- The weighted rating, else the plain F95 rating while the review count
+    -- is unknown. The rating sort and filter use it.
+    score REAL,
     released_at TEXT NOT NULL,
     updated_ts INTEGER NOT NULL,
     search_text TEXT NOT NULL
 );
 CREATE INDEX games_title ON games (sort_title, key);
 CREATE INDEX games_updated ON games (updated_ts DESC, sort_title, key);
-CREATE INDEX games_wrating ON games (wrating DESC, sort_title, key);
+CREATE INDEX games_score ON games (score DESC, sort_title, key);
 CREATE INDEX games_released ON games (released_at DESC, sort_title, key);
 CREATE TABLE tags (key TEXT PRIMARY KEY, name TEXT NOT NULL, count INTEGER NOT NULL);
 -- Every identity of every entry of a group (its own entry IDs and the store
@@ -85,7 +88,7 @@ CREATE TABLE entry_ids (
 ) WITHOUT ROWID;
 """
 
-_GAME_COLUMNS = 23
+_GAME_COLUMNS = 24
 _LEWDCORNER_HOSTS = ("lewdcorner.com",)
 _DATE_RE = re.compile(r"^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?")
 _PRODUCT_CODE_RE = re.compile(r"(?:RJ|VJ|BJ)\d+", re.I)
@@ -124,6 +127,13 @@ def weighted_rating(rating: object, count: object) -> float | None:
     return (count * rating + F95_RATING_PRIOR_REVIEWS * F95_RATING_PRIOR_MEAN) / (
         count + F95_RATING_PRIOR_REVIEWS
     )
+
+
+def plain_rating(rating: object) -> float | None:
+    """The F95 rating as a float, or None outside (0, 5]; the feed gives 0 for no reviews."""
+    if isinstance(rating, bool) or not isinstance(rating, (int, float)):
+        return None
+    return float(rating) if 0 < rating <= 5 else None
 
 
 def card_cover_url(site: str, url: object) -> str:
@@ -613,6 +623,7 @@ def _card(
     engine = (f95.engine if f95 else "") or (lc.engine if lc else "")
     rating = f95.rating if f95 else None
     count = f95.rating_count if f95 else None
+    weighted = weighted_rating(rating, count)
     search = dict.fromkeys(
         text
         for entry in ordered
@@ -647,7 +658,8 @@ def _card(
         engine,
         rating,
         count,
-        weighted_rating(rating, count),
+        weighted,
+        weighted if weighted is not None else plain_rating(rating),
         _first(entry.released_at for entry in ordered if entry.released_at <= today),
         max((entry.updated_ts for entry in ordered), default=0),
         "\n".join(search),
@@ -849,7 +861,7 @@ PAGE_SIZE = 120
 SORTS: dict[str, str] = {
     # SQLite puts NULL and "" last in a descending order.
     "updated": "updated_ts DESC, sort_title, key",
-    "rating": "wrating DESC, sort_title, key",
+    "rating": "score DESC, sort_title, key",
     "released": "released_at DESC, sort_title, key",
     "title": "sort_title, key",
 }
@@ -857,7 +869,7 @@ RATING_STEPS = (3.5, 4.0, 4.5)
 _CARD_COLUMNS = (
     "key, title, developer, version, version_site, cover_url, sites, f95_id, lc_id, "
     + "lc_tier, dlsite_id, vndb_id, ryuu_id, status, engine, rating, rating_count, "
-    + "wrating, released_at, updated_ts"
+    + "wrating, score, released_at, updated_ts"
 )
 
 
@@ -958,7 +970,7 @@ def _where(query: DiscoverQuery) -> tuple[str, list[object]]:
         terms.append(f"engine IN ({', '.join('?' * len(query.engines))})")
         args.extend(query.engines)
     if query.min_rating is not None:
-        terms.append("wrating >= ?")
+        terms.append("score >= ?")
         args.append(query.min_rating)
     if query.hide_library:
         terms.append("key NOT IN (SELECT key FROM temp.library_keys)")

@@ -496,8 +496,9 @@ class CatalogStore:
         """Threads to read: changed ones newest first, then never-read ones most viewed first.
 
         The backfill also visits successful details with no count attempt.
-        Details read before the current `IDS_VERSION` come last.
-        Changed means a feed `ts` newer than the stored details, or a thread
+        Among the backfill, threads with no review count come first, so
+        imported counts wait. Details read before the current `IDS_VERSION`
+        come last. Changed means a feed `ts` newer than the stored details, or a thread
         never read whose `ts` is newer than `since_ts`.
         """
         changed = "(t.ts > d.thread_ts OR (d.thread_id IS NULL AND t.ts > :since))"
@@ -513,12 +514,30 @@ class CatalogStore:
             + "AND (d.thread_id IS NULL OR t.ts > d.thread_ts "
             + "OR (d.status = 'ok' AND d.rating_count_attempted = 0) "
             + "OR (d.status = 'ok' AND d.ids_version < :ids)) "
-            + f"ORDER BY CASE WHEN {changed} THEN 0 WHEN {old_ids} THEN 2 ELSE 1 END, "
+            + f"ORDER BY CASE WHEN {changed} THEN 0 WHEN {old_ids} THEN 3 "
+            + "WHEN d.rating_count IS NULL THEN 1 ELSE 2 END, "
             + f"CASE WHEN {changed} THEN t.ts ELSE COALESCE(t.views, 0) END DESC, "
             + "t.thread_id LIMIT :limit",
             {"since": since_ts, "limit": limit, "ids": IDS_VERSION},
         )
         return cast(list[tuple[int, int]], rows.fetchall())
+
+    def fill_f95_rating_counts(self, counts: Iterable[tuple[int, int]]) -> int:
+        """Fill review counts that F95 has not given yet; returns how many.
+
+        Only successful details without a count change. The count attempt
+        stays as it is, so the next read of the thread replaces the value
+        with F95's own count."""
+        with self.conn:
+            changed = 0
+            for thread_id, count in counts:
+                cursor = self.conn.execute(
+                    "UPDATE f95_thread_details SET rating_count = ? WHERE thread_id = ? "
+                    + "AND status = 'ok' AND rating_count IS NULL",
+                    (count, thread_id),
+                )
+                changed += cursor.rowcount
+        return changed
 
     def upsert_f95_details(
         self, thread_id: int, thread_ts: int, now: str, details: Mapping[str, object]

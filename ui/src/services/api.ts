@@ -1811,6 +1811,8 @@ export interface DiscoverCard {
   rating: number | null;
   rating_count: number | null;
   wrating: number | null;
+  /** The weighted rating, else the plain F95 rating while the review count is unknown. */
+  score: number | null;
   /** `YYYY-MM-DD` or "". */
   released_at: string;
   /** Unix seconds; 0 when unknown. */

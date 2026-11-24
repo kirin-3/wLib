@@ -202,6 +202,10 @@ const markShotFailed = (image: { full: string }) => {
                   <IconStarFilled class="w-3.5 h-3.5" aria-hidden="true" />
                   {{ game.wrating.toFixed(1) }} <span class="opacity-75">({{ game.rating_count }} reviews)</span>
                 </span>
+                <span v-else-if="game.score !== null" class="discover-rating-pill" title="F95 rating; the review count is not known yet">
+                  <IconStarFilled class="w-3.5 h-3.5" aria-hidden="true" />
+                  {{ game.score.toFixed(1) }} <span class="opacity-75">F95 rating</span>
+                </span>
               </div>
             </div>
 
