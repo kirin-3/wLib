@@ -109,6 +109,17 @@ def get_cache_root(
     return os.path.abspath(os.path.expanduser(base))
 
 
+def get_cache_dir(
+    *,
+    platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: str | None = None,
+) -> str:
+    return os.path.join(
+        get_cache_root(platform=platform, environ=environ, home=home), "wLib"
+    )
+
+
 def get_data_subdir(name: str, *, platform: str | None = None) -> str:
     return os.path.join(get_data_dir(platform=platform), name)
 

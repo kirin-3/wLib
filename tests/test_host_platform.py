@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.host_platform import (
+    get_cache_dir,
     get_cache_root,
     get_data_dir,
     get_platform_capabilities,
@@ -75,6 +76,14 @@ def test_explicit_path_overrides_isolate_smoke_runtime(tmp_path):
 
     assert get_data_dir(platform="linux", environ=env) == str(data_dir)
     assert get_cache_root(platform="linux", environ=env) == str(cache_dir)
+
+
+def test_wlib_cache_dir_sits_inside_the_cache_root(tmp_path):
+    env = {"XDG_CACHE_HOME": str(tmp_path / "xdg-cache")}
+
+    assert get_cache_dir(platform="linux", environ=env) == str(
+        tmp_path / "xdg-cache" / "wLib"
+    )
 
 
 def test_legacy_browser_dirs_only_include_app_owned_paths(monkeypatch, tmp_path):

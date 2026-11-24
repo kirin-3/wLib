@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 
-from core.host_platform import get_cache_root
+from core.host_platform import get_cache_dir
 
 NWJS_LIBRARY = "libnw.so"
 NWJS_LIBRARY_FOLDERS = ("", "lib")
@@ -13,7 +13,6 @@ TUNABLES_VARIABLE = "GLIBC_TUNABLES"
 EXECSTACK_TUNABLE_NAME = "glibc.rtld.execstack"
 EXECSTACK_ALLOWED = f"{EXECSTACK_TUNABLE_NAME}=2"
 CACHE_HOME_VARIABLE = "XDG_CACHE_HOME"
-WLIB_CACHE_FOLDER = "wLib"
 NWJS_CACHE_FOLDER = "nwjs"
 
 
@@ -41,8 +40,6 @@ def nwjs_host_env(
         return {}
     overrides = {
         TUNABLES_VARIABLE: _tunables_allowing_execstack(env.get(TUNABLES_VARIABLE, "")),
-        CACHE_HOME_VARIABLE: os.path.join(
-            get_cache_root(), WLIB_CACHE_FOLDER, NWJS_CACHE_FOLDER
-        ),
+        CACHE_HOME_VARIABLE: os.path.join(get_cache_dir(), NWJS_CACHE_FOLDER),
     }
     return {name: value for name, value in overrides.items() if name not in user_env}

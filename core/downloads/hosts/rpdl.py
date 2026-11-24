@@ -307,9 +307,9 @@ def clean_query(title: str) -> str:
 
 
 def _cache_path() -> str:
-    from core.host_platform import get_cache_root
+    from core.host_platform import get_cache_dir
 
-    return os.path.join(get_cache_root(), "wLib", "rpdl-search.json")
+    return os.path.join(get_cache_dir(), "rpdl-search.json")
 
 
 def _cache_load() -> dict[str, dict[str, object]]:
