@@ -31,6 +31,7 @@ from .database import (
 from . import display_info, game_sandbox, locale_emulator, rpgmaker_runner
 from . import gamescope as gamescope_mod
 from .gamescope import GamescopeOptions
+from .nwjs_compat import nwjs_host_env
 from .host_platform import (
     get_cheat_engine_dir,
     get_default_wine_prefix,
@@ -2721,6 +2722,7 @@ class Launcher:
             if web_kind == "builtin":
                 return execute_web_player()
             process_env = build_host_tool_env(env)
+            process_env.update(nwjs_host_env(game_dir, process_env, user_env))
 
             # Unzipping often drops the exec bit; Wine can't run these either.
             if (

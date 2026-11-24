@@ -5536,3 +5536,118 @@ def test_sandboxed_rpgmaker_linux_mv_keeps_fallback_without_overlay(
     cmd = mock_popen.call_args.args[0]
     assert "--ro-bind" in cmd
     assert str(runner.parent.parent) in cmd
+
+
+_LINUX_HOST_ONLY = pytest.mark.skipif(
+    sys.platform == "win32", reason="NW.js bundles launch natively on Linux hosts"
+)
+
+
+def _nwjs_game(tmp_path, *, library_folder="lib"):
+    game_dir = tmp_path / "game"
+    (game_dir / "lib").mkdir(parents=True)
+    binary = game_dir / "nw"
+    binary.write_bytes(b"\x7fELF" + b"\0" * 12)
+    binary.chmod(0o755)
+    if library_folder is not None:
+        (game_dir / library_folder).mkdir(exist_ok=True)
+        (game_dir / library_folder / "libnw.so").write_bytes(b"\x7fELF")
+    return str(binary)
+
+
+def _launch_native_env(binary, **launch_kwargs):
+    with (
+        patch("core.launcher.get_setting", return_value="false"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        popen.return_value = MagicMock()
+        assert Launcher().launch(binary, **launch_kwargs)["success"] is True
+    return popen.call_args.kwargs["env"]
+
+
+@_LINUX_HOST_ONLY
+def test_nwjs_bundle_launch_allows_executable_stack_libraries(tmp_path, monkeypatch):
+    monkeypatch.delenv("GLIBC_TUNABLES", raising=False)
+
+    env = _launch_native_env(_nwjs_game(tmp_path))
+
+    assert env["GLIBC_TUNABLES"] == "glibc.rtld.execstack=2"
+
+
+@_LINUX_HOST_ONLY
+def test_nwjs_bundle_launch_keeps_existing_glibc_tunables(tmp_path, monkeypatch):
+    monkeypatch.setenv("GLIBC_TUNABLES", "glibc.malloc.check=1")
+
+    env = _launch_native_env(_nwjs_game(tmp_path))
+
+    assert env["GLIBC_TUNABLES"] == "glibc.malloc.check=1:glibc.rtld.execstack=2"
+
+
+@_LINUX_HOST_ONLY
+def test_nwjs_bundle_launch_respects_an_explicit_execstack_tunable(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("GLIBC_TUNABLES", raising=False)
+
+    env = _launch_native_env(
+        _nwjs_game(tmp_path),
+        command_line_args="GLIBC_TUNABLES=glibc.rtld.execstack=0 %command%",
+    )
+
+    assert env["GLIBC_TUNABLES"] == "glibc.rtld.execstack=0"
+
+
+@_LINUX_HOST_ONLY
+def test_nwjs_bundle_launch_uses_a_private_font_cache_inside_wlib_cache(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("WLIB_CACHE_DIR", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "host-cache"))
+
+    env = _launch_native_env(_nwjs_game(tmp_path))
+
+    assert env["XDG_CACHE_HOME"] == str(tmp_path / "host-cache" / "wLib" / "nwjs")
+
+
+@_LINUX_HOST_ONLY
+def test_nwjs_bundle_launch_keeps_a_host_execstack_tunable(tmp_path, monkeypatch):
+    monkeypatch.setenv("GLIBC_TUNABLES", "glibc.rtld.execstack=0")
+
+    env = _launch_native_env(_nwjs_game(tmp_path))
+
+    assert env["GLIBC_TUNABLES"] == "glibc.rtld.execstack=0"
+
+
+@_LINUX_HOST_ONLY
+def test_nwjs_bundle_launch_detects_the_runtime_beside_the_binary(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("GLIBC_TUNABLES", raising=False)
+
+    env = _launch_native_env(_nwjs_game(tmp_path, library_folder=""))
+
+    assert env["GLIBC_TUNABLES"] == "glibc.rtld.execstack=2"
+
+
+@_LINUX_HOST_ONLY
+def test_nwjs_bundle_launch_respects_an_explicit_cache_home(tmp_path):
+    env = _launch_native_env(
+        _nwjs_game(tmp_path),
+        command_line_args="XDG_CACHE_HOME=/custom/cache %command%",
+    )
+
+    assert env["XDG_CACHE_HOME"] == "/custom/cache"
+
+
+@_LINUX_HOST_ONLY
+def test_native_binary_without_nwjs_runtime_keeps_the_host_environment(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("GLIBC_TUNABLES", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "host-cache"))
+
+    env = _launch_native_env(_nwjs_game(tmp_path, library_folder=None))
+
+    assert "GLIBC_TUNABLES" not in env
+    assert env["XDG_CACHE_HOME"] == str(tmp_path / "host-cache")
