@@ -39,6 +39,7 @@ from core.database import (
     normalize_launch_mode,
     normalize_play_status,
 )
+from core.f95_rating import parse_f95_rating_text_count
 from core.f95zone import normalize_thread_url, thread_match_key, thread_urls_match
 from core.host_platform import is_windows
 from core.store_links import MATCHABLE_SOURCES, coerce_store_links
@@ -123,6 +124,7 @@ USER_STATE_FIELDS = (
     "skipped_version",
     "is_favorite",
     "rating",
+    "rating_count",
     "rating_updated_at",
     "rating_graphics",
     "rating_story",
@@ -1618,6 +1620,8 @@ def _normalize_game_field(field: str, value: object) -> object:
     if field == "f95_tags":
         # NULL means "no F95 tag baseline yet", which is not an empty list.
         return None if value is None else _coerce_text(value)
+    if field == "rating_count":
+        return database.coerce_rating_count(value)
     if field == "play_status":
         return normalize_play_status(value)
     if field in {"gamemode", "mangohud", "gamescope"}:
@@ -1690,11 +1694,14 @@ def _import_fields_for_game(
             fields["engine"] = "Others"
 
     if SECTION_USER_STATE in sections:
-        fields.update(
-            _normalized_fields(
-                _game_section(imported_game, SECTION_USER_STATE), USER_STATE_FIELDS
+        user_state = _game_section(imported_game, SECTION_USER_STATE)
+        fields.update(_normalized_fields(user_state, USER_STATE_FIELDS))
+        if "rating_count" not in user_state and "rating" in user_state:
+            metadata = _game_section(imported_game, SECTION_METADATA)
+            has_f95 = bool(normalize_thread_url(metadata.get("f95_url")))
+            fields["rating_count"] = (
+                parse_f95_rating_text_count(fields.get("rating")) if has_f95 else None
             )
-        )
     if SECTION_LAUNCH_CONFIG in sections:
         fields.update(
             _normalized_fields(
@@ -2301,11 +2308,21 @@ def _filter_fill_missing(
     if row is None:
         return dict(fields)
     local_row = {str(key): cast(object, row[key]) for key in row.keys()}
-    return {
+    kept = {
         key: value
         for key, value in fields.items()
         if _is_fill_missing_empty(key, local_row.get(key))
     }
+    # The review count belongs to its rating: never pair the local rating with
+    # an imported count read from a different rating.
+    if (
+        "rating_count" in kept
+        and "rating" not in kept
+        and _coerce_text(fields.get("rating")).strip()
+        != _coerce_text(local_row.get("rating")).strip()
+    ):
+        del kept["rating_count"]
+    return kept
 
 
 def _is_fill_missing_empty(field: str, local_value: object) -> bool:
@@ -2326,6 +2343,7 @@ def _is_fill_missing_empty(field: str, local_value: object) -> bool:
     if (
         field in database.THREAD_STATE_COLUMNS
         or field == database.THREAD_STATES_AT_COLUMN
+        or field == "rating_count"
     ):
         return local_value is None
     if field == "play_status":

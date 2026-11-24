@@ -2,7 +2,7 @@
 import type { GamescopeSettings, LcPlusMode, LcPlusTier, RpgmakerLinuxRunnerStatus, SaveBackupKeep, SettingsResponse } from "../api";
 import { FILTER_OPTIONS, SCALER_OPTIONS, WINDOW_MODE_OPTIONS, argsError, fpsLimitError, normalizeResolution } from "../../utils/gamescope";
 import type { LibraryFilterPreset } from "../../utils/libraryViewState";
-import { VALID_SORT_FIELDS } from "../../utils/libraryViewState";
+import { FILTER_MIN_RATING_VALUES, VALID_SORT_FIELDS, type FilterMinRating } from "../../utils/libraryViewState";
 import { isRecord } from "./games";
 
 const MOCK_SETTINGS_STORAGE_KEY = "wlib-mock-settings";
@@ -105,6 +105,11 @@ export const normalizeMockFilterPresets = (value: unknown): LibraryFilterPreset[
       filterInstallState:
         source.filterInstallState === "installed" || source.filterInstallState === "wishlist"
           ? source.filterInstallState
+          : "",
+      filterMinRating:
+        typeof source.filterMinRating === "string" &&
+        (FILTER_MIN_RATING_VALUES as readonly string[]).includes(source.filterMinRating)
+          ? (source.filterMinRating as FilterMinRating)
           : "",
       filterSources: Array.isArray(source.filterSources)
         ? source.filterSources.filter((item): item is string => typeof item === "string")

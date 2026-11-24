@@ -1230,12 +1230,16 @@ class ApiBase:
     ) -> dict[int, dict[str, object]]:
         """Store the thread page's F95 rating on each game with ``url``.
 
-        Writes ``rating`` as "X.X/5 (count)" (or "X.X/5" with no count) and
-        ``rating_updated_at`` as the read time. A page with no rating changes
-        nothing. Returns, for each game whose rating text changed, its
-        previous ``rating`` and ``rating_updated_at``.
+        Writes ``rating`` as "X.X/5 (count)" (or "X.X/5" with no readable
+        count), ``rating_count`` as the parsed positive review count (or NULL),
+        and ``rating_updated_at`` as the read time. A page with no rating
+        changes nothing. Returns, for each game whose rating text or count
+        changed, its previous ``rating``, ``rating_count`` and
+        ``rating_updated_at``.
         """
         from datetime import UTC, datetime
+
+        from core.f95_rating import parse_f95_review_count
 
         normalized_url = normalize_thread_url(url)
         raw_rating = metadata.get("rating")
@@ -1246,22 +1250,28 @@ class ApiBase:
             or not 0 < raw_rating <= 5
         ):
             return {}
-        count = str(metadata.get("rating_count") or "").strip()
+        count_text = str(metadata.get("rating_count") or "").strip()
+        parsed_count = parse_f95_review_count(count_text)
+        rating_count = (
+            parsed_count if parsed_count is not None and parsed_count > 0 else None
+        )
         rating_text = (
-            f"{raw_rating:.1f}/5 ({count})" if count else f"{raw_rating:.1f}/5"
+            f"{raw_rating:.1f}/5 ({count_text})"
+            if rating_count is not None
+            else f"{raw_rating:.1f}/5"
         )
         read_at = datetime.now(UTC).isoformat()
 
         import sqlite3
 
-        from core.database import get_connection
+        from core.database import coerce_rating_count, get_connection
 
         previous: dict[int, dict[str, object]] = {}
         with closing(get_connection()) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             _ = cursor.execute(
-                "SELECT id, rating, rating_updated_at FROM games WHERE f95_url = ?",
+                "SELECT id, rating, rating_count, rating_updated_at FROM games WHERE f95_url = ?",
                 (normalized_url,),
             )
             rows = cast(list[sqlite3.Row], cursor.fetchall())
@@ -1270,17 +1280,19 @@ class ApiBase:
                 if not isinstance(game_id, int):
                     continue
                 current = str(cast(object, game["rating"]) or "")
-                if current != rating_text:
+                current_count = coerce_rating_count(cast(object, game["rating_count"]))
+                if current != rating_text or current_count != rating_count:
                     previous[game_id] = {
                         "rating": current,
+                        "rating_count": current_count,
                         "rating_updated_at": str(
                             cast(object, game["rating_updated_at"]) or ""
                         ),
                     }
             if rows:
                 _ = cursor.execute(
-                    "UPDATE games SET rating = ?, rating_updated_at = ? WHERE f95_url = ?",
-                    (rating_text, read_at, normalized_url),
+                    "UPDATE games SET rating = ?, rating_count = ?, rating_updated_at = ? WHERE f95_url = ?",
+                    (rating_text, rating_count, read_at, normalized_url),
                 )
                 conn.commit()
         return previous
@@ -1525,20 +1537,26 @@ class ApiBase:
         return changed
 
     def _fill_ratings_from_catalog(self) -> int:
-        """Fill F95 ratings from the installed catalog, once per snapshot.
+        """Fill F95 ratings and review counts from the installed catalog, once per snapshot.
 
         Runs on the catalog thread after a snapshot installs and once at
         startup. A catalog rating fills an empty rating, and replaces a stored
         one only when the catalog was built after that rating was read (or
-        the read time is unknown) and the value at one decimal differs. Zero,
-        missing and out-of-range catalog ratings are skipped. Tags are never
-        touched. Returns the number of games changed.
+        the read time is unknown) and either the value at one decimal differs
+        or the catalog supplies a positive review count that differs from the
+        stored count. Zero, missing and out-of-range catalog ratings are
+        skipped. Tags are never touched. Returns the number of games changed.
         """
         import re
         import sqlite3
         from datetime import UTC, datetime
 
-        from core.database import get_connection, get_setting, update_setting
+        from core.database import (
+            coerce_rating_count,
+            get_connection,
+            get_setting,
+            update_setting,
+        )
         from core.f95zone import extract_thread_id
         from core.game_lookup import f95_thread_ratings
 
@@ -1561,10 +1579,10 @@ class ApiBase:
             rows = cast(
                 list[sqlite3.Row],
                 conn.execute(
-                    "SELECT id, f95_url, rating, rating_updated_at FROM games WHERE f95_url IS NOT NULL AND f95_url != ''"
+                    "SELECT id, f95_url, rating, rating_count, rating_updated_at FROM games WHERE f95_url IS NOT NULL AND f95_url != ''"
                 ).fetchall(),
             )
-            games: list[tuple[int, int, str, str]] = []
+            games: list[tuple[int, int, str, int | None, str]] = []
             for row in rows:
                 thread_id = extract_thread_id(cast(object, row["f95_url"]))
                 game_id = cast(object, row["id"])
@@ -1574,6 +1592,7 @@ class ApiBase:
                             game_id,
                             int(thread_id),
                             str(cast(object, row["rating"]) or "").strip(),
+                            coerce_rating_count(cast(object, row["rating_count"])),
                             str(cast(object, row["rating_updated_at"]) or "").strip(),
                         )
                     )
@@ -1584,22 +1603,33 @@ class ApiBase:
             built_time = parse_time(built_at)
             if built_time is None:
                 return 0  # an unreadable catalog; try again with the next run
-            for game_id, thread_id, stored, read_at in games:
-                catalog_rating = ratings.get(thread_id)
-                if catalog_rating is None or not 0 < catalog_rating <= 5:
+            for game_id, thread_id, stored, stored_count, read_at in games:
+                entry = ratings.get(thread_id)
+                if entry is None:
+                    continue
+                catalog_rating, catalog_count = entry
+                if not 0 < catalog_rating <= 5:
                     continue
                 if stored:
                     read_time = parse_time(read_at)
                     if read_time is not None and read_time >= built_time:
                         continue
                     match = re.search(r"\d+(?:\.\d+)?", stored)
-                    if match and round(float(match.group()), 1) == round(
-                        catalog_rating, 1
+                    same_rating = bool(
+                        match
+                        and round(float(match.group()), 1) == round(catalog_rating, 1)
+                    )
+                    if same_rating and (
+                        catalog_count is None or catalog_count == stored_count
                     ):
                         continue
+                rating_text = f"{round(catalog_rating, 1):.1f}/5"
+                if catalog_count is not None:
+                    suffix = "review" if catalog_count == 1 else "reviews"
+                    rating_text = f"{rating_text} ({catalog_count:,} {suffix})"
                 _ = conn.execute(
-                    "UPDATE games SET rating = ?, rating_updated_at = ? WHERE id = ?",
-                    (f"{round(catalog_rating, 1):.1f}/5", built_at, game_id),
+                    "UPDATE games SET rating = ?, rating_count = ?, rating_updated_at = ? WHERE id = ?",
+                    (rating_text, catalog_count, built_at, game_id),
                 )
                 changed += 1
             if changed:

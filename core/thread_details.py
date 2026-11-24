@@ -140,6 +140,8 @@ def merge_thread_details(
         )
         if (empty or untouched) and stored != new:
             updates[field] = column_value(field, new)
+    if "rating" in updates:
+        updates["rating_count"] = None
     encoded = json.dumps(new_baseline, ensure_ascii=False)
     if updates or current.get(BASELINE_COLUMN) != encoded:
         updates[BASELINE_COLUMN] = encoded

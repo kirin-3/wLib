@@ -466,7 +466,7 @@ export class MockBackend {
           lc_mode: args[18] === "on" || args[18] === "off" ? args[18] : "",
           version: String(args[3] || ""), links,
           cover_image_path: String(args[4] || ""), tags: String(args[5] || ""),
-          rating: String(args[6] || ""), developer: String(args[7] || ""),
+          rating: String(args[6] || ""), rating_count: null, developer: String(args[7] || ""),
           engine: String(args[8] || ""),
           run_japanese_locale: !!args[9], run_wayland: !!args[10], auto_inject_ce: !!args[11],
           custom_prefix: String(args[12] || ""), proton_version: String(args[13] || ""),
@@ -510,6 +510,9 @@ export class MockBackend {
         const nextGames = games.map((game) => {
           if (game.id !== Number(args[0])) return game;
           const merged: Record<string, unknown> = { ...game, ...fields };
+          if ("rating" in fields && !("rating_count" in fields)) {
+            merged.rating_count = null;
+          }
           if (typeof fields.aliases === "string") {
             // Mirrors the backend: plain alias text holds one title per line.
             merged.aliases = [...new Set(fields.aliases.split(/\r?\n/).map((alias) => alias.trim()).filter(Boolean))];
@@ -1255,6 +1258,7 @@ export class MockBackend {
                       updates.set(game.id, {
                         cover_image_path: `https://example.com/refreshed-${game.id}.jpg`,
                         rating: "4.6/5 (120 reviews)",
+                        rating_count: 120,
                         rating_updated_at: new Date().toISOString(),
                         tags: merged.join(", "),
                         f95_tags: f95.join(", "),
@@ -1266,7 +1270,7 @@ export class MockBackend {
                       has_update: false, error: "", error_code: "",
                       info_changed: changed,
                       previous: changed
-                        ? { cover_image_path: game.cover_image_path || "", rating: game.rating || "", rating_updated_at: game.rating_updated_at || "", tags, f95_tags: game.f95_tags ?? null, user_f95_tags: game.user_f95_tags || "" }
+                        ? { cover_image_path: game.cover_image_path || "", rating: game.rating || "", rating_count: game.rating_count ?? null, rating_updated_at: game.rating_updated_at || "", tags, f95_tags: game.f95_tags ?? null, user_f95_tags: game.user_f95_tags || "" }
                         : {},
                     };
                   });

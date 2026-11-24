@@ -1087,14 +1087,23 @@ def test_check_for_updates_stores_page_rating(monkeypatch):
 
     game = get_all_games()[0]
     assert game["rating"] == "4.6/5 (120 reviews)"
+    assert game["rating_count"] == 120
     assert str(game["rating_updated_at"]).startswith("20")
 
-    _ = update_game(game_id, {"rating": "4.1/5 (30 reviews)", "rating_updated_at": "x"})
+    _ = update_game(
+        game_id,
+        {
+            "rating": "4.1/5 (30 reviews)",
+            "rating_count": 30,
+            "rating_updated_at": "x",
+        },
+    )
     page.pop("rating")
     page.pop("rating_count")
     assert api.check_for_updates(url)["success"] is True
     game = get_all_games()[0]
     assert game["rating"] == "4.1/5 (30 reviews)"
+    assert game["rating_count"] == 30
     assert game["rating_updated_at"] == "x"
 
 
@@ -1106,12 +1115,37 @@ def test_store_f95_rating_without_count_and_out_of_range():
 
     assert api._store_f95_rating_for_url(url, {"rating": 7.0}) == {}
     assert get_all_games()[0]["rating"] == ""
+    assert get_all_games()[0]["rating_count"] is None
     assert api._store_f95_rating_for_url(url, {"rating": 4.25}) == {
-        game_id: {"rating": "", "rating_updated_at": ""}
+        game_id: {"rating": "", "rating_count": None, "rating_updated_at": ""}
     }
     assert get_all_games()[0]["rating"] == "4.2/5"
-    # The same text again is not a change, but the read time still moves.
+    assert get_all_games()[0]["rating_count"] is None
+    # The same text and count again is not a change, but the read time still moves.
     assert api._store_f95_rating_for_url(url, {"rating": 4.2}) == {}
+
+    # Comma-grouped count stores the integer count and returns previous count for undo.
+    prev = api._store_f95_rating_for_url(
+        url, {"rating": 4.5, "rating_count": "1,234 reviews"}
+    )
+    assert prev[game_id]["rating"] == "4.2/5"
+    assert prev[game_id]["rating_count"] is None
+    assert get_all_games()[0]["rating"] == "4.5/5 (1,234 reviews)"
+    assert get_all_games()[0]["rating_count"] == 1234
+
+    # Unreadable count text stores no count and omits the unreadable text.
+    prev2 = api._store_f95_rating_for_url(
+        url, {"rating": 4.2, "rating_count": "not a count"}
+    )
+    assert prev2[game_id]["rating"] == "4.5/5 (1,234 reviews)"
+    assert prev2[game_id]["rating_count"] == 1234
+    assert get_all_games()[0]["rating"] == "4.2/5"
+    assert get_all_games()[0]["rating_count"] is None
+
+    # Undo restores both rating text and count.
+    _ = api.update_game(game_id, prev2[game_id])
+    assert get_all_games()[0]["rating"] == "4.5/5 (1,234 reviews)"
+    assert get_all_games()[0]["rating_count"] == 1234
 
 
 def test_bulk_page_fallback_stores_rating(monkeypatch):
@@ -4982,6 +5016,7 @@ def test_refresh_info_records_previous_values_for_a_mixed_run(monkeypatch):
             "tags": "3dcg, my-pick",
             "f95_tags": "3dcg",
             "rating": "4.1/5 (30 reviews)",
+            "rating_count": 30,
             "rating_updated_at": "2026-01-01T00:00:00+00:00",
         },
     )
@@ -5022,10 +5057,15 @@ def test_refresh_info_records_previous_values_for_a_mixed_run(monkeypatch):
         "tags": "3dcg, my-pick",
         "f95_tags": "3dcg",
         "rating": "4.1/5 (30 reviews)",
+        "rating_count": 30,
         "rating_updated_at": "2026-01-01T00:00:00+00:00",
     }
     assert entries[rating_id]["info_changed"] is True
-    assert entries[rating_id]["previous"] == {"rating": "", "rating_updated_at": ""}
+    assert entries[rating_id]["previous"] == {
+        "rating": "",
+        "rating_count": None,
+        "rating_updated_at": "",
+    }
     assert entries[none_id]["info_changed"] is False
     assert entries[none_id]["previous"] == {}
     assert entries[baseline_id]["info_changed"] is False
@@ -5035,19 +5075,23 @@ def test_refresh_info_records_previous_values_for_a_mixed_run(monkeypatch):
     assert games[all_id]["tags"] == "3dcg, sandbox, my-pick"
     assert games[all_id]["f95_tags"] == "3dcg, sandbox"
     assert games[all_id]["rating"] == "4.6/5 (120 reviews)"
+    assert games[all_id]["rating_count"] == 120
     assert games[all_id]["cover_image_path"] == "https://img/new.jpg"
     assert games[baseline_id]["tags"] == "3dcg"
     assert games[baseline_id]["f95_tags"] == "3dcg, rpg"
     assert games[baseline_id]["tags_user_edited"] == 1
 
-    # Undo restores every changed field, the NULL baseline included.
+    # Undo restores every changed field, the NULL baseline and rating_count included.
     for game_id, entry in entries.items():
         _ = api.update_game(game_id, cast(dict[str, object], entry["previous"]))
     games = {int(str(g["id"])): g for g in get_all_games()}
     assert games[all_id]["tags"] == "3dcg, my-pick"
     assert games[all_id]["f95_tags"] == "3dcg"
     assert games[all_id]["rating"] == "4.1/5 (30 reviews)"
+    assert games[all_id]["rating_count"] == 30
     assert games[all_id]["cover_image_path"] == "https://img/old.jpg"
+    assert games[rating_id]["rating"] == ""
+    assert games[rating_id]["rating_count"] is None
     assert games[baseline_id]["f95_tags"] is None
 
 

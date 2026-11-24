@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import NamedTuple, Protocol, TypedDict, cast
 from urllib.parse import urlsplit
 
+from core.f95_rating import parse_f95_rating_text_count
 from core.f95zone import normalize_thread_url, thread_urls_match
 from core.host_platform import (
     WINDOWS_FOLDER_DOWNLOADS,
@@ -132,6 +133,7 @@ SYNC_GAME_COLUMNS = (
     "skipped_version",
     "is_favorite",
     "rating",
+    "rating_count",
     "rating_updated_at",
     "rating_graphics",
     "rating_story",
@@ -494,6 +496,25 @@ def _coerce_sort_order(sort_order: object) -> int:
 
 # The thread On Hold and Abandoned states: NULL is unknown, 0 not set, 1 set.
 THREAD_STATE_COLUMNS = ("thread_onhold", "thread_abandoned")
+
+
+def coerce_rating_count(value: object) -> int | None:
+    """Keep a positive F95 review count as an int; 0, None, or invalid values become None."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 < value <= 2**63 - 1 else None
+    if isinstance(value, float):
+        if not value.is_integer():
+            return None
+        count = int(value)
+        return count if 0 < count <= 2**63 - 1 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            count = int(text)
+            return count if 0 < count <= 2**63 - 1 else None
+    return None
 
 
 def coerce_thread_state(value: object) -> int | None:
@@ -1383,6 +1404,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("f95_tags", "TEXT"),
         ("user_f95_tags", "TEXT DEFAULT ''"),
         ("rating", "TEXT DEFAULT ''"),
+        ("rating_count", "INTEGER"),
         ("rating_updated_at", "TEXT DEFAULT ''"),
         ("command_line_args", "TEXT DEFAULT ''"),
         ("status", "TEXT DEFAULT ''"),
@@ -1459,6 +1481,20 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             WHERE TRIM(COALESCE(latest_version, '')) != ''
               AND TRIM(COALESCE(f95_url, '')) != ''"""
         )
+
+    if "rating_count" not in existing_columns:
+        _ = cursor.execute(
+            """SELECT id, rating FROM games
+            WHERE TRIM(COALESCE(f95_url, '')) != ''
+              AND TRIM(COALESCE(rating, '')) != ''"""
+        )
+        for row in cast(list[sqlite3.Row], cursor.fetchall()):
+            count = parse_f95_rating_text_count(cast(object, row["rating"]))
+            if count is not None:
+                _ = cursor.execute(
+                    "UPDATE games SET rating_count = ? WHERE id = ?",
+                    (count, row["id"]),
+                )
 
     # A stable per-game identity lets sync follow a game whose title or
     # thread URL changed on another device instead of replacing it.
@@ -2637,6 +2673,7 @@ def update_game(
         "f95_tags",
         "user_f95_tags",
         "rating",
+        "rating_count",
         "rating_updated_at",
         "command_line_args",
         "rating_graphics",
@@ -2676,7 +2713,7 @@ def update_game(
     }
     # Only allow known columns
     # `f95_tags` may be set back to NULL ("no baseline yet"), as an undo does,
-    # and the thread states back to unknown.
+    # `rating_count` back to NULL ("unknown"), and the thread states back to unknown.
     safe_fields: dict[str, object] = {
         k: v
         for k, v in fields.items()
@@ -2684,12 +2721,18 @@ def update_game(
         and (
             v is not None
             or k == "f95_tags"
+            or k == "rating_count"
             or k in THREAD_STATE_COLUMNS
             or k == THREAD_STATES_AT_COLUMN
         )
     }
     if not safe_fields:
         return {}
+
+    if "rating_count" in safe_fields:
+        safe_fields["rating_count"] = coerce_rating_count(safe_fields["rating_count"])
+    elif "rating" in safe_fields:
+        safe_fields["rating_count"] = None
 
     if "note_links" in safe_fields:
         safe_fields["note_links"] = json.dumps(
@@ -3546,6 +3589,7 @@ def set_game_collections(game_id: int, names: Sequence[object]) -> list[str]:
 
 # Filter Preset Operations
 FILTER_PRESET_INSTALL_STATES = ("", "installed", "wishlist")
+FILTER_PRESET_MIN_RATINGS = ("", "3.5", "4.0", "4.5")
 FILTER_PRESET_SORT_DIRECTIONS = ("asc", "desc")
 FILTER_PRESET_THREAD_STATES = ("finished", "onhold", "abandoned", "ongoing")
 
@@ -3585,6 +3629,13 @@ def normalize_filter_preset(entry: object) -> dict[str, object] | None:
         return [item for item in cast(list[object], value) if isinstance(item, str)]
 
     install_state = str(source.get("filterInstallState") or "")
+    raw_min_rating = source.get("filterMinRating")
+    min_rating = (
+        raw_min_rating
+        if isinstance(raw_min_rating, str)
+        and raw_min_rating in FILTER_PRESET_MIN_RATINGS
+        else ""
+    )
     sort_dir = str(source.get("sortDir") or "")
     return {
         "name": name,
@@ -3595,6 +3646,7 @@ def normalize_filter_preset(entry: object) -> dict[str, object] | None:
         "filterInstallState": (
             install_state if install_state in FILTER_PRESET_INSTALL_STATES else ""
         ),
+        "filterMinRating": min_rating,
         "filterThreadStates": [
             state
             for state in FILTER_PRESET_THREAD_STATES

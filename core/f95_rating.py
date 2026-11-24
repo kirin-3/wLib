@@ -100,14 +100,35 @@ def extract_f95_rating(html: str) -> tuple[float, str]:
     return (rating, count) if rating > 0 else (0.0, "")
 
 
-def extract_f95_review_count(html: str) -> int | None:
-    """Return a verified count, or None when the page supplies no readable count."""
-    _, count = _rating_and_count_text(html)
-    if re.fullmatch(r"no (?:reviews|votes)(?: yet)?", count, re.I):
+def parse_f95_review_count(count_text: object) -> int | None:
+    """Parse count text like '1,234 reviews', '12 votes', or 'No reviews yet'."""
+    if not isinstance(count_text, str):
+        return None
+    cleaned = re.sub(r"\s+", " ", count_text).strip()
+    if not cleaned:
+        return None
+    if re.fullmatch(r"no (?:reviews|votes)(?: yet)?", cleaned, re.I):
         return 0
     match = re.fullmatch(
         r"(0|[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+) (?:reviews?|votes?)",
-        count,
+        cleaned,
         re.I,
     )
     return int(match[1].replace(",", "")) if match else None
+
+
+def parse_f95_rating_text_count(rating_text: object) -> int | None:
+    """Extract a positive review count from stored rating text like '4.6/5 (1,234 reviews)'."""
+    if not isinstance(rating_text, str):
+        return None
+    match = re.fullmatch(r"\d+(?:\.\d+)?/5\s*\(([^()]+)\)", rating_text.strip())
+    if not match:
+        return None
+    count = parse_f95_review_count(match.group(1))
+    return count if count is not None and count > 0 else None
+
+
+def extract_f95_review_count(html: str) -> int | None:
+    """Return a verified count, or None when the page supplies no readable count."""
+    _, count = _rating_and_count_text(html)
+    return parse_f95_review_count(count)

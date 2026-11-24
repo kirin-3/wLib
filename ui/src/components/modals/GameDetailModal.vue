@@ -52,7 +52,7 @@ const updateDownloads = useUpdateDownloads();
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import ScreenshotLightbox from "../ScreenshotLightbox.vue";
 import { displayScreenshots, screenshotUrls, type ScreenshotUrls } from "../../utils/screenshots";
-import { defaultTargetLabel, hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion } from "../../utils/libraryGames";
+import { defaultTargetLabel, hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion, weightedRating } from "../../utils/libraryGames";
 import { LANGUAGE_TAG_PREFIX, languageNames, linkLabel, parseAliasLines, parseLinkLines } from "../../utils/threadDetails";
 import type {
   AutoLaunchRuntime,
@@ -419,6 +419,7 @@ let collectionRequestId = 0;
 
 // F95Zone rating (read-only, from scraper)
 const pageRating = ref("");
+const pageRatingCount = ref<number | null>(null);
 
 // Personal ratings (0-5 scale)
 const ratingGraphics = ref(0);
@@ -594,6 +595,7 @@ const syncReadonlyMetadata = (game: GameRecord | null) => {
   latestVersion.value = game?.latest_version || "";
   skippedVersion.value = game?.skipped_version || "";
   pageRating.value = game?.rating || "";
+  pageRatingCount.value = typeof game?.rating_count === "number" ? game.rating_count : null;
 };
 
 const sortLaunchTargets = (targets: LaunchTarget[]): LaunchTarget[] => {
@@ -641,28 +643,40 @@ const getEngineBadgeStyle = (value: EngineOption): string => {
 
 const selectedEngineStyle = computed(() => getEngineBadgeStyle(engine.value));
 
+const weightedRatingNote = computed(() => {
+  const score = weightedRating({ rating: pageRating.value, rating_count: pageRatingCount.value });
+  if (score === null || pageRatingCount.value === null) return "";
+  const count = pageRatingCount.value;
+  const noun = count === 1 ? "review" : "reviews";
+  return `Weighted ${score.toFixed(2)} from ${count.toLocaleString("en-US")} ${noun}`;
+});
+
 const summaryItems = computed(() => [
   {
     label: gameLcActive.value ? (props.game?.f95_url ? "Thread rating" : "LC rating") : "F95 Rating",
     value: pageRating.value || "Unavailable",
+    subtext: weightedRatingNote.value,
     accent: pageRating.value ? "color: var(--rating-accent)" : "",
     showStar: !!pageRating.value,
   },
   {
     label: "Your rating",
     value: averagePersonalRating.value === "—" ? "Not rated" : `${averagePersonalRating.value}/5`,
+    subtext: "",
     accent: averagePersonalRating.value === "—" ? "" : "color: var(--rating-accent)",
     showStar: averagePersonalRating.value !== "—",
   },
   {
     label: "Playtime",
     value: formatPlaytime(props.game?.playtime_seconds),
+    subtext: "",
     accent: "",
     showStar: false,
   },
   {
     label: "Last played",
     value: formatLastPlayed(props.game?.last_played),
+    subtext: "",
     accent: "",
     showStar: false,
   },
@@ -1111,7 +1125,7 @@ watch(
 );
 
 watch(
-  () => [props.game?.id, props.game?.latest_version, props.game?.rating, props.game?.skipped_version] as const,
+  () => [props.game?.id, props.game?.latest_version, props.game?.rating, props.game?.rating_count, props.game?.skipped_version] as const,
   ([gameId]) => {
     if (props.game && typeof gameId === "number" && gameId === lastSyncedId.value) {
       syncReadonlyMetadata(props.game);
@@ -2578,6 +2592,7 @@ const removeAttachment = async (name: string) => {
                 />
                 {{ item.value }}
               </p>
+              <p v-if="item.subtext" class="summary-subtext">{{ item.subtext }}</p>
             </div>
           </div>
 
@@ -4187,6 +4202,12 @@ const removeAttachment = async (name: string) => {
   height: 0.85rem;
   color: var(--rating-accent);
   flex-shrink: 0;
+}
+
+.summary-subtext {
+  margin: 0.2rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
 }
 
 .rating-label {

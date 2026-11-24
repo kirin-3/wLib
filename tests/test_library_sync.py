@@ -122,6 +122,44 @@ def test_finished_version_round_trips_between_libraries(tmp_path, monkeypatch):
     assert game["finished_version"] == "0.5"
 
 
+def test_rating_count_sync_round_trip_and_old_sync_backfill(tmp_path, monkeypatch):
+    location = MemoryLocation()
+    sync = manager(location)
+    game_id = database.add_game(
+        "Synced Rated",
+        "/synced.exe",
+        f95_url="https://f95zone.to/threads/synced-rated.810/",
+    )
+    database.update_game(
+        game_id,
+        {
+            "rating": "4.6/5 (120 reviews)",
+            "rating_count": 120,
+            "rating_updated_at": "2026-11-01T10:00:00+00:00",
+        },
+    )
+    assert sync.run()["state"] == "idle"
+    pushed = json.loads(location.data)
+    assert pushed["games"][0]["user_state"]["rating_count"] == 120
+
+    # A second library pulls and receives rating_count.
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "other-library.db"))
+    database.init_db()
+    other = manager(location)
+    assert other.run()["state"] == "idle"
+    game = database.get_all_games()[0]
+    assert game["rating_count"] == 120
+
+    # A remote update from an older wLib (no rating_count key) parses count from text.
+    old_remote = json.loads(location.data)
+    old_remote["sync"]["modified_at"] = "2026-11-25T12:00:00Z"
+    old_remote["games"][0]["user_state"]["rating"] = "4.7/5 (1,350 reviews)"
+    del old_remote["games"][0]["user_state"]["rating_count"]
+    location.change(old_remote)
+    assert other.run()["state"] == "idle"
+    assert database.get_all_games()[0]["rating_count"] == 1350
+
+
 def test_screenshots_round_trip_between_libraries(tmp_path, monkeypatch):
     location = MemoryLocation()
     sync = manager(location)

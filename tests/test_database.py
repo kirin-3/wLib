@@ -1929,6 +1929,79 @@ def test_f95_tags_and_rating_updated_at_migration_and_update():
     assert "rating_updated_at" in SYNC_GAME_COLUMNS
 
 
+def test_rating_count_update_and_clear():
+    game_id = add_game(
+        "Counted",
+        "/tmp/counted.exe",
+        f95_url="https://f95zone.to/threads/counted.101/",
+    )
+    assert game_id is not None
+    game = get_all_games()[0]
+    assert game["rating_count"] is None
+    assert "rating_count" in SYNC_GAME_COLUMNS
+
+    applied = update_game(
+        game_id,
+        {"rating": "4.6/5 (120 reviews)", "rating_count": 120},
+    )
+    assert applied == {"rating": "4.6/5 (120 reviews)", "rating_count": 120}
+    assert get_all_games()[0]["rating_count"] == 120
+
+    # An update without rating leaves rating_count untouched.
+    _ = update_game(game_id, {"title": "Counted v2"})
+    assert get_all_games()[0]["rating_count"] == 120
+
+    # An update with rating but no rating_count clears it to NULL.
+    cleared = update_game(game_id, {"rating": "4.5"})
+    assert cleared == {"rating": "4.5", "rating_count": None}
+    assert get_all_games()[0]["rating_count"] is None
+
+    # Explicit None and invalid/zero values store NULL.
+    _ = update_game(game_id, {"rating": "4.6/5 (50 reviews)", "rating_count": 50})
+    assert get_all_games()[0]["rating_count"] == 50
+    _ = update_game(game_id, {"rating_count": None})
+    assert get_all_games()[0]["rating_count"] is None
+    _ = update_game(game_id, {"rating_count": 0})
+    assert get_all_games()[0]["rating_count"] is None
+
+
+def test_rating_count_migration_backfills_from_f95_rating_text():
+    f95_with_count = add_game(
+        "F95 Counted",
+        "/tmp/f95_counted.exe",
+        f95_url="https://f95zone.to/threads/f95-counted.201/",
+        rating="4.6/5 (1,234 reviews)",
+    )
+    f95_no_count = add_game(
+        "F95 Plain",
+        "/tmp/f95_plain.exe",
+        f95_url="https://f95zone.to/threads/f95-plain.202/",
+        rating="4.3/5",
+    )
+    lc_only = add_game(
+        "LC Only",
+        "/tmp/lc_only.exe",
+        lc_url="https://lewdcorner.com/threads/lc-only.303/",
+        rating="4.8/5 (99 reviews)",
+    )
+    assert f95_with_count and f95_no_count and lc_only
+    init_db()
+    conn = get_connection()
+    try:
+        conn.execute("DROP TRIGGER sync_games_update")
+        conn.execute("ALTER TABLE games DROP COLUMN rating_count")
+        conn.commit()
+    finally:
+        conn.close()
+
+    init_db()
+
+    by_id = {game["id"]: game for game in get_all_games()}
+    assert by_id[f95_with_count]["rating_count"] == 1234
+    assert by_id[f95_no_count]["rating_count"] is None
+    assert by_id[lc_only]["rating_count"] is None
+
+
 def test_user_f95_tags_migration_and_update():
     game_id = add_game("Kept", "/tmp/kept.exe")
     assert game_id is not None
@@ -2864,6 +2937,13 @@ def test_filter_presets_keep_known_thread_states():
     # A preset saved before the Thread state section existed checks nothing.
     old = normalize_filter_preset({"name": "Old"})
     assert old is not None and old["filterThreadStates"] == []
+    assert old["filterMinRating"] == ""
+
+    rated = normalize_filter_preset({"name": "Good", "filterMinRating": "4.0"})
+    assert rated is not None and rated["filterMinRating"] == "4.0"
+    for invalid in ("3.0", "5.0", 4.0, None, ["4.0"]):
+        bad = normalize_filter_preset({"name": "Bad", "filterMinRating": invalid})
+        assert bad is not None and bad["filterMinRating"] == ""
 
 
 def test_caller_thread_states_trust_page_reads_only_for_lc_only_games():

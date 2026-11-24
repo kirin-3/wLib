@@ -641,16 +641,20 @@ def lc_threads_screenshots(thread_ids: Sequence[str]) -> dict[str, list[str]]:
     return _thread_screenshots("lc_threads", thread_ids)
 
 
-def f95_thread_ratings(thread_ids: Sequence[int]) -> tuple[str, dict[int, float]]:
-    """The catalog's ``built_at`` and its F95 rating for each known thread.
+def f95_thread_ratings(
+    thread_ids: Sequence[int],
+) -> tuple[str, dict[int, tuple[float, int | None]]]:
+    """The catalog's ``built_at`` and its F95 ``(rating, rating_count)`` for each known thread.
 
     Reads the catalog read-only, in chunks of 500 IDs. Returns ``("", {})``
     when the catalog is off, missing or unreadable. Rows with no rating are
-    left out; the caller decides which values to use.
+    left out; ``rating_count`` is a positive int or ``None`` (a catalog without
+    ``f95_thread_details.rating_count``, non-``ok`` details, or a 0 count all
+    give ``None``).
     """
     ids = _bindable_ids(thread_ids)
     path = Path(database.DB_PATH).parent / CATALOG_FILE
-    ratings: dict[int, float] = {}
+    ratings: dict[int, tuple[float, int | None]] = {}
     try:
         if database.get_setting("catalog_enabled") == "0" or not path.is_file():
             return "", {}
@@ -662,19 +666,55 @@ def f95_thread_ratings(thread_ids: Sequence[int]) -> tuple[str, dict[int, float]
                 ).fetchone(),
             )
             built_at = str(row[0] or "").strip() if row else ""
+            detail_columns = {
+                str(col[1])
+                for col in cast(
+                    list[tuple[object, ...]],
+                    conn.execute("PRAGMA table_info(f95_thread_details)").fetchall(),
+                )
+                if len(col) > 1 and col[1]
+            }
+            has_count = "rating_count" in detail_columns
             for offset in range(0, len(ids), 500):
                 chunk = ids[offset : offset + 500]
                 placeholders = ",".join("?" for _ in chunk)
-                rows = cast(
-                    list[tuple[object, object]],
-                    conn.execute(
-                        f"SELECT thread_id, rating FROM f95_threads WHERE thread_id IN ({placeholders}) AND rating IS NOT NULL",
-                        chunk,
-                    ).fetchall(),
-                )
-                for thread_id, rating in rows:
-                    if isinstance(thread_id, int) and isinstance(rating, int | float):
-                        ratings[thread_id] = float(rating)
+                if has_count:
+                    rows = cast(
+                        list[tuple[object, object, object]],
+                        conn.execute(
+                            "SELECT t.thread_id, t.rating, d.rating_count "
+                            + "FROM f95_threads t "
+                            + "LEFT JOIN f95_thread_details d "
+                            + "ON d.thread_id = t.thread_id AND d.status = 'ok' "
+                            + f"WHERE t.thread_id IN ({placeholders}) AND t.rating IS NOT NULL",
+                            chunk,
+                        ).fetchall(),
+                    )
+                    for thread_id, rating, raw_count in rows:
+                        if isinstance(thread_id, int) and isinstance(
+                            rating, int | float
+                        ):
+                            count = (
+                                raw_count
+                                if isinstance(raw_count, int)
+                                and not isinstance(raw_count, bool)
+                                and raw_count > 0
+                                else None
+                            )
+                            ratings[thread_id] = (float(rating), count)
+                else:
+                    rows_plain = cast(
+                        list[tuple[object, object]],
+                        conn.execute(
+                            f"SELECT thread_id, rating FROM f95_threads WHERE thread_id IN ({placeholders}) AND rating IS NOT NULL",
+                            chunk,
+                        ).fetchall(),
+                    )
+                    for thread_id, rating in rows_plain:
+                        if isinstance(thread_id, int) and isinstance(
+                            rating, int | float
+                        ):
+                            ratings[thread_id] = (float(rating), None)
     except (sqlite3.Error, OSError, ValueError):
         return "", {}
     return built_at, ratings

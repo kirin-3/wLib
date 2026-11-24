@@ -14,6 +14,7 @@ export type SortField =
   | "last_played"
   | "playtime_seconds"
   | "rating"
+  | "weighted_rating"
   | "own_rating";
 export type FilterCollection =
   | "All"
@@ -23,6 +24,8 @@ export type FilterCollection =
   | "Unplayed update"
   | "Recently played";
 export type FilterInstallState = "" | "installed" | "wishlist";
+export const FILTER_MIN_RATING_VALUES = ["", "3.5", "4.0", "4.5"] as const;
+export type FilterMinRating = (typeof FILTER_MIN_RATING_VALUES)[number];
 // The Thread state filter section: the developer's state of the game's thread.
 export const THREAD_STATE_FILTER_VALUES = ["finished", "onhold", "abandoned", "ongoing"] as const;
 export type ThreadStateFilter = (typeof THREAD_STATE_FILTER_VALUES)[number];
@@ -37,6 +40,7 @@ export interface FilterSections {
   presets: boolean;
   collections: boolean;
   status: boolean;
+  rating: boolean;
   threadStates: boolean;
   sources: boolean;
   engines: boolean;
@@ -52,6 +56,7 @@ export interface LibraryViewState {
   filterCollection: FilterCollection;
   filterStatuses: string[];
   filterInstallState: FilterInstallState;
+  filterMinRating: FilterMinRating;
   filterThreadStates: ThreadStateFilter[];
   filterSources: string[];
   filterEngines: string[];
@@ -73,6 +78,7 @@ export interface LibraryFilterPreset {
   filterCollection: FilterCollection;
   filterStatuses: string[];
   filterInstallState: FilterInstallState;
+  filterMinRating: FilterMinRating;
   filterThreadStates: ThreadStateFilter[];
   filterSources: string[];
   filterEngines: string[];
@@ -89,6 +95,7 @@ export type NormalizedFilterAndSort = Pick<
   | "filterCollection"
   | "filterStatuses"
   | "filterInstallState"
+  | "filterMinRating"
   | "filterThreadStates"
   | "filterSources"
   | "filterEngines"
@@ -126,6 +133,7 @@ export const DEFAULT_FILTER_SECTIONS: FilterSections = {
   presets: true,
   collections: true,
   status: true,
+  rating: true,
   threadStates: true,
   sources: true,
   engines: true,
@@ -141,6 +149,7 @@ export const DEFAULT_LIBRARY_VIEW_STATE: LibraryViewState = {
   filterCollection: "All",
   filterStatuses: [],
   filterInstallState: "",
+  filterMinRating: "",
   filterThreadStates: [],
   filterSources: [],
   filterEngines: [],
@@ -163,6 +172,7 @@ export const VALID_SORT_FIELDS = new Set<SortField>([
   "last_played",
   "playtime_seconds",
   "rating",
+  "weighted_rating",
   "own_rating",
 ]);
 const VALID_SORT_DIRECTIONS = new Set<SortDir>(["asc", "desc"]);
@@ -374,6 +384,10 @@ export const normalizeFilterSections = (value: unknown): FilterSections => {
       typeof source?.status === "boolean"
         ? source.status
         : DEFAULT_FILTER_SECTIONS.status,
+    rating:
+      typeof source?.rating === "boolean"
+        ? source.rating
+        : DEFAULT_FILTER_SECTIONS.rating,
     threadStates:
       typeof source?.threadStates === "boolean"
         ? source.threadStates
@@ -422,6 +436,11 @@ export const normalizeFilterAndSort = (
     source.filterInstallState === "installed" || source.filterInstallState === "wishlist"
       ? source.filterInstallState
       : "";
+  const filterMinRating: FilterMinRating =
+    typeof source.filterMinRating === "string" &&
+    (FILTER_MIN_RATING_VALUES as readonly string[]).includes(source.filterMinRating)
+      ? (source.filterMinRating as FilterMinRating)
+      : "";
   const filterThreadStates = [...new Set(normalizeStringArray(source.filterThreadStates))].filter(
     (value): value is ThreadStateFilter => (THREAD_STATE_FILTER_VALUES as readonly string[]).includes(value),
   );
@@ -464,6 +483,7 @@ export const normalizeFilterAndSort = (
     filterCollection,
     filterStatuses,
     filterInstallState,
+    filterMinRating,
     filterThreadStates,
     filterSources,
     filterEngines,

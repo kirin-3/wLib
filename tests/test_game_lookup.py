@@ -234,8 +234,34 @@ def test_f95_thread_ratings_reads_built_at_and_chunks(catalog, tmp_path):
     built_at, ratings = f95_thread_ratings([*range(1, 1201), 5000, 9999])
     assert built_at == "2026-11-01T12:00:00Z"
     assert len(ratings) == 1200
-    assert ratings[3] == pytest.approx(4.3)
+    assert ratings[3][0] == pytest.approx(4.3)
+    assert ratings[3][1] is None
     assert 5000 not in ratings and 9999 not in ratings
+
+    # Catalog with f95_thread_details.rating_count returns positive counts for ok rows.
+    catalog.executemany(
+        "INSERT INTO f95_thread_details (thread_id, fetched_at, status, rating_count) VALUES (?, 'x', ?, ?)",
+        [
+            (1, "ok", 85),
+            (2, "ok", 0),
+            (3, "ok", None),
+            (4, "missing", 99),
+        ],
+    )
+    catalog.commit()
+    _, with_counts = f95_thread_ratings([1, 2, 3, 4, 5])
+    assert with_counts[1] == (pytest.approx(4.1), 85)
+    assert with_counts[2] == (pytest.approx(4.2), None)
+    assert with_counts[3] == (pytest.approx(4.3), None)
+    assert with_counts[4] == (pytest.approx(4.4), None)
+    assert with_counts[5] == (pytest.approx(4.5), None)
+
+    # An older catalog snapshot without rating_count returns None counts.
+    catalog.execute("ALTER TABLE f95_thread_details DROP COLUMN rating_count")
+    catalog.commit()
+    _, old_catalog_ratings = f95_thread_ratings([1, 2])
+    assert old_catalog_ratings[1] == (pytest.approx(4.1), None)
+    assert old_catalog_ratings[2] == (pytest.approx(4.2), None)
 
     database.update_setting("catalog_enabled", "0")
     assert f95_thread_ratings([3]) == ("", {})

@@ -66,6 +66,14 @@ def test_manual_add_uses_sandbox_default(default):
     assert get_all_games()[0]["sandbox_enabled"] == int(default == "true")
 
 
+def test_manual_add_with_typed_rating_has_no_review_count():
+    result = Api().add_game("Typed rating", "/game", rating="4.5")
+    assert result["success"] is True
+    game = get_all_games()[0]
+    assert game["rating"] == "4.5"
+    assert game["rating_count"] is None
+
+
 def test_sandbox_status_endpoints(monkeypatch):
     calls = []
     status = {

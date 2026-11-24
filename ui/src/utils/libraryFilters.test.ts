@@ -29,3 +29,12 @@ test('thread state chips follow install state and name the state', () => {
   assert.deepEqual(chips.map(c => c.label), ['Install state: Installed', 'Thread state: Finished', 'Thread state: On hold']);
   assert.deepEqual(chips.map(c => c.key), ['install:installed', 'thread:finished', 'thread:onhold']);
 });
+
+test('rating chip shows weighted rating step after install state', () => {
+  const chips = activeFilterChips({ statuses: [], install: 'installed', minRating: '4.0', threadStates: ['finished'], sources: [], engines: [], tags: [], collection: 'All', statusLabels: {}, sourceLabels: {} });
+  assert.deepEqual(chips.map(c => c.label), ['Install state: Installed', 'Weighted rating: 4.0+', 'Thread state: Finished']);
+  assert.deepEqual(chips.map(c => c.key), ['install:installed', 'rating:4.0', 'thread:finished']);
+  assert.equal(chips[1]?.kind, 'rating');
+  assert.equal(chips[1]?.value, '4.0');
+  assert.equal(chips[1]?.excluded, false);
+});

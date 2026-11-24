@@ -611,3 +611,67 @@ test("the Thread state section matches any checked recorded state", async () => 
   assert.deepEqual(pick("finished", "abandoned"), [finished, abandoned]);
   assert.deepEqual(pick(), all);
 });
+
+test("weightedRating calculates Bayesian average and returns null for missing or invalid inputs", async () => {
+  const { F95_RATING_PRIOR_MEAN, F95_RATING_PRIOR_REVIEWS, weightedRating } = await import("./libraryGames.ts");
+  assert.equal(F95_RATING_PRIOR_MEAN, 3.2);
+  assert.equal(F95_RATING_PRIOR_REVIEWS, 25);
+
+  // Spec examples: 4.6 with 1,200 reviews -> ~4.57; 5.0 with 5 reviews -> 3.50.
+  const many = weightedRating({ rating: "4.6/5 (1,200 reviews)", rating_count: 1200 });
+  assert.ok(many !== null && Math.abs(many - 4.57142857) < 1e-6);
+  assert.equal(many?.toFixed(2), "4.57");
+
+  const few = weightedRating({ rating: "5.0/5 (5 reviews)", rating_count: 5 });
+  assert.ok(few !== null && Math.abs(few - 3.5) < 1e-9);
+  assert.equal(few?.toFixed(2), "3.50");
+
+  // No count, zero count, negative count, missing rating, or rating out of range -> null.
+  assert.equal(weightedRating({ rating: "4.8/5", rating_count: null }), null);
+  assert.equal(weightedRating({ rating: "4.8/5" }), null);
+  assert.equal(weightedRating({ rating: "4.8/5", rating_count: 0 }), null);
+  assert.equal(weightedRating({ rating: "4.8/5", rating_count: -10 }), null);
+  assert.equal(weightedRating({ rating: "", rating_count: 100 }), null);
+  assert.equal(weightedRating({ rating: "0/5", rating_count: 100 }), null);
+  assert.equal(weightedRating({ rating: "-1/5", rating_count: 100 }), null);
+  assert.equal(weightedRating({ rating: "5.1/5", rating_count: 100 }), null);
+});
+
+test("weighted_rating sort puts higher weighted ratings first on desc, lower first on asc, and nulls last in both", () => {
+  const many: GameRecord = { id: 1, title: "Many", exe_path: "", rating: "4.6/5 (1,200 reviews)", rating_count: 1200 };
+  const few: GameRecord = { id: 2, title: "Few", exe_path: "", rating: "5.0/5 (5 reviews)", rating_count: 5 };
+  const noCount: GameRecord = { id: 3, title: "No Count", exe_path: "", rating: "4.9/5", rating_count: null };
+  const unrated: GameRecord = { id: 4, title: "Unrated", exe_path: "" };
+
+  const desc = [unrated, few, noCount, many].sort((a, b) => compareLibraryGames(a, b, "weighted_rating", "desc"));
+  assert.deepEqual(desc.map((g) => g.title), ["Many", "Few", "No Count", "Unrated"]);
+
+  const asc = [unrated, many, noCount, few].sort((a, b) => compareLibraryGames(a, b, "weighted_rating", "asc"));
+  assert.deepEqual(asc.map((g) => g.title), ["Few", "Many", "No Count", "Unrated"]);
+});
+
+test("matchesMinRatingFilter checks weighted rating threshold, exact value, missing count, and combines with tags", async () => {
+  const { matchesMinRatingFilter } = await import("./libraryGames.ts");
+  // Weighted: (120 * 4.6 + 25 * 3.2) / 145 = 4.3586... (above 4.0)
+  const above = { rating: "4.6/5 (120 reviews)", rating_count: 120, tags: "sandbox, 3dcg" };
+  // Weighted: (25 * 4.8 + 25 * 3.2) / 50 = 4.0 exactly
+  const exact = { rating: "4.8/5 (25 reviews)", rating_count: 25, tags: "sandbox" };
+  // Weighted: (100 * 4.1 + 25 * 3.2) / 125 = 3.92 (below 4.0, above 3.5)
+  const below = { rating: "4.1/5 (100 reviews)", rating_count: 100, tags: "sandbox" };
+  // No review count -> no weighted rating
+  const noCount = { rating: "4.9/5", rating_count: null, tags: "sandbox" };
+  // Above 4.0 but different tag
+  const otherTag = { rating: "4.6/5 (120 reviews)", rating_count: 120, tags: "vn" };
+
+  assert.equal(matchesMinRatingFilter(above, "4.0"), true);
+  assert.equal(matchesMinRatingFilter(exact, "4.0"), true);
+  assert.equal(matchesMinRatingFilter(below, "4.0"), false);
+  assert.equal(matchesMinRatingFilter(below, "3.5"), true);
+  assert.equal(matchesMinRatingFilter(noCount, "3.5"), false);
+  assert.equal(matchesMinRatingFilter(noCount, ""), true);
+
+  const combined = [above, exact, below, noCount, otherTag].filter(
+    (game) => matchesMinRatingFilter(game, "4.0") && matchesTagFilter(game, ["sandbox"]),
+  );
+  assert.deepEqual(combined, [above, exact]);
+});

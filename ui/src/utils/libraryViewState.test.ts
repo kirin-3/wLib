@@ -142,6 +142,7 @@ test("readLibraryViewState migrates legacy keys when no blob exists", () => {
     presets: true,
     collections: false,
     status: true,
+    rating: true,
     threadStates: true,
     sources: true,
     engines: true,
@@ -239,6 +240,7 @@ test("readLibraryViewState prefers current blob and prunes unsupported engines a
     presets: true,
     collections: true,
     status: false,
+    rating: true,
     threadStates: true,
     sources: true,
     engines: false,
@@ -288,6 +290,7 @@ test("normalizeFilterPreset keeps a valid preset and drops unknown values", () =
     filterCollection: "Favorites",
     filterStatuses: ["Playing"],
     filterInstallState: "installed",
+    filterMinRating: "",
     filterThreadStates: [],
     filterEngines: ["Ren'Py"],
     filterTags: ["dating-sim"],
@@ -318,6 +321,7 @@ test("normalizeFilterPreset keeps a valid preset and drops unknown values", () =
     filterCollection: "All",
     filterStatuses: ["Playing", "Ghost"],
     filterInstallState: "",
+    filterMinRating: "",
     filterThreadStates: [],
     filterEngines: ["Ren'Py"],
     filterTags: ["dating-sim"],
@@ -535,7 +539,7 @@ test("source filters validate fixed keys and default for older state and presets
   assert.deepEqual(normalizeFilterPreset({ name: "Old" })?.filterSources, []);
   assert.deepEqual(normalizeFilterPreset({ name: "New", filterSources: ["dlsite", "unknown"] })?.filterSources, ["dlsite"]);
   assert.deepEqual(normalizeLibraryViewState({ filterSections: { presets: false, collections: false, status: true, engines: false, tags: true } }).filterSections,
-    { presets: false, collections: false, status: true, threadStates: true, sources: true, engines: false, tags: true });
+    { presets: false, collections: false, status: true, rating: true, threadStates: true, sources: true, engines: false, tags: true });
 });
 
 test("sort menu choice uses the field's default direction and keeps the active field", () => {
@@ -628,4 +632,53 @@ test("thread state filters are remembered and kept in presets", () => {
   assert.deepEqual(normalizeFilterPreset({ name: "Old" })?.filterThreadStates, []);
   // The short-lived Quick filter collections are not valid collections.
   assert.equal(normalizeFilterAndSort({ filterCollection: "Finished threads" }).filterCollection, "All");
+});
+
+test("weighted_rating sort defaults to descending and persists in view state", () => {
+  assert.equal(defaultSortDir("weighted_rating"), "desc");
+  const storage = new MemoryStorage();
+  saveLibraryViewState(storage, normalizeLibraryViewState({ sortBy: "weighted_rating", sortDir: "desc" }));
+  const restored = readLibraryViewState(storage).state;
+  assert.equal(restored.sortBy, "weighted_rating");
+  assert.equal(restored.sortDir, "desc");
+});
+
+test("filterMinRating and rating section validate four steps, persist, and default for older state and presets", () => {
+  const storage = new MemoryStorage();
+  // Saved state with a valid step and collapsed rating section persists.
+  saveLibraryViewState(
+    storage,
+    normalizeLibraryViewState({
+      filterMinRating: "4.5",
+      filterSections: { ...DEFAULT_FILTER_SECTIONS, rating: false },
+    }),
+  );
+  const restored = readLibraryViewState(storage).state;
+  assert.equal(restored.filterMinRating, "4.5");
+  assert.equal(restored.filterSections.rating, false);
+
+  // Older state without filterMinRating or rating section defaults to "" and expanded.
+  storage.setItem(
+    LIBRARY_VIEW_STATE_STORAGE_KEY,
+    JSON.stringify({
+      version: 1,
+      layoutMode: "grid",
+      filterCollection: "Favorites",
+      filterSections: { collections: false, status: true, threadStates: true, sources: true, engines: true, tags: true },
+    }),
+  );
+  const oldState = readLibraryViewState(storage).state;
+  assert.equal(oldState.filterCollection, "Favorites");
+  assert.equal(oldState.filterMinRating, "");
+  assert.equal(oldState.filterSections.rating, true);
+
+  // Invalid steps ("3.0", numbers, etc.) are dropped to "".
+  for (const invalid of ["3.0", "5.0", "4.0+", 4.0, null, ["4.0"]]) {
+    assert.equal(normalizeLibraryViewState({ filterMinRating: invalid }).filterMinRating, "");
+    assert.equal(normalizeFilterPreset({ name: "Bad", filterMinRating: invalid })?.filterMinRating, "");
+  }
+
+  // Presets keep valid steps and default to "" when saved before the rating filter existed.
+  assert.equal(normalizeFilterPreset({ name: "Good ones", filterMinRating: "4.0" })?.filterMinRating, "4.0");
+  assert.equal(normalizeFilterPreset({ name: "Old preset" })?.filterMinRating, "");
 });

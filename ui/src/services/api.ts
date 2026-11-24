@@ -321,6 +321,7 @@ export interface BulkUpdateResultItem {
 export interface RefreshInfoPrevious {
   cover_image_path?: string;
   rating?: string;
+  rating_count?: number | null;
   rating_updated_at?: string;
   tags?: string;
   f95_tags?: string | null;
@@ -1284,6 +1285,8 @@ export interface GameRecord {
   cover_image?: string;
   tags?: string | string[];
   rating?: string;
+  // Positive F95 review count, or null when unknown.
+  rating_count?: number | null;
   // When the F95 rating was read (UTC ISO); "" when unknown.
   rating_updated_at?: string;
   developer?: string;

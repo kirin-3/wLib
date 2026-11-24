@@ -87,6 +87,7 @@ import {
   type SortState,
   type FilterCollection,
   type FilterInstallState,
+  type FilterMinRating,
   type FilterSections,
   type ThreadStateFilter,
   THREAD_STATE_FILTER_LABELS,
@@ -135,6 +136,7 @@ import {
   isUpdateSkipped,
   hasNewSinceFinished,
   matchesThreadStateFilter,
+  matchesMinRatingFilter,
   isWishlisted,
   matchesGameSearch,
   matchesEngineFilter,
@@ -358,6 +360,7 @@ function openTagColorPicker(event: MouseEvent | KeyboardEvent, tag: string) {
   tagColorPicker.value = { tag, anchor: event.currentTarget as HTMLElement };
 }
 const filterInstallState = ref<FilterInstallState>(DEFAULT_LIBRARY_VIEW_STATE.filterInstallState);
+const filterMinRating = ref<FilterMinRating>(DEFAULT_LIBRARY_VIEW_STATE.filterMinRating);
 const filterThreadStates = ref<ThreadStateFilter[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterThreadStates]);
 // The Thread state section's options, in the order of the stored values.
 const threadStateIcons: Record<ThreadStateFilter, typeof IconCircleCheck> = {
@@ -475,6 +478,7 @@ const sortOptions: Array<{ key: SortField; label: string }> = [
   { key: "last_played", label: "Recent" },
   { key: "playtime_seconds", label: "Playtime" },
   { key: "rating", label: "F95 rating" },
+  { key: "weighted_rating", label: "Weighted rating" },
   { key: "own_rating", label: "My rating" },
 ];
 // List view can also sort by these columns; the sort button names them when they are active.
@@ -613,13 +617,14 @@ const activeFilterCount = computed(
     (filterCollection.value !== "All" ? 1 : 0) +
     (filterStatuses.value.length > 0 ? 1 : 0) +
     (filterInstallState.value ? 1 : 0) +
+    (filterMinRating.value ? 1 : 0) +
     (filterThreadStates.value.length > 0 ? 1 : 0) +
     (filterSources.value.length || filterExcludedSources.value.length ? 1 : 0) +
     (filterEngines.value.length || filterExcludedEngines.value.length ? 1 : 0) +
     (filterTags.value.length || filterExcludedTags.value.length ? 1 : 0),
 );
 const activeFilterChips = computed(() => buildFilterChips({
-  statuses: filterStatuses.value, install: filterInstallState.value, sources: filterSources.value,
+  statuses: filterStatuses.value, install: filterInstallState.value, minRating: filterMinRating.value, sources: filterSources.value,
   threadStates: filterThreadStates.value,
   engines: filterEngines.value, tags: filterTags.value, collection: filterCollection.value,
   excludedSources: filterExcludedSources.value, excludedEngines: filterExcludedEngines.value,
@@ -631,6 +636,7 @@ const removeFilterChip = (chip: FilterChip) => {
   switch (chip.kind) {
     case "status": filterStatuses.value = removeFilterValue(filterStatuses.value, chip.value); break;
     case "install": filterInstallState.value = ""; break;
+    case "rating": filterMinRating.value = ""; break;
     case "thread": filterThreadStates.value = filterThreadStates.value.filter((value) => value !== chip.value); break;
     case "source":
       if (chip.excluded) filterExcludedSources.value = removeFilterValue(filterExcludedSources.value, chip.value);
@@ -651,6 +657,7 @@ const clearFilters = () => {
   searchQuery.value = "";
   filterStatuses.value = [];
   filterInstallState.value = "";
+  filterMinRating.value = "";
   filterThreadStates.value = [];
   clearSourceFilters();
   clearEngineFilters();
@@ -678,6 +685,7 @@ const applyLibraryViewState = (state: LibraryViewState) => {
   filterCollection.value = state.filterCollection;
   filterStatuses.value = [...state.filterStatuses];
   filterInstallState.value = state.filterInstallState;
+  filterMinRating.value = state.filterMinRating;
   filterThreadStates.value = [...state.filterThreadStates];
   filterSources.value = [...state.filterSources];
   filterEngines.value = [...state.filterEngines];
@@ -699,6 +707,7 @@ const buildLibraryViewState = (): LibraryViewState =>
     filterCollection: filterCollection.value,
     filterStatuses: filterStatuses.value,
     filterInstallState: filterInstallState.value,
+    filterMinRating: filterMinRating.value,
     filterThreadStates: filterThreadStates.value,
     filterSources: filterSources.value,
     filterEngines: filterEngines.value,
@@ -785,6 +794,8 @@ const filteredGames = computed(() => {
     result = result.filter(isWishlisted);
   if (filterInstallState.value === "installed")
     result = result.filter((game) => !isWishlisted(game));
+  if (filterMinRating.value)
+    result = result.filter((game) => matchesMinRatingFilter(game, filterMinRating.value));
   result = result.filter(
     (game) =>
       matchesSourceFilter(game, filterSources.value, filterExcludedSources.value) &&
@@ -1316,6 +1327,7 @@ const applyFilterPreset = (preset: LibraryFilterPreset) => {
   filterCollection.value = normalized.filterCollection;
   filterStatuses.value = [...normalized.filterStatuses];
   filterInstallState.value = normalized.filterInstallState;
+  filterMinRating.value = normalized.filterMinRating;
   filterThreadStates.value = [...normalized.filterThreadStates];
   filterSources.value = [...normalized.filterSources];
   filterEngines.value = [...normalized.filterEngines];
@@ -1356,6 +1368,7 @@ const saveFilterPreset = async () => {
     filterCollection: filterCollection.value,
     filterStatuses: [...filterStatuses.value],
     filterInstallState: filterInstallState.value,
+    filterMinRating: filterMinRating.value,
     filterThreadStates: [...filterThreadStates.value],
     filterSources: [...filterSources.value],
     filterEngines: [...filterEngines.value],
@@ -2064,6 +2077,7 @@ watch(
     filterCollection,
     filterStatuses,
     filterInstallState,
+    filterMinRating,
     filterThreadStates,
     filterSources,
     filterEngines,
@@ -2310,6 +2324,30 @@ onUnmounted(() => {
               <option value="wishlist">Wishlist</option>
             </select>
           </label>
+        </div>
+
+        <div class="p-6 pb-2 pt-4">
+          <button
+            @click="toggleFilterSection('rating')"
+            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
+            style="color: var(--text-muted)"
+            :aria-expanded="filterSections.rating"
+          >
+            <span>F95 rating</span>
+            <span class="text-sm">{{ filterSections.rating ? "▾" : "▸" }}</span>
+          </button>
+          <div v-show="filterSections.rating" class="mt-3 px-2">
+            <select
+              v-model="filterMinRating"
+              aria-label="Minimum weighted F95 rating"
+              class="library-search-input w-full rounded-lg px-3 py-2 text-sm normal-case tracking-normal font-medium"
+            >
+              <option value="">Any</option>
+              <option value="3.5">3.5+ weighted</option>
+              <option value="4.0">4.0+ weighted</option>
+              <option value="4.5">4.5+ weighted</option>
+            </select>
+          </div>
         </div>
 
         <div class="p-6 pb-2 pt-4">

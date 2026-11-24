@@ -468,6 +468,7 @@ def test_library_filter_presets_round_trip_through_backup(tmp_path):
             "filterCollection": "Favorites",
             "filterStatuses": ["Playing"],
             "filterInstallState": "installed",
+            "filterMinRating": "",
             "filterThreadStates": [],
             "filterSources": ["dlsite"],
             "filterEngines": ["Ren'Py"],
@@ -1694,6 +1695,98 @@ def test_f95_tags_and_rating_updated_at_round_trip(tmp_path):
     assert game["rating_updated_at"] == "2026-11-01T10:00:00+00:00"
 
 
+def test_rating_count_export_import_and_old_export_backfill(tmp_path):
+    game_id = add_game("Counted", "", f95_url="https://f95zone.to/threads/counted.455/")
+    assert game_id is not None
+    _ = update_game(
+        game_id,
+        {
+            "rating": "4.6/5 (120 reviews)",
+            "rating_count": 120,
+            "rating_updated_at": "2026-11-01T10:00:00+00:00",
+        },
+    )
+
+    api = Api()
+    exported = api.export_library_backup(destination_path=str(tmp_path / "rc.json"))
+    assert exported["success"] is True
+    path = Path(str(exported["path"]))
+    backup = json.loads(path.read_text(encoding="utf-8"))
+    assert backup["games"][0]["user_state"]["rating_count"] == 120
+
+    # Clearing locally and re-importing restores the count.
+    _ = update_game(
+        game_id, {"rating": "", "rating_count": None, "rating_updated_at": ""}
+    )
+    assert api.import_library_backup(
+        str(path), {"sections": [SECTION_METADATA, SECTION_USER_STATE]}
+    )["success"]
+    game = get_all_games()[0]
+    assert game["rating"] == "4.6/5 (120 reviews)"
+    assert game["rating_count"] == 120
+
+    # Explicit null rating_count in a new export is kept as NULL (not parsed from text).
+    null_path = write_backup(
+        tmp_path / "explicit_null.json",
+        base_backup(
+            [
+                {
+                    "metadata": {
+                        "title": "Explicit Null",
+                        "f95_url": "https://f95zone.to/threads/explicit-null.456/",
+                    },
+                    "user_state": {
+                        "rating": "4.2/5 (60 reviews)",
+                        "rating_count": None,
+                    },
+                }
+            ]
+        ),
+    )
+    assert api.import_library_backup(
+        str(null_path), {"sections": [SECTION_METADATA, SECTION_USER_STATE]}
+    )["success"]
+    by_title = {g["title"]: g for g in get_all_games()}
+    assert by_title["Explicit Null"]["rating_count"] is None
+
+    # Old export without rating_count key parses F95 rating text; LC-only stays NULL.
+    old_path = write_backup(
+        tmp_path / "old_rating.json",
+        base_backup(
+            [
+                {
+                    "metadata": {
+                        "title": "Old F95",
+                        "f95_url": "https://f95zone.to/threads/old-f95.457/",
+                    },
+                    "user_state": {"rating": "4.2/5 (60 reviews)"},
+                },
+                {
+                    "metadata": {
+                        "title": "Old F95 Plain",
+                        "f95_url": "https://f95zone.to/threads/old-f95-plain.458/",
+                    },
+                    "user_state": {"rating": "4.3/5"},
+                },
+                {
+                    "metadata": {
+                        "title": "Old LC",
+                        "lc_url": "https://lewdcorner.com/threads/old-lc.459/",
+                    },
+                    "user_state": {"rating": "4.8/5 (99 reviews)"},
+                },
+            ]
+        ),
+    )
+    assert api.import_library_backup(
+        str(old_path), {"sections": [SECTION_METADATA, SECTION_USER_STATE]}
+    )["success"]
+    by_title = {g["title"]: g for g in get_all_games()}
+    assert by_title["Old F95"]["rating_count"] == 60
+    assert by_title["Old F95 Plain"]["rating_count"] is None
+    assert by_title["Old LC"]["rating_count"] is None
+
+
 def test_old_export_without_f95_tags_imports_as_null(tmp_path):
     api = Api()
     path = write_backup(
@@ -1923,6 +2016,42 @@ def test_apply_merge_mode_fill_missing_fills_blanks_and_keeps_values():
     assert [target["label"] for target in list_game_launch_targets(game_id)] == [
         "Existing"
     ]
+
+
+def test_apply_merge_mode_fill_missing_keeps_review_count_with_its_rating():
+    other_url = "https://f95zone.to/threads/other-rating.996/"
+    same_url = "https://f95zone.to/threads/same-rating.997/"
+    other_id = add_game("Other", "", f95_url=other_url)
+    same_id = add_game("Same", "", f95_url=same_url)
+    assert other_id is not None and same_id is not None
+    _ = update_game(other_id, {"rating": "4.3/5"})
+    _ = update_game(same_id, {"rating": "4.6/5 (120 reviews)"})
+
+    payload = base_backup(
+        [
+            {
+                "metadata": {"title": "Other", "f95_url": other_url},
+                SECTION_USER_STATE: {
+                    "rating": "4.6/5 (120 reviews)",
+                    "rating_count": 120,
+                },
+            },
+            {
+                "metadata": {"title": "Same", "f95_url": same_url},
+                SECTION_USER_STATE: {
+                    "rating": "4.6/5 (120 reviews)",
+                    "rating_count": 120,
+                },
+            },
+        ]
+    )
+    _ = apply_library_backup(
+        payload, {"sections": [SECTION_USER_STATE]}, merge_mode="fill_missing"
+    )
+    by_title = {game["title"]: game for game in get_all_games()}
+    assert by_title["Other"]["rating"] == "4.3/5"
+    assert by_title["Other"]["rating_count"] is None
+    assert by_title["Same"]["rating_count"] == 120
 
 
 def test_apply_merge_mode_fill_missing_keeps_local_play_sessions():
@@ -2345,6 +2474,7 @@ def test_import_settings_preserves_json_types(tmp_path):
             "filterCollection": "Favorites",
             "filterStatuses": ["Playing"],
             "filterInstallState": "installed",
+            "filterMinRating": "",
             "filterThreadStates": [],
             "filterSources": [],
             "filterEngines": ["Ren'Py"],

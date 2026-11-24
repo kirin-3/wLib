@@ -271,3 +271,38 @@ def test_a_read_that_changes_no_state_does_not_bump_the_sync_time():
     assert database.get_setting("sync_local_modified_at") == before
     _ = database.update_game(game_id, {"thread_abandoned": 1})
     assert database.get_setting("sync_local_modified_at") != before
+
+
+def test_lc_catalog_rating_fill_clears_rating_count(rating_catalog, monkeypatch):
+    _add_thread, _sha = rating_catalog
+    database.update_setting("lc_enabled", "1")
+    game_id = database.add_game(
+        "LC Rated",
+        "",
+        lc_url="https://lewdcorner.com/threads/lc-rated.50/",
+    )
+    assert game_id is not None
+    # Simulate an existing rating + count whose baseline matches the current rating
+    # so the LC catalog replaces it with its own rating.
+    with database.get_connection() as conn:
+        conn.execute(
+            f"UPDATE games SET rating = ?, rating_count = ?, {BASELINE_COLUMN} = ? WHERE id = ?",
+            (
+                "4.6/5 (120 reviews)",
+                120,
+                json.dumps({"rating": "4.6/5 (120 reviews)"}),
+                game_id,
+            ),
+        )
+        conn.commit()
+    monkeypatch.setattr(
+        "core.game_lookup.lc_thread_entries",
+        lambda _ids: {"50": {"rating": "4.3/5"}},
+    )
+    api = Api()
+    monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
+
+    assert api._fill_thread_details_from_catalog([game_id]) == 1
+    game = _row(game_id)
+    assert game["rating"] == "4.3/5"
+    assert game["rating_count"] is None

@@ -245,67 +245,149 @@ def rating_catalog(started, tmp_path, monkeypatch):
     sha = {"value": "sha-1"}
     monkeypatch.setattr(CatalogClient, "installed_sha256", lambda self: sha["value"])
 
-    def add_thread(thread_id: int, rating: float | None) -> None:
+    def add_thread(
+        thread_id: int,
+        rating: float | None,
+        rating_count: int | None = None,
+        detail_status: str = "ok",
+    ) -> None:
         with sqlite3.connect(tmp_path / "catalog.db") as catalog:
             catalog.execute(
                 "INSERT OR REPLACE INTO f95_threads (thread_id, title, rating, url, first_seen, last_seen) VALUES (?, 'T', ?, 'u', '', '')",
                 (thread_id, rating),
             )
+            if rating_count is not None:
+                catalog.execute(
+                    "INSERT OR REPLACE INTO f95_thread_details (thread_id, fetched_at, status, rating_count) VALUES (?, ?, ?, ?)",
+                    (thread_id, BUILT_AT, detail_status, rating_count),
+                )
 
     return add_thread, sha
 
 
-def _rated_game(thread_id: int, rating: str = "", read_at: str = "") -> int:
+def _rated_game(
+    thread_id: int,
+    rating: str = "",
+    read_at: str = "",
+    rating_count: int | None = None,
+) -> int:
     from core import database
 
     game_id = database.add_game("G", "", f"https://f95zone.to/threads/{thread_id}/")
     assert game_id is not None
-    _ = database.update_game(game_id, {"rating": rating, "rating_updated_at": read_at})
+    _ = database.update_game(
+        game_id,
+        {
+            "rating": rating,
+            "rating_count": rating_count,
+            "rating_updated_at": read_at,
+        },
+    )
     return game_id
 
 
-def _rating(game_id: int) -> tuple[object, object]:
+def _rating(game_id: int) -> tuple[object, object, object]:
     from core import database
 
     game = database.get_game(game_id)
     assert game is not None
-    return game["rating"], game["rating_updated_at"]
+    return game["rating"], game["rating_count"], game["rating_updated_at"]
 
 
 def test_catalog_fill_follows_the_rating_rules(rating_catalog, monkeypatch):
     add_thread, _sha = rating_catalog
     empty = _rated_game(1)
-    newer_page = _rated_game(2, "4.7/5 (130 reviews)", "2026-11-02T08:00:00+00:00")
-    older_different = _rated_game(3, "4.4/5 (80 reviews)", "2026-10-01T08:00:00+00:00")
-    older_same = _rated_game(4, "4.6/5 (120 reviews)", "2026-10-01T08:00:00+00:00")
+    empty_with_count = _rated_game(8)
+    empty_singular = _rated_game(9)
+    empty_thousands = _rated_game(10)
+    newer_page = _rated_game(2, "4.7/5 (130 reviews)", "2026-11-02T08:00:00+00:00", 130)
+    older_different = _rated_game(
+        3, "4.4/5 (80 reviews)", "2026-10-01T08:00:00+00:00", 80
+    )
+    older_same_no_cat_count = _rated_game(
+        4, "4.6/5 (120 reviews)", "2026-10-01T08:00:00+00:00", 120
+    )
+    missing_count_same_rating = _rated_game(
+        11, "4.6/5", "2026-10-01T08:00:00+00:00", None
+    )
+    newer_count_same_rating = _rated_game(
+        12, "4.6/5 (120 reviews)", "2026-10-01T08:00:00+00:00", 120
+    )
+    same_rating_and_count = _rated_game(
+        13, "4.6/5 (120 reviews)", "2026-10-01T08:00:00+00:00", 120
+    )
+    zero_catalog_count = _rated_game(14)
     no_time = _rated_game(5, "3.0/5")
     zero = _rated_game(6)
-    missing = _rated_game(7, "4.0/5 (5 reviews)")
-    for thread_id, rating in (
-        (1, 4.3),
-        (2, 4.6),
-        (3, 4.6),
-        (4, 4.62),
-        (5, 3.5),
-        (6, 0.0),
-        (7, None),
+    missing = _rated_game(7, "4.0/5 (5 reviews)", "", 5)
+
+    for thread_id, rating, count in (
+        (1, 4.3, None),
+        (8, 4.3, 85),
+        (9, 4.1, 1),
+        (10, 4.6, 1234),
+        (2, 4.6, 125),
+        (3, 4.6, None),
+        (4, 4.62, None),
+        (11, 4.6, 140),
+        (12, 4.6, 150),
+        (13, 4.6, 120),
+        (14, 4.2, 0),
+        (5, 3.5, None),
+        (6, 0.0, None),
+        (7, None, None),
     ):
-        add_thread(thread_id, rating)
+        add_thread(thread_id, rating, count)
 
     api = Api()
     refreshed: list[int] = []
     monkeypatch.setattr(api, "_refresh_synced_library", lambda: refreshed.append(1))
 
-    assert api._fill_ratings_from_catalog() == 3
-    assert _rating(empty) == ("4.3/5", BUILT_AT)
-    assert _rating(newer_page) == ("4.7/5 (130 reviews)", "2026-11-02T08:00:00+00:00")
-    assert _rating(older_different) == ("4.6/5", BUILT_AT)
-    assert _rating(older_same) == ("4.6/5 (120 reviews)", "2026-10-01T08:00:00+00:00")
-    assert _rating(no_time) == ("3.5/5", BUILT_AT)
-    assert _rating(zero) == ("", "")
-    assert _rating(missing) == ("4.0/5 (5 reviews)", "")
+    assert api._fill_ratings_from_catalog() == 9
+    assert _rating(empty) == ("4.3/5", None, BUILT_AT)
+    assert _rating(empty_with_count) == ("4.3/5 (85 reviews)", 85, BUILT_AT)
+    assert _rating(empty_singular) == ("4.1/5 (1 review)", 1, BUILT_AT)
+    assert _rating(empty_thousands) == ("4.6/5 (1,234 reviews)", 1234, BUILT_AT)
+    assert _rating(newer_page) == (
+        "4.7/5 (130 reviews)",
+        130,
+        "2026-11-02T08:00:00+00:00",
+    )
+    assert _rating(older_different) == ("4.6/5", None, BUILT_AT)
+    assert _rating(older_same_no_cat_count) == (
+        "4.6/5 (120 reviews)",
+        120,
+        "2026-10-01T08:00:00+00:00",
+    )
+    assert _rating(missing_count_same_rating) == (
+        "4.6/5 (140 reviews)",
+        140,
+        BUILT_AT,
+    )
+    assert _rating(newer_count_same_rating) == ("4.6/5 (150 reviews)", 150, BUILT_AT)
+    assert _rating(same_rating_and_count) == (
+        "4.6/5 (120 reviews)",
+        120,
+        "2026-10-01T08:00:00+00:00",
+    )
+    assert _rating(zero_catalog_count) == ("4.2/5", None, BUILT_AT)
+    assert _rating(no_time) == ("3.5/5", None, BUILT_AT)
+    assert _rating(zero) == ("", None, "")
+    assert _rating(missing) == ("4.0/5 (5 reviews)", 5, "")
     assert refreshed == [1]
     assert get_setting("catalog_rating_fill_sha") == "sha-1"
+
+
+def test_catalog_fill_without_rating_count_column(rating_catalog, tmp_path):
+    import sqlite3
+
+    add_thread, _sha = rating_catalog
+    game_id = _rated_game(1)
+    add_thread(1, 4.3)
+    with sqlite3.connect(tmp_path / "catalog.db") as catalog:
+        catalog.execute("ALTER TABLE f95_thread_details DROP COLUMN rating_count")
+    assert Api()._fill_ratings_from_catalog() == 1
+    assert _rating(game_id) == ("4.3/5", None, BUILT_AT)
 
 
 def test_catalog_fill_runs_once_per_snapshot(rating_catalog):
@@ -320,10 +402,10 @@ def test_catalog_fill_runs_once_per_snapshot(rating_catalog):
 
     _ = database.update_game(game_id, {"rating": "", "rating_updated_at": ""})
     assert api._fill_ratings_from_catalog() == 0
-    assert _rating(game_id) == ("", "")
+    assert _rating(game_id) == ("", None, "")
     sha["value"] = "sha-2"
     assert api._fill_ratings_from_catalog() == 1
-    assert _rating(game_id) == ("4.3/5", BUILT_AT)
+    assert _rating(game_id) == ("4.3/5", None, BUILT_AT)
 
 
 def test_catalog_fill_does_nothing_when_the_catalog_is_off(rating_catalog):
@@ -332,7 +414,7 @@ def test_catalog_fill_does_nothing_when_the_catalog_is_off(rating_catalog):
     add_thread(1, 4.3)
     update_setting("catalog_enabled", "0")
     assert Api()._fill_ratings_from_catalog() == 0
-    assert _rating(game_id) == ("", "")
+    assert _rating(game_id) == ("", None, "")
     assert get_setting("catalog_rating_fill_sha") in (None, "")
 
 

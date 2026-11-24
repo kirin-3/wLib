@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { GameRecord, LaunchTarget } from "../services/api.ts";
-import type { SortDir, SortField, ThreadStateFilter } from "./libraryViewState.ts";
+import type { FilterMinRating, SortDir, SortField, ThreadStateFilter } from "./libraryViewState.ts";
 import { getPlayStatusMeta, normalizePlayStatus } from "./playStatus.ts";
 import { automaticTags } from "./threadDetails.ts";
 import { hasNewerVersion, normalizeVersion } from "./versionOrder.ts";
@@ -313,6 +313,37 @@ export const matchesGameSearch = (game: GameRecord, query: string): boolean => {
   );
 };
 
+export const F95_RATING_PRIOR_MEAN = 3.2;
+export const F95_RATING_PRIOR_REVIEWS = 25;
+
+/** Bayesian weighted F95 rating: (v * R + m * C) / (v + m), or null without a valid rating and positive count. */
+export const weightedRating = (
+  game: Pick<GameRecord, "rating" | "rating_count">,
+): number | null => {
+  const count = game.rating_count;
+  if (typeof count !== "number" || !Number.isFinite(count) || count <= 0) return null;
+  const match = String(game.rating || "").match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const rating = parseFloat(match[0]);
+  if (!Number.isFinite(rating) || rating <= 0 || rating > 5) return null;
+  return (
+    (count * rating + F95_RATING_PRIOR_REVIEWS * F95_RATING_PRIOR_MEAN) /
+    (count + F95_RATING_PRIOR_REVIEWS)
+  );
+};
+
+/** Hides games below the chosen minimum weighted F95 rating or with no weighted rating. */
+export const matchesMinRatingFilter = (
+  game: Pick<GameRecord, "rating" | "rating_count">,
+  minRating: FilterMinRating,
+): boolean => {
+  if (!minRating) return true;
+  const threshold = Number(minRating);
+  if (!Number.isFinite(threshold)) return true;
+  const score = weightedRating(game);
+  return score !== null && score >= threshold;
+};
+
 export const compareLibraryGames = (
   a: GameRecord,
   b: GameRecord,
@@ -333,6 +364,8 @@ export const compareLibraryGames = (
         return (
           parseFloat(String(game.rating || "").match(/[\d.]+/)?.[0] || "0") || 0
         );
+      case "weighted_rating":
+        return weightedRating(game) ?? 0;
       case "playtime_seconds":
         return Number(game.playtime_seconds) || 0;
       case "last_played":
