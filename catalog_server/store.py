@@ -14,6 +14,9 @@ CATALOG_FILE = "catalog.sqlite"
 STATE_FILE = "state.sqlite"
 # `origin` of rows and details copied from an Atlas database.
 IMPORT_ORIGIN = "import"
+# Version of the developer-ID kinds kept from first posts. Details stored with
+# an older version are read again (2 added DLsite and FANZA work IDs).
+IDS_VERSION = 2
 
 # `origin` is set on rows imported from elsewhere (NULL when the source
 # itself listed it). Imported rows are never marked removed; the first time
@@ -132,7 +135,8 @@ CREATE TABLE IF NOT EXISTS f95_thread_details (
     language TEXT,
     languages TEXT NOT NULL DEFAULT '[]',
     external_ids TEXT NOT NULL DEFAULT '{{}}',
-    kept_after_failure INTEGER NOT NULL DEFAULT 0
+    kept_after_failure INTEGER NOT NULL DEFAULT 0,
+    ids_version INTEGER NOT NULL DEFAULT 0
 );
 -- LewdCorner threads from the latest-updates feed (or an Atlas import).
 -- `tier` is 'Premium' for a LewdCorner Plus thread and 'Free' otherwise.
@@ -180,8 +184,18 @@ CREATE TABLE IF NOT EXISTS lc_thread_details (
     os TEXT NOT NULL DEFAULT '[]',
     external_ids TEXT NOT NULL DEFAULT '{{}}',
     origin TEXT,
-    kept_after_failure INTEGER NOT NULL DEFAULT 0
+    kept_after_failure INTEGER NOT NULL DEFAULT 0,
+    ids_version INTEGER NOT NULL DEFAULT 0
 );
+-- One row per current catalog entry: the group of entries that are the
+-- same game across sites (see catalog_server/groups.py). Rebuilt each run.
+CREATE TABLE IF NOT EXISTS game_groups (
+    src TEXT NOT NULL,
+    id TEXT NOT NULL,
+    group_key TEXT NOT NULL,
+    PRIMARY KEY (src, id)
+);
+CREATE INDEX IF NOT EXISTS game_groups_key ON game_groups (group_key);
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -227,6 +241,15 @@ CREATE TABLE IF NOT EXISTS dlsite_genres (
     genre_id TEXT PRIMARY KEY,
     name_en TEXT,
     checked_at TEXT
+);
+-- Link pairs from the last `tools.import_links` run (never published; only
+-- the links made from them are). Each import replaces the whole list.
+CREATE TABLE IF NOT EXISTS imported_links (
+    src_a TEXT NOT NULL,
+    id_a TEXT NOT NULL,
+    src_b TEXT NOT NULL,
+    id_b TEXT NOT NULL,
+    PRIMARY KEY (src_a, id_a, src_b, id_b)
 );
 CREATE TABLE IF NOT EXISTS source_status (
     source TEXT PRIMARY KEY,
@@ -328,6 +351,17 @@ class CatalogStore:
                 if "kept_after_failure" not in columns:
                     _ = self.conn.execute(
                         f"ALTER TABLE {table} ADD COLUMN kept_after_failure INTEGER NOT NULL DEFAULT 0"
+                    )
+        with self.conn:
+            for table, columns in (
+                ("f95_thread_details", details),
+                ("lc_thread_details", lc_details),
+            ):
+                if "ids_version" not in columns:
+                    # Rows read before DLsite and FANZA IDs were kept start at 0,
+                    # so the details steps read them again.
+                    _ = self.conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN ids_version INTEGER NOT NULL DEFAULT 0"
                     )
         if "rating_count_attempted" not in details:
             # Rows read before review counts existed start at 0, so the queue backfills them.
@@ -462,20 +496,27 @@ class CatalogStore:
         """Threads to read: changed ones newest first, then never-read ones most viewed first.
 
         The backfill also visits successful details with no count attempt.
+        Details read before the current `IDS_VERSION` come last.
         Changed means a feed `ts` newer than the stored details, or a thread
         never read whose `ts` is newer than `since_ts`.
         """
         changed = "(t.ts > d.thread_ts OR (d.thread_id IS NULL AND t.ts > :since))"
+        # Read before DLsite and FANZA IDs were kept, and not due for any other reason.
+        old_ids = (
+            "(d.status = 'ok' AND d.ids_version < :ids AND d.rating_count_attempted != 0 "
+            + "AND t.ts <= d.thread_ts)"
+        )
         rows = self.conn.execute(
             "SELECT t.thread_id, t.ts FROM f95_threads t "
             + "LEFT JOIN f95_thread_details d ON d.thread_id = t.thread_id "
             + "WHERE t.removed_at IS NULL AND t.ts IS NOT NULL "
             + "AND (d.thread_id IS NULL OR t.ts > d.thread_ts "
-            + "OR (d.status = 'ok' AND d.rating_count_attempted = 0)) "
-            + f"ORDER BY CASE WHEN {changed} THEN 0 ELSE 1 END, "
+            + "OR (d.status = 'ok' AND d.rating_count_attempted = 0) "
+            + "OR (d.status = 'ok' AND d.ids_version < :ids)) "
+            + f"ORDER BY CASE WHEN {changed} THEN 0 WHEN {old_ids} THEN 2 ELSE 1 END, "
             + f"CASE WHEN {changed} THEN t.ts ELSE COALESCE(t.views, 0) END DESC, "
             + "t.thread_id LIMIT :limit",
-            {"since": since_ts, "limit": limit},
+            {"since": since_ts, "limit": limit, "ids": IDS_VERSION},
         )
         return cast(list[tuple[int, int]], rows.fetchall())
 
@@ -489,17 +530,17 @@ class CatalogStore:
             if details["status"] != "ok":
                 kept = self.conn.execute(
                     "UPDATE f95_thread_details SET thread_ts = ?, fetched_at = ?, kept_after_failure = 1, "
-                    + "rating_count_attempted = 1 "
+                    + "rating_count_attempted = 1, ids_version = ? "
                     + "WHERE thread_id = ? AND status = 'ok'",
-                    (thread_ts, now, thread_id),
+                    (thread_ts, now, IDS_VERSION, thread_id),
                 )
                 if kept.rowcount:
                     return 1
             _ = self.conn.execute(
                 "INSERT OR REPLACE INTO f95_thread_details (thread_id, thread_ts, fetched_at, "
                 + "status, overview, original_title, aliases, language, languages, external_ids, "
-                + "rating_count, rating_count_attempted) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                + "rating_count, rating_count_attempted, ids_version) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
                 (
                     thread_id,
                     thread_ts,
@@ -512,6 +553,7 @@ class CatalogStore:
                     json.dumps(details.get("languages") or [], ensure_ascii=False),
                     json.dumps(details.get("external_ids") or {}, ensure_ascii=False),
                     details.get("rating_count") if details["status"] == "ok" else None,
+                    IDS_VERSION,
                 ),
             )
         return 1
@@ -527,18 +569,24 @@ class CatalogStore:
         """Like `f95_details_queue`: changed threads newest first, then never-read ones.
 
         Details imported from Atlas and never checked on LC (`thread_ts` NULL)
-        count as never read."""
+        count as never read. Details read before the current `IDS_VERSION`
+        come last."""
         read = "d.thread_ts IS NOT NULL"
         changed = f"({read} OR t.ts > :since)"
+        # Read on LC before DLsite and FANZA IDs were kept, and not changed since.
+        old_ids = (
+            f"({read} AND t.ts <= d.thread_ts AND d.status = 'ok' "
+            + "AND d.origin IS NULL AND d.ids_version < :ids)"
+        )
         rows = self.conn.execute(
             "SELECT t.thread_id, t.ts FROM lc_threads t "
             + "LEFT JOIN lc_thread_details d ON d.thread_id = t.thread_id "
             + "WHERE t.removed_at IS NULL AND t.ts IS NOT NULL "
-            + f"AND (NOT ({read}) OR t.ts > d.thread_ts) "
-            + f"ORDER BY CASE WHEN {changed} THEN 0 ELSE 1 END, "
+            + f"AND (NOT ({read}) OR t.ts > d.thread_ts OR {old_ids}) "
+            + f"ORDER BY CASE WHEN {old_ids} THEN 2 WHEN {changed} THEN 0 ELSE 1 END, "
             + f"CASE WHEN {changed} THEN t.ts ELSE COALESCE(t.views, 0) END DESC, "
             + "t.thread_id LIMIT :limit",
-            {"since": since_ts, "limit": limit},
+            {"since": since_ts, "limit": limit, "ids": IDS_VERSION},
         )
         return cast(list[tuple[int, int]], rows.fetchall())
 
@@ -637,17 +685,17 @@ class CatalogStore:
         """The writes of `upsert_lc_details`; the caller holds the transaction."""
         if details["status"] != "ok":
             kept = self.conn.execute(
-                "UPDATE lc_thread_details SET thread_ts = ?, fetched_at = ?, kept_after_failure = 1 "
-                + "WHERE thread_id = ? AND (origin = ? OR status = 'ok')",
-                (thread_ts, now, thread_id, IMPORT_ORIGIN),
+                "UPDATE lc_thread_details SET thread_ts = ?, fetched_at = ?, kept_after_failure = 1, "
+                + "ids_version = ? WHERE thread_id = ? AND (origin = ? OR status = 'ok')",
+                (thread_ts, now, IDS_VERSION, thread_id, IMPORT_ORIGIN),
             )
             if kept.rowcount:
                 return
         _ = self.conn.execute(
             "INSERT OR REPLACE INTO lc_thread_details (thread_id, thread_ts, fetched_at, "
             + "status, overview, developer, release_text, released_at, language, "
-            + "languages, os, external_ids, origin) "
-            + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+            + "languages, os, external_ids, origin, ids_version) "
+            + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
             (
                 thread_id,
                 thread_ts,
@@ -661,6 +709,7 @@ class CatalogStore:
                 json.dumps(details.get("languages") or [], ensure_ascii=False),
                 json.dumps(details.get("os") or [], ensure_ascii=False),
                 json.dumps(details.get("external_ids") or {}, ensure_ascii=False),
+                IDS_VERSION,
             ),
         )
 
@@ -804,6 +853,29 @@ class StateStore:
 
     def close(self) -> None:
         self.conn.close()
+
+    def replace_imported_links(self, pairs: Iterable[tuple[str, str, str, str]]) -> int:
+        """Replace the imported link pairs; returns how many are stored."""
+        with self.conn:
+            _ = self.conn.execute("DELETE FROM imported_links")
+            _ = self.conn.executemany(
+                "INSERT OR IGNORE INTO imported_links (src_a, id_a, src_b, id_b) "
+                + "VALUES (?, ?, ?, ?)",
+                pairs,
+            )
+        row = cast(
+            tuple[int],
+            self.conn.execute("SELECT COUNT(*) FROM imported_links").fetchone(),
+        )
+        return row[0]
+
+    def imported_links(self) -> list[tuple[str, str, str, str]]:
+        return cast(
+            list[tuple[str, str, str, str]],
+            self.conn.execute(
+                "SELECT src_a, id_a, src_b, id_b FROM imported_links ORDER BY 1, 2, 3, 4"
+            ).fetchall(),
+        )
 
     def get(self, source: str, key: str, default: object = None) -> object:
         row = cast(

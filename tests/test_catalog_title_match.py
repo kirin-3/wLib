@@ -239,3 +239,89 @@ def test_developer_ids_imported_from_atlas_do_not_link(tmp_path):
         1, 1, NOW, {"status": "ok", "external_ids": _patreon("same")}
     )
     assert match_lc_f95(catalog) == [(1, 2)]
+
+
+def _f95_original(catalog, thread_id, original, *, removed=False):
+    catalog.upsert(
+        "f95_threads",
+        "thread_id",
+        [{"thread_id": thread_id, "title": f"T{thread_id}", "url": "u", "ts": 1}],
+        NOW,
+    )
+    catalog.upsert_f95_details(
+        thread_id, 1, NOW, {"status": "ok", "original_title": original}
+    )
+    if removed:
+        catalog.conn.execute(
+            "UPDATE f95_threads SET removed_at = ? WHERE thread_id = ?",
+            (NOW, thread_id),
+        )
+
+
+def _work(catalog, product_id, title, site="maniax"):
+    catalog.upsert(
+        "dlsite_works",
+        "product_id",
+        [{"product_id": product_id, "title": title, "url": "d", "site": site}],
+        NOW,
+    )
+
+
+def test_original_title_key_rules():
+    from catalog_server.title_match import _keys_equal, original_title_key
+
+    assert original_title_key("【Live2D】コン狐との日常") == original_title_key(
+        "コン狐との日常"
+    )
+    assert original_title_key("ＡＢＣ　ゲーム！") == "abcゲーム"
+    assert _keys_equal(
+        original_title_key("山野リョウと痴○列車"),
+        original_title_key("山野リョウと痴漢列車"),
+    )
+    assert not _keys_equal(
+        original_title_key("痴漢列車"), original_title_key("痴漢電車")
+    )
+
+
+def test_unique_original_title_links_the_pc_work(tmp_path):
+    from catalog_server.title_match import match_f95_dlsite
+
+    catalog = _catalog(tmp_path)
+    _f95_original(catalog, 100, "山野リョウと痴○列車")
+    _work(catalog, "RJ01000001", "山野リョウと痴漢列車")
+    # PC work plus its smartphone edition: only the PC work counts.
+    _f95_original(catalog, 101, "妹はルームメイト")
+    _work(catalog, "RJ01000002", "妹はルームメイト")
+    _work(catalog, "RJ01000003", "妹はルームメイト", site="appx")
+    # Two PC works with one title: no link.
+    _f95_original(catalog, 102, "ふたつの作品")
+    _work(catalog, "RJ01000004", "ふたつの作品")
+    _work(catalog, "RJ01000005", "ふたつの作品", site="pro")
+    # Two F95 threads with one original title: no link.
+    _f95_original(catalog, 103, "同じタイトル")
+    _f95_original(catalog, 104, "同じタイトル")
+    _work(catalog, "RJ01000006", "同じタイトル")
+    # Too short to be certain, and a removed thread.
+    _f95_original(catalog, 105, "リサ")
+    _work(catalog, "RJ01000007", "リサ")
+    _f95_original(catalog, 106, "消えたスレッド", removed=True)
+    _work(catalog, "RJ01000008", "消えたスレッド")
+    assert match_f95_dlsite(catalog) == [(100, "RJ01000001"), (101, "RJ01000002")]
+
+
+def test_a_work_named_by_two_threads_through_the_wildcard_is_not_linked(tmp_path):
+    from catalog_server.title_match import match_f95_dlsite
+
+    catalog = _catalog(tmp_path)
+    # Two distinct F95 titles both equal one censored DLsite title.
+    _f95_original(catalog, 200, "Night Bus")
+    _f95_original(catalog, 201, "Night Box")
+    _work(catalog, "RJ01000010", "Night B○○")
+    # A censored and an uncensored F95 title both equal one DLsite title.
+    _f95_original(catalog, 202, "痴○列車の夜")
+    _f95_original(catalog, 203, "痴漢列車の夜")
+    _work(catalog, "RJ01000011", "痴漢列車の夜")
+    # A work only one thread names still links.
+    _f95_original(catalog, 204, "一つだけの作品")
+    _work(catalog, "RJ01000012", "一つだけの作品")
+    assert match_f95_dlsite(catalog) == [(204, "RJ01000012")]

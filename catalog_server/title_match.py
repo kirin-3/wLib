@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Strict LewdCorner↔F95 title matching.
+"""Strict title matching: LewdCorner↔F95 threads, and F95 original titles↔DLsite works (`match_f95_dlsite`).
 
 A pair is linked only when it is certain: both threads are current, their
 normalized title appears exactly once among current LC threads and exactly
@@ -20,6 +20,7 @@ import json
 import re
 import sqlite3
 import unicodedata
+from collections import Counter
 from collections.abc import Iterable
 from typing import cast
 
@@ -134,3 +135,95 @@ def match_lc_f95(catalog: CatalogStore | sqlite3.Connection) -> list[tuple[int, 
         if (lc_dev and lc_dev == f95_dev) or lc_ids & f95_ids:
             pairs.append((lc_id, f95_id))
     return sorted(pairs)
+
+
+# F95 original title ↔ DLsite title. Japanese titles keep their characters;
+# only width, case, bracket tags, censor marks and punctuation are evened out.
+_BRACKET_TAG_RE = re.compile(r"【[^】]*】|\[[^\]]*\]")
+_CENSOR_MARKS = str.maketrans(dict.fromkeys("○〇●◯＊*", "\0"))
+# Spaces, punctuation and `_`; the wildcard stays.
+_NON_WORD_RE = re.compile(r"[^\w\x00]+|_+")
+# A key shorter than this ("Mia", "ミク") is too common to be certain.
+MIN_ORIGINAL_TITLE_KEY = 4
+_WILDCARD = "\0"
+
+
+def original_title_key(text: str | None) -> str:
+    """NFKC, casefold, bracket tags dropped, censor marks as a wildcard
+    (`\\0`), spaces and punctuation dropped."""
+    if not text:
+        return ""
+    folded = unicodedata.normalize("NFKC", text).casefold()
+    folded = _BRACKET_TAG_RE.sub("", folded).translate(_CENSOR_MARKS)
+    return _NON_WORD_RE.sub("", folded)
+
+
+def _keys_equal(a: str, b: str) -> bool:
+    return len(a) == len(b) and all(
+        x == y or _WILDCARD in (x, y) for x, y in zip(a, b, strict=True)
+    )
+
+
+def match_f95_dlsite(
+    catalog: CatalogStore | sqlite3.Connection,
+) -> list[tuple[int, str]]:
+    """`(f95 thread id, DLsite product id)` pairs whose first-post original
+    title equals the work's title. The title must be unique among current F95
+    threads and name exactly one current DLsite work outside the smartphone
+    (`appx`) site."""
+    conn = catalog if isinstance(catalog, sqlite3.Connection) else catalog.conn
+    f95: dict[str, list[int]] = {}
+    for thread_id, title in cast(
+        list[tuple[int, str | None]],
+        conn.execute(
+            "SELECT t.thread_id, d.original_title FROM f95_threads t "
+            + "JOIN f95_thread_details d ON d.thread_id = t.thread_id AND d.status = 'ok'"
+            + _kept_details_filter(conn, "f95_thread_details")
+            + " WHERE t.removed_at IS NULL AND d.original_title IS NOT NULL",
+        ).fetchall(),
+    ):
+        key = original_title_key(title)
+        if len(key) >= MIN_ORIGINAL_TITLE_KEY:
+            f95.setdefault(key, []).append(thread_id)
+    works: dict[str, list[str]] = {}
+    by_length: dict[int, list[str]] = {}
+    for product_id, title in cast(
+        list[tuple[str, str | None]],
+        conn.execute(
+            "SELECT product_id, title FROM dlsite_works "
+            + "WHERE removed_at IS NULL AND COALESCE(site, '') != 'appx'"
+        ).fetchall(),
+    ):
+        key = original_title_key(title)
+        if len(key) < MIN_ORIGINAL_TITLE_KEY:
+            continue
+        if key not in works:
+            by_length.setdefault(len(key), []).append(key)
+        works.setdefault(key, []).append(product_id)
+    pairs: list[tuple[int, str]] = []
+    for key, thread_ids in f95.items():
+        if len(thread_ids) != 1:
+            continue
+        if _WILDCARD not in key and key in works:
+            candidates = works[key]
+            # A censored DLsite title of the same length can match too.
+            candidates = candidates + [
+                product
+                for other in by_length.get(len(key), [])
+                if _WILDCARD in other and _keys_equal(key, other)
+                for product in works[other]
+            ]
+        else:
+            candidates = [
+                product
+                for other in by_length.get(len(key), [])
+                if _keys_equal(key, other)
+                for product in works[other]
+            ]
+        if len(candidates) == 1:
+            pairs.append((thread_ids[0], candidates[0]))
+    # Keys are unique only as exact text; with the wildcard, two F95 titles
+    # ("abcd", "abxd") can both name one censored work ("ab○d"). A work that
+    # more than one thread names is not certain.
+    named = Counter(product for _thread, product in pairs)
+    return sorted(pair for pair in pairs if named[pair[1]] == 1)

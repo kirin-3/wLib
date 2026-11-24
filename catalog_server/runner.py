@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from core.catalog_format import SOURCE_COUNT, SOURCE_UPDATED_AT
 
+from .groups import rebuild_groups
 from .links import rebuild_links
 from .net import BudgetExhausted, Pacer, RateLimited
 from .publish import Storage, publish, publish_refusal, published_sources
@@ -43,6 +44,7 @@ class RunResult:
     started_at: str = ""
     finished_at: str = ""
     links: int | None = None
+    groups: int | None = None
     # The error that ended the run after the sources, e.g. a failed upload.
     error: str = ""
 
@@ -157,9 +159,12 @@ def run(
         result.sources[name] = outcome
     published: str | None = None
     try:
-        links = rebuild_links(catalog)
+        links = rebuild_links(catalog, state.imported_links())
         result.links = links
         log.info("links: %d", links)
+        groups = rebuild_groups(catalog)
+        result.groups = groups
+        log.info("groups: %d", groups)
         if storage is not None:
             counts = manifest_sources(catalog, state)
             refusal = publish_refusal(published_sources(storage), counts)

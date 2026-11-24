@@ -287,7 +287,7 @@ def test_failed_link_rebuild_still_finishes_the_run(tmp_path, monkeypatch):
 
     from catalog_server import runner
 
-    def broken(_catalog):
+    def broken(_catalog, _imported=()):
         raise RuntimeError("links failed")
 
     monkeypatch.setattr(runner, "rebuild_links", broken)

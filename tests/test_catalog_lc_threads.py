@@ -226,3 +226,21 @@ def test_a_rate_limit_on_the_plus_listing_stops_the_thread_pages(tmp_path):
     result = run_source(LcThreadsSource(), ctx)
     assert result.status == "rate_limited" and "lc_plus" in (result.detail or "")
     assert transport.requests == []
+
+
+def test_dlsite_ids_from_the_developer_links():
+    page = (
+        fixture_bytes("lc_thread_6.html")
+        .decode()
+        .replace(
+            "https://subscribestar.adult/dark-coven",
+            "https://www.dlsite.com/maniax/work/=/product_id/RJ01234567.html",
+        )
+    )
+    ids = parse_first_post(first_post_html(page))["external_ids"]
+    assert ids["dlsite"] == [
+        {
+            "id": "RJ01234567",
+            "url": "https://www.dlsite.com/maniax/work/=/product_id/RJ01234567.html",
+        }
+    ]

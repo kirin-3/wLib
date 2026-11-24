@@ -584,3 +584,52 @@ def test_state_dlsite_genres_round_trip_and_unknown_ids(tmp_path):
         assert state.dlsite_genre_names(["113"]) == {"113": "Coercion"}
     finally:
         state.close()
+
+
+def test_details_from_before_dlsite_ids_are_read_again_last(tmp_path):
+    path = str(tmp_path / "catalog.sqlite")
+    now = "2026-11-24T00:00:00Z"
+    catalog = CatalogStore(path)
+    catalog.upsert(
+        "f95_threads",
+        "thread_id",
+        [
+            {
+                "thread_id": thread_id,
+                "title": f"T{thread_id}",
+                "url": "u",
+                "ts": ts,
+                "views": views,
+            }
+            for thread_id, ts, views in ((1, 10, 999), (2, 20, 5), (3, 30, 1))
+        ],
+        now,
+    )
+    catalog.upsert(
+        "lc_threads", "thread_id", [_lc_row(7, 70, views=9), _lc_row(8, 80)], now
+    )
+    # Thread 1 and LC thread 7 were read before DLsite IDs were kept.
+    catalog.upsert_f95_details(1, 10, now, {"status": "ok", "rating_count": 3})
+    catalog.upsert_f95_details(2, 15, now, {"status": "ok", "rating_count": 3})
+    catalog.upsert_lc_details(7, 70, now, {"status": "ok"})
+    with catalog.conn:
+        for table in ("f95_thread_details", "lc_thread_details"):
+            catalog.conn.execute(f"ALTER TABLE {table} DROP COLUMN ids_version")
+    catalog.close()
+
+    catalog = CatalogStore(path)
+    try:
+        # Changed (2), then never read (3), then the old IDs (1).
+        assert catalog.f95_details_queue(since_ts=35, limit=10) == [
+            (2, 20),
+            (3, 30),
+            (1, 10),
+        ]
+        assert catalog.lc_details_queue(75, 10) == [(8, 80), (7, 70)]
+        catalog.upsert_f95_details(1, 10, now, {"status": "ok", "rating_count": 3})
+        catalog.upsert_lc_details(7, 70, now, {"status": "unreadable"})
+        assert catalog.f95_details_queue(since_ts=35, limit=10) == [(2, 20), (3, 30)]
+        # A failed read keeps the old details and does not ask again.
+        assert catalog.lc_details_queue(75, 10) == [(8, 80)]
+    finally:
+        catalog.close()

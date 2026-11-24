@@ -114,6 +114,33 @@ _ID_PATTERNS: tuple[
         ),
         lambda m: m.group(1),
     ),
+    (
+        # A work page on any DLsite site path (maniax, pro, home, ecchi-eng, ...);
+        # ci-en and other subdomains are not works.
+        "dlsite",
+        re.compile(
+            r"^https?://(?:www\.)?dlsite\.com/[^?#]*?/(?:product_id|id)/((?:RJ|VJ|BJ)\d{6,8})(?:\.html)?/?(?:[?#].*)?$",
+            re.I,
+        ),
+        lambda m: m.group(1).upper(),
+    ),
+    (
+        # A circle page names a circle, never a work.
+        "dlsite_circle",
+        re.compile(
+            r"^https?://(?:www\.)?dlsite\.com/[^?#]*?/maker_id/((?:RG|VG|BG)\d+)(?:\.html)?/?(?:[?#].*)?$",
+            re.I,
+        ),
+        lambda m: m.group(1).upper(),
+    ),
+    (
+        "fanza",
+        re.compile(
+            r"^https?://(?:[a-z]+\.)?dmm\.co\.jp/[^?#]*?[/?&]cid=([a-z0-9_]+)",
+            re.I,
+        ),
+        lambda m: m.group(1).lower(),
+    ),
 )
 
 

@@ -429,3 +429,41 @@ def test_until_swept_all_means_the_sources_with_a_sweep():
     assert "f95_threads" not in args.until_swept
     with pytest.raises(SystemExit):
         build_parser().parse_args(["run", "--until-swept", "f95_threads"])
+
+
+_STORE_POST = """
+<article class="message message--post js-post" data-content="post-1">
+<div class="bbWrapper">
+<b>Developer</b>: Circle <a href="https://www.dlsite.com/maniax/circle/profile/=/maker_id/RG12345.html">DLsite</a>
+ - <a href="https://ci-en.dlsite.com/creator/16683">Ci-en</a><br>
+<b>Store</b>: <a href="https://www.dlsite.com/maniax/work/=/product_id/RJ01234567.html">DLsite</a>
+ - <a href="https://www.dlsite.com/ecchi-eng/work/=/product_id/rj01234568.html/?locale=en_US">English</a>
+ - <a href="https://www.dmm.co.jp/dc/doujin/-/detail/=/cid=d_123456/">FANZA</a><br>
+</div>
+</article>
+"""
+
+
+def test_dlsite_and_fanza_ids_from_developer_and_store_lines():
+    ids = _ids(parse_first_post(first_post_html(_STORE_POST)))
+    assert ids["dlsite"] == ["RJ01234567", "RJ01234568"]
+    assert ids["dlsite_circle"] == ["RG12345"]
+    assert ids["fanza"] == ["d_123456"]
+    # Ci-en is a DLsite subdomain but not a work page.
+    assert all("ci-en" not in kind for kind in ids)
+
+
+def test_dlsite_ids_only_from_work_and_circle_pages():
+    from catalog_server.sources.post_ids import external_ids
+
+    found = external_ids(
+        [
+            "https://www.dlsite.com/pro/work/=/product_id/VJ01006293.html",
+            "https://www.dlsite.com/home/announce/=/product_id/BJ123456.html",
+            "https://www.dlsite.com/maniax/",
+            "https://ci-en.dlsite.com/creator/16683",
+            "https://www.dlsite.com/maniax/fsr/=/keyword/RJ01234567",
+        ]
+    )
+    assert [entry["id"] for entry in found["dlsite"]] == ["VJ01006293", "BJ123456"]
+    assert set(found) == {"dlsite"}
