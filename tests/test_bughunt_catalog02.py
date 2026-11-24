@@ -76,7 +76,18 @@ def test_dlsite_partial_details_keep_an_omitted_stored_work(tmp_path):
     del details["VJ01006811"]
     transport = FakeTransport()
     transport.route("/product/info/ajax", json_response(details))
+    transport.route(
+        lambda request: "/fsr/ajax/" in request.url and "locale=en_US" in request.url,
+        json_response(fixture_json("dlsite_listing_en.json")),
+    )
     transport.route("/fsr/ajax/", json_response(listing))
+    transport.route(
+        "/genre/list", Response(200, fixture_bytes("dlsite_genre_list_en.html"))
+    )
+    transport.route(
+        "/api/=/product.json",
+        json_response(fixture_json("dlsite_product_json_en.json")),
+    )
     ctx, clock = make_context(tmp_path, transport)
     ctx.catalog.upsert(
         "dlsite_works",

@@ -792,3 +792,66 @@ def test_premium_lc_threads_are_newest_first_with_imports_last(lc_catalog, tmp_p
     lc_catalog.close()
     (tmp_path / "catalog.db").unlink()
     assert premium_lc_threads(3) == []
+
+
+def test_dlsite_catalog_prefers_english_and_keeps_japanese_original_title(
+    catalog, tmp_path
+):
+    catalog.executemany(
+        "INSERT INTO dlsite_works (product_id, title, title_en, circle, circle_en, "
+        "genres, genres_en, url, first_seen, last_seen) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '')",
+        [
+            (
+                "RJ01609862",
+                "なつまじょ！ -二人の魔女と真夏の田舎生活-",
+                "Summer Witches! ~Midsummer Country Life with Two Witches~",
+                "湯宮の森",
+                "Yumiyanomori",
+                '["既婚者", "人妻"]',
+                '["Married Person", "Married Woman"]',
+                "https://www.dlsite.com/maniax/work/=/product_id/RJ01609862.html",
+            ),
+            (
+                "RJ01609863",
+                "日本語だけの作品",
+                None,
+                "日本語サークル",
+                None,
+                '["巫女"]',
+                '["Shrine Maiden"]',
+                "https://www.dlsite.com/maniax/work/=/product_id/RJ01609863.html",
+            ),
+        ],
+    )
+    catalog.commit()
+
+    english = resolve_page(
+        "https://www.dlsite.com/maniax/work/=/product_id/RJ01609862.html"
+    )["catalog_entry"]
+    assert (
+        english["title"] == "Summer Witches! ~Midsummer Country Life with Two Witches~"
+    )
+    assert english["original_title"] == "なつまじょ！ -二人の魔女と真夏の田舎生活-"
+    assert english["developer"] == "Yumiyanomori"
+    assert english["tags"] == "Married Person, Married Woman"
+
+    jp_only = resolve_page(
+        "https://www.dlsite.com/maniax/work/=/product_id/RJ01609863.html"
+    )["catalog_entry"]
+    assert jp_only["title"] == "日本語だけの作品"
+    assert jp_only["original_title"] == ""
+    assert jp_only["developer"] == "日本語サークル"
+    assert jp_only["tags"] == "Shrine Maiden"
+
+    # An older snapshot without the English columns falls back to Japanese values.
+    for column in ("title_en", "circle_en", "genres_en"):
+        catalog.execute(f"ALTER TABLE dlsite_works DROP COLUMN {column}")
+    catalog.commit()
+    old_snapshot = resolve_page(
+        "https://www.dlsite.com/maniax/work/=/product_id/RJ01609862.html"
+    )["catalog_entry"]
+    assert old_snapshot["title"] == "なつまじょ！ -二人の魔女と真夏の田舎生活-"
+    assert old_snapshot["original_title"] == ""
+    assert old_snapshot["developer"] == "湯宮の森"
+    assert old_snapshot["tags"] == "既婚者, 人妻"

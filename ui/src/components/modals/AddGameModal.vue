@@ -21,6 +21,7 @@ import { queryText, readQueryScreenshots, readStoreLinks, storeLabel } from "../
 interface AddGamePayload {
   links: StoreLink[];
   title: string;
+  original_title: string;
   exe_path: string;
   f95_url: string;
   lc_url: string;
@@ -52,6 +53,7 @@ const router = useRouter();
 
 const links = ref<StoreLink[]>([]);
 const title = ref("");
+const originalTitle = ref("");
 const exePath = ref("");
 const f95Url = ref("");
 const lcUrl = ref("");
@@ -208,6 +210,7 @@ watch(
     if (readQueryValue(query.action) === "import") {
       links.value = readStoreLinks(queryText(query.links));
       title.value = readQueryValue(query.title);
+      originalTitle.value = readQueryValue(query.originalTitle);
       partnerRequest++;
       findingPartner.value = false;
       f95Url.value = readQueryValue(query.f95url);
@@ -246,6 +249,7 @@ watch(
     isSubmitting.value = false;
     links.value = [];
     title.value = "";
+    originalTitle.value = "";
     exePath.value = "";
     f95Url.value = "";
     lcUrl.value = "";
@@ -349,6 +353,7 @@ const save = () => {
   emit("save", {
     links: links.value,
     title: title.value.trim(),
+    original_title: originalTitle.value.trim(),
     exe_path: exePath.value.trim(),
     f95_url: f95Url.value.trim(),
     lc_url: normalizeLcThreadUrl(lcUrl.value),

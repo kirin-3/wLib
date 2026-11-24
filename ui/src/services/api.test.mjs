@@ -238,10 +238,12 @@ test("browser mock payloads keep the desktop contract for every bridge method", 
     const detailed = await api.addGame(
       "Detailed", "/tmp/detailed/game.exe", "", "1.2", "", "one, two", "4.5", "Dev", "Ren'Py",
       true, true, true, "/tmp/prefix", "GE-Proton9-1", "wine_proton", "--flag", [],
+      "", "", "", undefined, [], undefined, undefined, "", "日本語オリジナル",
     );
     const detailedGame = (await api.getGames()).find((game) => game.id === detailed.id);
     assert.equal(detailedGame.rating, "4.5");
     assert.equal(detailedGame.tags, "one, two");
+    assert.equal(detailedGame.original_title, "日本語オリジナル");
     assert.equal(detailedGame.run_japanese_locale, true);
     assert.equal(detailedGame.run_wayland, true);
     assert.equal(detailedGame.auto_inject_ce, true);

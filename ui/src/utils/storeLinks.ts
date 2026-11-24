@@ -30,6 +30,7 @@ export interface ExtensionGameDetail {
   url?: string;
   gameId?: number;
   title?: string;
+  original_title?: string;
   version?: string;
   coverImage?: string;
   tags?: string[] | string;
@@ -49,6 +50,7 @@ export interface ExtensionGameDetail {
 }
 export function extensionAddQuery(data: ExtensionGameDetail): Record<string, string> {
   return { action: "import", f95url: data.url || "", title: data.title || "", version: data.version || "", coverImage: data.coverImage || "", tags: JSON.stringify(data.tags || []), rating: String(data.rating || ""), developer: data.developer || "", engine: data.engine || "", links: JSON.stringify(readStoreLinks(data.links)),
+    ...(data.original_title ? { originalTitle: data.original_title } : {}),
     ...(data.lc_url ? { lcurl: data.lc_url } : {}),
     ...(data.lc_suggested ? { lcSuggested: data.lc_suggested } : {}),
     ...(typeof data.thread_completed === "boolean" ? { threadCompleted: String(data.thread_completed) } : {}),

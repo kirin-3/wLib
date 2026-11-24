@@ -74,6 +74,20 @@ def test_manual_add_with_typed_rating_has_no_review_count():
     assert game["rating_count"] is None
 
 
+def test_add_game_stores_original_title():
+    result = Api().add_game(
+        "Summer Witches!",
+        "",
+        developer="Yumiyanomori",
+        tags="Married Person, Married Woman",
+        original_title="なつまじょ！ -二人の魔女と真夏の田舎生活-",
+    )
+    assert result["success"] is True
+    game = get_all_games()[0]
+    assert game["title"] == "Summer Witches!"
+    assert game["original_title"] == "なつまじょ！ -二人の魔女と真夏の田舎生活-"
+
+
 def test_sandbox_status_endpoints(monkeypatch):
     calls = []
     status = {

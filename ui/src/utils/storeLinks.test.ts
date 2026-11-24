@@ -51,3 +51,14 @@ test("LC page screenshots travel through the add query", () => {
   assert.deepEqual(readQueryScreenshots("not json"), []);
   assert.deepEqual(readQueryScreenshots(JSON.stringify(["http://x/", 3, "https://ok/"])), ["https://ok/"]);
 });
+
+test("original_title travels through extensionAddQuery when set", () => {
+  const query = extensionAddQuery({
+    title: "Summer Witches!",
+    original_title: "なつまじょ！",
+    links: [{ source: "dlsite", id: "RJ01609862", url: "https://www.dlsite.com/maniax/work/=/product_id/RJ01609862.html" }],
+  });
+  assert.equal(query.title, "Summer Witches!");
+  assert.equal(query.originalTitle, "なつまじょ！");
+  assert.equal(extensionAddQuery({ title: "JP only", original_title: "" }).originalTitle, undefined);
+});

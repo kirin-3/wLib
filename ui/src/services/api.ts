@@ -1979,6 +1979,7 @@ class ApiService {
     thread_onhold?: boolean,
     thread_abandoned?: boolean,
     thread_states_seen_at = "",
+    original_title = "",
   ): Promise<AddGameResponse> {
     return this.invokeLibraryChange(
       "add_game",
@@ -2007,6 +2008,7 @@ class ApiService {
       thread_onhold ?? null,
       thread_abandoned ?? null,
       thread_states_seen_at,
+      original_title,
     );
   }
 

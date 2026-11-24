@@ -143,17 +143,33 @@ def _catalog_page(
                 expand_links = row is not None
                 if row is not None:
                     data = {str(key): cast(object, row[key]) for key in row.keys()}
-                    entry = {
-                        "title": data.get("title") or "",
-                        "developer": data.get("circle")
-                        or data.get("developer")
-                        or ", ".join(_strings(data.get("developers"))),
-                        "coverImage": data.get("cover_url") or "",
-                        "tags": ", ".join(
-                            _strings(data.get("genres") or data.get("tags"))
-                        ),
-                        "version": _version(data.get("version")),
-                    }
+                    if source == "dlsite":
+                        jp_title = str(data.get("title") or "")
+                        title_en = str(data.get("title_en") or "").strip()
+                        circle_en = str(data.get("circle_en") or "").strip()
+                        genres = _strings(data.get("genres_en")) or _strings(
+                            data.get("genres")
+                        )
+                        entry = {
+                            "title": title_en or jp_title,
+                            "original_title": jp_title if title_en else "",
+                            "developer": circle_en or data.get("circle") or "",
+                            "coverImage": data.get("cover_url") or "",
+                            "tags": ", ".join(genres),
+                            "version": _version(data.get("version")),
+                        }
+                    else:
+                        entry = {
+                            "title": data.get("title") or "",
+                            "developer": data.get("circle")
+                            or data.get("developer")
+                            or ", ".join(_strings(data.get("developers"))),
+                            "coverImage": data.get("cover_url") or "",
+                            "tags": ", ".join(
+                                _strings(data.get("genres") or data.get("tags"))
+                            ),
+                            "version": _version(data.get("version")),
+                        }
                     if source == "ryuugames":
                         for field, target in (
                             ("rj_codes", "dlsite"),

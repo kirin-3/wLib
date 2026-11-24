@@ -24,7 +24,8 @@
     "screenshots",
     "thread_onhold",
     "thread_abandoned",
-    "thread_states_seen_at"
+    "thread_states_seen_at",
+    "original_title"
   ],
   "add_game_attachment": [
     "game_id",

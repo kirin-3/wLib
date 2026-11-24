@@ -167,6 +167,7 @@ import { updateCheckRunning } from "../composables/useUpdateCheckState";
 interface AddGamePayload {
   links?: StoreLink[];
   title: string;
+  original_title?: string;
   exe_path: string;
   f95_url?: string;
   lc_url?: string;
@@ -1811,6 +1812,7 @@ const handleAddGame = async (gameData: AddGamePayload) => {
       gameData.thread_onhold,
       gameData.thread_abandoned,
       gameData.thread_states_seen_at || "",
+      gameData.original_title || "",
     );
     if (result && result.success === false) {
       notifyError(`Failed to add game:\n\n${result.error || "Unknown error"}`);

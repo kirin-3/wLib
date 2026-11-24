@@ -530,3 +530,57 @@ def test_imported_or_refused_reads_are_marked_unread(tmp_path):
     assert catalog.lc_details_queue(0, 10) == []
     assert catalog.mark_lc_pages_unread([1, 2, 3, 4]) == 3
     assert catalog.lc_details_queue(10_000, 10) == [(1, 100), (2, 100), (4, 100)]
+
+
+def test_older_catalog_gets_dlsite_english_columns(tmp_path):
+    path = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE dlsite_works (product_id TEXT PRIMARY KEY, site TEXT, "
+        "title TEXT NOT NULL, circle_id TEXT, circle TEXT, work_type TEXT, "
+        "age_category INTEGER, genres TEXT NOT NULL DEFAULT '[]', "
+        "released_at TEXT, cover_url TEXT, url TEXT NOT NULL, "
+        "first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, removed_at TEXT, origin TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO dlsite_works (product_id, title, url, first_seen, last_seen) "
+        "VALUES ('RJ01609862', '日本語タイトル', 'u', 'x', 'x')"
+    )
+    conn.commit()
+    conn.close()
+    catalog = CatalogStore(str(path))
+    try:
+        columns = {
+            row[1] for row in catalog.conn.execute("PRAGMA table_info(dlsite_works)")
+        }
+        assert {"title_en", "circle_en", "genres_en"} <= columns
+        assert catalog.conn.execute(
+            "SELECT title_en, circle_en, genres_en FROM dlsite_works "
+            "WHERE product_id = 'RJ01609862'"
+        ).fetchone() == (None, None, None)
+        assert catalog.conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone() == ("1",)
+    finally:
+        catalog.close()
+
+
+def test_state_dlsite_genres_round_trip_and_unknown_ids(tmp_path):
+    state = StateStore(str(tmp_path / "state.sqlite"))
+    try:
+        assert not state.has_dlsite_genres()
+        assert state.unknown_dlsite_genres(["113", "648", "113"]) == ["113", "648"]
+        now = "2026-11-24T00:00:00Z"
+        state.upsert_dlsite_genres({"113": "Dub-con", "648": "淫紋"}, now)
+        assert state.has_dlsite_genres()
+        assert state.dlsite_genre_names(["113", "648", "999"]) == {
+            "113": "Dub-con",
+            "648": "淫紋",
+        }
+        assert state.dlsite_genre_names() == {"113": "Dub-con", "648": "淫紋"}
+        assert state.unknown_dlsite_genres(["113", "648", "269"]) == ["269"]
+        # Updating a genre refreshes its English name.
+        state.upsert_dlsite_genres({"113": "Coercion"}, "2026-11-25T00:00:00Z")
+        assert state.dlsite_genre_names(["113"]) == {"113": "Coercion"}
+    finally:
+        state.close()

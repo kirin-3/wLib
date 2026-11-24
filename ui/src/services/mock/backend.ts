@@ -461,6 +461,7 @@ export class MockBackend {
           return { success: false, error_code: "duplicate_url", error: "A game with this URL is already in your library" };
         }
         const id = games.reduce((max, game) => Math.max(max, game.id), 0) + 1;
+        const originalTitle = String(args[25] || "").trim();
         const game: GameRecord = { id, title: String(args[0]), exe_path: String(args[1]),
           f95_url: String(args[2] || ""), lc_url: lcUrl,
           lc_mode: args[18] === "on" || args[18] === "off" ? args[18] : "",
@@ -478,10 +479,10 @@ export class MockBackend {
           // Simulates the catalog's F95 thread details for a thread URL.
           ...(args[2] ? {
             overview: "A preview overview from the thread's first post.\nIt can span lines.",
-            original_title: "プレビューのゲーム", aliases: ["Preview Game"],
+            original_title: originalTitle || "プレビューのゲーム", aliases: ["Preview Game"],
             language: "English (MTL), Japanese",
             external_links: ["https://www.patreon.com/preview", "https://preview.itch.io/game", "https://discord.gg/preview"],
-          } : { overview: "", original_title: "", aliases: [], language: "", external_links: [] }) };
+          } : { overview: "", original_title: originalTitle, aliases: [], language: "", external_links: [] }) };
         localStorage.setItem("wlib-mock-games", JSON.stringify([...games, game]));
         const metadataPending = !!game.f95_url;
         if (metadataPending) {

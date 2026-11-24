@@ -1151,6 +1151,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                             thread_states_seen_at=str(
                                 payload.get("thread_states_seen_at") or ""
                             ),
+                            original_title=str(payload.get("original_title") or ""),
                         )
                     if wishlist_response.get("attached") is True and not (
                         body.get("action") == "attach_lc"

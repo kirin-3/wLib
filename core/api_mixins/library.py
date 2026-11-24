@@ -524,6 +524,7 @@ class LibraryMixin(ApiBase):
         thread_onhold: bool | None = None,
         thread_abandoned: bool | None = None,
         thread_states_seen_at: str = "",
+        original_title: str = "",
     ) -> dict[str, object]:
         import sqlite3
 
@@ -740,6 +741,7 @@ class LibraryMixin(ApiBase):
                     screenshots=lewdcorner.page_screenshots(screenshots)
                     if normalized_lc
                     else [],
+                    original_title=str(original_title or "").strip(),
                 )
             if game_id is not None and attach_id is None and normalized_lc:
                 details = {

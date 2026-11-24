@@ -906,6 +906,112 @@ def test_store_page_wishlist_check_open_and_thread_links(
         connection.close()
 
 
+def test_dlsite_wishlist_uses_english_catalog_and_keeps_japanese_original_title(
+    monkeypatch, tmp_path, extension_server
+):
+    import sqlite3
+
+    from catalog_server.store import CATALOG_SCHEMA
+    from core import database
+    from core.api import Api
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "wlib.db"))
+    database.init_db()
+    conn = sqlite3.connect(tmp_path / "catalog.db")
+    conn.executescript(CATALOG_SCHEMA)
+    conn.executemany(
+        "INSERT INTO dlsite_works (product_id, title, title_en, circle, circle_en, "
+        "genres, genres_en, url, first_seen, last_seen) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '')",
+        [
+            (
+                "RJ01609862",
+                "なつまじょ！ -二人の魔女と真夏の田舎生活-",
+                "Summer Witches! ~Midsummer Country Life with Two Witches~",
+                "湯宮の森",
+                "Yumiyanomori",
+                '["既婚者", "人妻"]',
+                '["Married Person", "Married Woman"]',
+                "https://www.dlsite.com/maniax/work/=/product_id/RJ01609862.html",
+            ),
+            (
+                "RJ01609863",
+                "日本語タイトル",
+                None,
+                "日本語サークル",
+                None,
+                '["巫女"]',
+                '["Shrine Maiden"]',
+                "https://www.dlsite.com/maniax/work/=/product_id/RJ01609863.html",
+            ),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    api = Api()
+    monkeypatch.setattr(api, "_fetch_added_game_metadata", lambda *_: None)
+    monkeypatch.setattr(server_module, "api_ref", api)
+    monkeypatch.setattr(server_module, "window_ref", MagicMock())
+    headers = {
+        "Host": "localhost:8183",
+        "Origin": "chrome-extension://wlib",
+        "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+    }
+    connection = HTTPConnection(*extension_server.server_address, timeout=3)
+    try:
+        page_en = "https://www.dlsite.com/maniax/work/=/product_id/RJ01609862.html"
+        connection.request(
+            "POST",
+            "/api/wishlist",
+            json.dumps(
+                {
+                    "title": "Page fallback",
+                    "pageUrl": page_en,
+                    "links": [{"url": page_en}],
+                }
+            ),
+            headers,
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        en_id = json.loads(response.read())["id"]
+        saved_en = database.get_game(en_id)
+        assert saved_en is not None
+        assert (
+            saved_en["title"]
+            == "Summer Witches! ~Midsummer Country Life with Two Witches~"
+        )
+        assert saved_en["developer"] == "Yumiyanomori"
+        assert saved_en["tags"] == "Married Person, Married Woman"
+        assert saved_en["original_title"] == "なつまじょ！ -二人の魔女と真夏の田舎生活-"
+
+        page_jp = "https://www.dlsite.com/maniax/work/=/product_id/RJ01609863.html"
+        connection.request(
+            "POST",
+            "/api/wishlist",
+            json.dumps(
+                {
+                    "title": "Page fallback",
+                    "pageUrl": page_jp,
+                    "links": [{"url": page_jp}],
+                }
+            ),
+            headers,
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        jp_id = json.loads(response.read())["id"]
+        saved_jp = database.get_game(jp_id)
+        assert saved_jp is not None
+        assert saved_jp["title"] == "日本語タイトル"
+        assert saved_jp["developer"] == "日本語サークル"
+        assert saved_jp["tags"] == "Shrine Maiden"
+        assert saved_jp["original_title"] == ""
+    finally:
+        connection.close()
+
+
 def test_wishlist_waits_for_startup_database(monkeypatch, extension_server, tmp_path):
     from core import database
 

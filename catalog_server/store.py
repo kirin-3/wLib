@@ -47,11 +47,14 @@ CREATE TABLE IF NOT EXISTS dlsite_works (
     product_id TEXT PRIMARY KEY,
     site TEXT,
     title TEXT NOT NULL,
+    title_en TEXT,
     circle_id TEXT,
     circle TEXT,
+    circle_en TEXT,
     work_type TEXT,
     age_category INTEGER,
     genres TEXT NOT NULL DEFAULT '[]',
+    genres_en TEXT,
     released_at TEXT,
     cover_url TEXT,
     url TEXT NOT NULL,
@@ -219,6 +222,12 @@ CREATE TABLE IF NOT EXISTS run_sources (
 CREATE TABLE IF NOT EXISTS dlsite_skipped (
     product_id TEXT PRIMARY KEY
 );
+-- Server-side map of DLsite genre IDs to English names (never published).
+CREATE TABLE IF NOT EXISTS dlsite_genres (
+    genre_id TEXT PRIMARY KEY,
+    name_en TEXT,
+    checked_at TEXT
+);
 CREATE TABLE IF NOT EXISTS source_status (
     source TEXT PRIMARY KEY,
     last_success_at TEXT,
@@ -327,6 +336,16 @@ class CatalogStore:
                     "ALTER TABLE f95_thread_details ADD COLUMN "
                     + "rating_count_attempted INTEGER NOT NULL DEFAULT 0"
                 )
+        dlsite = {
+            str(row[1])
+            for row in _rows(self.conn.execute("PRAGMA table_info(dlsite_works)"))
+        }
+        with self.conn:
+            for column in ("title_en", "circle_en", "genres_en"):
+                if column not in dlsite:
+                    _ = self.conn.execute(
+                        f"ALTER TABLE dlsite_works ADD COLUMN {column} TEXT"
+                    )
         self.set_meta(META_SCHEMA_VERSION, str(SCHEMA_VERSION))
 
     def _add_origin_columns(self) -> None:
@@ -916,6 +935,54 @@ class StateStore:
                 "INSERT OR IGNORE INTO dlsite_skipped (product_id) VALUES (?)",
                 [(value,) for value in ids],
             )
+
+    def has_dlsite_genres(self) -> bool:
+        return (
+            self.conn.execute("SELECT 1 FROM dlsite_genres LIMIT 1").fetchone()
+            is not None
+        )
+
+    def dlsite_genre_names(
+        self, genre_ids: Iterable[str] | None = None
+    ) -> dict[str, str]:
+        if genre_ids is None:
+            found = _rows(
+                self.conn.execute("SELECT genre_id, name_en FROM dlsite_genres")
+            )
+        else:
+            wanted = list(dict.fromkeys(str(gid) for gid in genre_ids))
+            if not wanted:
+                return {}
+            marks = ", ".join(["?"] * len(wanted))
+            found = _rows(
+                self.conn.execute(
+                    f"SELECT genre_id, name_en FROM dlsite_genres WHERE genre_id IN ({marks})",
+                    wanted,
+                )
+            )
+        return {
+            str(genre_id): str(name_en)
+            for genre_id, name_en in found
+            if name_en is not None
+        }
+
+    def upsert_dlsite_genres(self, genres: Mapping[str, str], now: str) -> None:
+        if not genres:
+            return
+        with self.conn:
+            _ = self.conn.executemany(
+                "INSERT INTO dlsite_genres (genre_id, name_en, checked_at) "
+                + "VALUES (?, ?, ?) ON CONFLICT(genre_id) DO UPDATE SET "
+                + "name_en = excluded.name_en, checked_at = excluded.checked_at",
+                [(str(genre_id), name_en, now) for genre_id, name_en in genres.items()],
+            )
+
+    def unknown_dlsite_genres(self, genre_ids: Iterable[str]) -> list[str]:
+        wanted = list(dict.fromkeys(str(gid) for gid in genre_ids))
+        if not wanted:
+            return []
+        known = set(self.dlsite_genre_names(wanted))
+        return [gid for gid in wanted if gid not in known]
 
     def mark_sweep_completed(self, source: str, now: str) -> None:
         with self.conn:

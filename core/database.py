@@ -1629,6 +1629,7 @@ def add_game(
     lc_mode: str = "",
     lc_dismissed: str = "",
     screenshots: Sequence[str] = (),
+    original_title: str = "",
 ) -> int | None:
     # tags might be a list, so convert to comma-separated string if needed
     if isinstance(tags, list):
@@ -1657,9 +1658,10 @@ def add_game(
             raise sqlite3.IntegrityError("duplicate f95_url")
 
         _ = cursor.execute(
-            "INSERT INTO games (title, exe_path, f95_url, lc_url, lc_mode, lc_dismissed, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status, command_line_args, sandbox_enabled, block_network, screenshots) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO games (title, original_title, exe_path, f95_url, lc_url, lc_mode, lc_dismissed, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status, command_line_args, sandbox_enabled, block_network, screenshots) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 title,
+                thread_detail_column_value("original_title", original_title),
                 exe_path,
                 normalized_url,
                 normalized_lc,
