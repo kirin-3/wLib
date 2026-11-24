@@ -3,7 +3,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   IconAlertTriangle,
-  IconDatabase,
+  IconChartPie,
   IconLoader2,
   IconPlayerStop,
   IconRefresh,
@@ -281,7 +281,7 @@ onBeforeUnmount(() => {
     <header class="flex flex-wrap items-start justify-between gap-4">
       <div class="min-w-0 flex-1">
         <h2 class="ui-page-heading text-3xl font-bold mb-2 tracking-tight" style="color: var(--text-primary)">
-          <IconDatabase class="ui-page-heading-icon" />
+          <IconChartPie class="ui-page-heading-icon" />
           <span>Storage</span>
         </h2>
         <p class="text-sm pl-3" style="color: var(--text-secondary); border-left: 2px solid var(--brand)">
@@ -365,7 +365,7 @@ onBeforeUnmount(() => {
       class="storage-card rounded-xl p-10 text-center space-y-4"
     >
       <div class="mx-auto w-12 h-12 rounded-2xl flex items-center justify-center" style="background: var(--brand-glow); color: var(--brand)">
-        <IconDatabase class="w-6 h-6" />
+        <IconChartPie class="w-6 h-6" />
       </div>
       <div class="max-w-md mx-auto space-y-2">
         <h3 class="text-lg font-bold" style="color: var(--text-primary)">No storage report yet</h3>

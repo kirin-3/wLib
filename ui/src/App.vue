@@ -16,7 +16,7 @@ import {
   IconBrandDiscord,
   IconBrandGithub,
   IconCloud,
-  IconDatabase,
+  IconChartPie,
   IconDatabaseExport,
   IconCompass,
   IconLayout2,
@@ -691,7 +691,7 @@ onUnmounted(() => {
             active-class="nav-active"
             exact-active-class="nav-active"
           >
-            <IconDatabase class="shrink-0" :size="18" />
+            <IconChartPie class="shrink-0" :size="18" />
             <span
               class="whitespace-nowrap transition-opacity duration-150"
               :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
