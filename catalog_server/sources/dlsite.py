@@ -47,7 +47,8 @@ WORK_URL = "https://www.dlsite.com/{site}/work/=/product_id/{product_id}.html"
 MAX_INCREMENTAL_PAGES = 30
 
 _ITEM_SPLIT_RE = re.compile(r'<tr\s+data-list_item_product_id="(\w+)"')
-_EN_ITEM_SPLIT_RE = re.compile(r'<li\s+data-list_item_product_id="(\w+)"')
+# The English /maniax/ listing uses <li> rows; the English /pro/ listing keeps <tr> rows.
+_EN_ITEM_SPLIT_RE = re.compile(r'<(?:li|tr)\s+data-list_item_product_id="(\w+)"')
 _MAKER_RE = re.compile(
     r'<dd class="maker_name">.*?maker_id/(\w+)\.html">([^<]*)</a>', re.S
 )

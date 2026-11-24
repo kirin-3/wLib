@@ -169,6 +169,18 @@ def test_english_listing_parses_li_markup():
     assert circles["RJ01776743"] == "ささスタジオ"
 
 
+def test_english_pro_listing_parses_tr_markup():
+    # The English /pro/ listing keeps the table rows of the Japanese one.
+    payload = {
+        "search_result": "<table>"
+        + '<tr data-list_item_product_id="VJ01007183">'
+        + '<dd class="maker_name"><a href="https://www.dlsite.com/pro/circle/profile/=/maker_id/VG02247.html">TRYSET</a></dd>'
+        + "</tr></table>",
+        "page_info": {"count": 1, "first_indice": 1, "last_indice": 1},
+    }
+    assert parse_english_listing(payload) == {"VJ01007183": "TRYSET"}
+
+
 def test_genre_list_and_product_json_parsers():
     genre_list = parse_genre_list(
         fixture_bytes("dlsite_genre_list_en.html").decode("utf-8")
