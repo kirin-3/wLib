@@ -299,6 +299,17 @@ class ApiBase:
                 on_installed=self._on_catalog_installed,
             )
         )
+        from core.catalog_discover import DiscoverIndex
+
+        # Device-local Discover index, built on the catalog thread.
+        self.discover_index: DiscoverIndex = hide_from_js(
+            DiscoverIndex(get_data_dir(), enabled=self._catalog_enabled)
+        )
+        if not self._catalog_enabled() or not self.catalog.installed_sha256():
+            self.discover_index.remove()
+        # Games Discover created in this session; only these may be discarded.
+        self._discover_created: set[int] = set()
+        self._discover_lock: threading.Lock = threading.Lock()
         if self._catalog_enabled():
             _ = self.catalog.start_background()
 
@@ -1304,6 +1315,9 @@ class ApiBase:
 
     def _on_catalog_installed(self) -> None:
         """Runs on the catalog thread after a snapshot installs and once at startup."""
+        _ = self.discover_index.ensure(
+            self.catalog.catalog_path, self.catalog.installed_sha256()
+        )
         _ = self._fill_lc_threads_from_catalog()
         _ = self._fill_ratings_from_catalog()
         if (

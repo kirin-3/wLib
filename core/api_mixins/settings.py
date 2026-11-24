@@ -636,6 +636,7 @@ class SettingsMixin(ApiBase):
                 self._start_lc_plus_detection("settings")
             if catalog_change is False:
                 self.catalog.remove()
+                self.discover_index.remove()
             elif catalog_change is True:
                 _ = self.catalog.start_background(force=True)
             if any(key in torrent_values for key in torrent_settings.HELPER_KEYS):

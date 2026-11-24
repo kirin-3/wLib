@@ -860,3 +860,44 @@ def test_api_lookup_lc_partner_returns_f95_catalog_entry(
     assert isinstance(lc_combined, dict)
     assert lc_combined["title"] == "Ambrosia"
     assert lc_combined["overview"] == "LC overview fallback"
+
+
+def test_discover_index_follows_the_catalog_setting(started, tmp_path):
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    (data / "discover-index.db").write_bytes(b"x")
+    # Turned on but no catalog installed: a leftover index goes at start.
+    api = Api()
+    assert not (data / "discover-index.db").exists()
+    (data / "discover-index.db").write_bytes(b"x")
+    assert api.save_settings({"catalog_enabled": False})["success"] is True
+    assert not (data / "discover-index.db").exists()
+    (data / "discover-index.db").write_bytes(b"x")
+    Api()
+    assert not (data / "discover-index.db").exists()
+
+
+def test_catalog_install_builds_the_discover_index(started, tmp_path, monkeypatch):
+    api = Api()
+    calls = []
+    monkeypatch.setattr(api.catalog, "installed_sha256", lambda: "sha")
+    monkeypatch.setattr(
+        api.discover_index, "ensure", lambda path, sha: calls.append((path, sha))
+    )
+    api._on_catalog_installed()
+    assert calls == [(api.catalog.catalog_path, "sha")]
+
+
+def test_library_export_and_sync_never_include_the_discover_index(started, tmp_path):
+    from core.library_backup import build_library_backup, build_sync_backup
+
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    (data / "discover-index.db").write_bytes(b"discover-index-marker")
+    for document in (
+        build_library_backup({}),
+        build_sync_backup("2026-01-01T00:00:00Z", "device"),
+    ):
+        text = json.dumps(document)
+        assert "discover-index" not in text
+        assert "discover-index-marker" not in text

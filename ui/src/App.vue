@@ -17,6 +17,7 @@ import {
   IconBrandGithub,
   IconCloud,
   IconDatabaseExport,
+  IconCompass,
   IconLayout2,
   IconMoon,
   IconDeviceDesktop,
@@ -593,6 +594,25 @@ onUnmounted(() => {
               class="whitespace-nowrap transition-opacity duration-150"
               :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
               >Library</span
+            >
+          </router-link>
+
+          <router-link
+            to="/discover"
+            :title="navCollapsed ? 'Discover' : ''"
+            aria-label="Discover"
+            :class="[
+              'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
+              navCollapsed ? 'justify-center' : 'gap-3',
+            ]"
+            active-class="nav-active"
+            exact-active-class="nav-active"
+          >
+            <IconCompass class="shrink-0" :size="18" />
+            <span
+              class="whitespace-nowrap transition-opacity duration-150"
+              :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              >Discover</span
             >
           </router-link>
 

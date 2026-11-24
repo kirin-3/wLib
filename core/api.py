@@ -7,6 +7,7 @@ more mixins use it."""
 
 from __future__ import annotations
 
+from core.api_mixins.discover import DiscoverMixin
 from core.api_mixins.downloads import DownloadsMixin
 from core.api_mixins.extension import ExtensionMixin
 from core.api_mixins.game_tools import GameToolsMixin
@@ -25,6 +26,7 @@ from core.versions import normalize_version as normalize_version
 
 
 class Api(
+    DiscoverMixin,
     LibraryMixin,
     SyncMixin,
     ExtensionMixin,

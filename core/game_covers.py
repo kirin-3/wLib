@@ -336,8 +336,8 @@ def fetch_lc_image(url: str, *, background: bool) -> bytes:
 class LcImageKeys:
     """Bounded in-memory ``key -> LC URL`` map for local screenshot addresses.
 
-    Only ``get_game_screenshots`` fills it, so another local program cannot
-    make wLib fetch an LC URL of its choice. The keys are random for each
+    Only ``get_game_screenshots`` and ``get_discover_screenshots`` fill it,
+    so another local program cannot make wLib fetch an LC URL of its choice. The keys are random for each
     app session (one per URL), not ``lc_image_key``: that hash names the disk
     copy, and a program that knows the URL could work it out and read the
     image without a pairing token."""

@@ -1781,6 +1781,127 @@ export interface CatalogStatusResponse extends ApiBasicResponse {
   started?: boolean;
 }
 
+export type DiscoverSite = "f95" | "lc" | "dlsite" | "vndb" | "ryuugames";
+export type DiscoverSort = "updated" | "rating" | "released" | "title";
+export type DiscoverStatus = "ongoing" | "completed" | "onhold" | "abandoned";
+
+export interface DiscoverLibraryMark {
+  game_id: number;
+  state: "installed" | "wishlisted";
+}
+
+/** One Discover card: a catalog game group from the device-local index. */
+export interface DiscoverCard {
+  key: string;
+  title: string;
+  developer: string;
+  version: string;
+  version_site: "" | DiscoverSite;
+  /** Already safe for the window to load; "" shows the cover placeholder. */
+  cover_url: string;
+  sites: DiscoverSite[];
+  f95_id: number | null;
+  lc_id: number | null;
+  lc_tier: string;
+  dlsite_id: string;
+  vndb_id: string;
+  ryuu_id: number | null;
+  status: "" | DiscoverStatus;
+  engine: string;
+  rating: number | null;
+  rating_count: number | null;
+  wrating: number | null;
+  /** `YYYY-MM-DD` or "". */
+  released_at: string;
+  /** Unix seconds; 0 when unknown. */
+  updated_ts: number;
+  library: DiscoverLibraryMark | null;
+}
+
+export interface DiscoverQuery {
+  search?: string;
+  include_sites?: DiscoverSite[];
+  exclude_sites?: DiscoverSite[];
+  include_tags?: string[];
+  exclude_tags?: string[];
+  statuses?: DiscoverStatus[];
+  engines?: string[];
+  /** One of the rating steps 3.5, 4.0 or 4.5. */
+  min_rating?: number | null;
+  hide_library?: boolean;
+  sort?: DiscoverSort;
+  offset?: number;
+  limit?: number;
+}
+
+export interface DiscoverStatusResponse extends ApiBasicResponse {
+  enabled?: boolean;
+  installed?: boolean;
+  ready?: boolean;
+  building?: boolean;
+  built_at?: string | null;
+}
+
+export interface DiscoverTagOption {
+  key: string;
+  name: string;
+  count: number;
+}
+
+export interface DiscoverFiltersResponse extends ApiBasicResponse {
+  tags?: DiscoverTagOption[];
+  engines?: { name: string; count: number }[];
+  statuses?: { key: DiscoverStatus; count: number }[];
+}
+
+export interface DiscoverSearchResponse extends ApiBasicResponse {
+  games?: DiscoverCard[];
+  total?: number;
+  next_offset?: number | null;
+}
+
+export interface DiscoverEntry {
+  site: DiscoverSite;
+  name: string;
+  id: string;
+  title: string;
+  url: string;
+  tier?: string;
+}
+
+export interface DiscoverGameDetails extends Omit<DiscoverCard, "sites"> {
+  sites: DiscoverSite[];
+  /** Tag names (F95 names; LC slugs with spaces). */
+  tags: string[];
+  entry_ids: { kind: string; value: string }[];
+  entries: DiscoverEntry[];
+  overview?: string;
+  original_title?: string;
+  aliases?: string[];
+  languages?: string[];
+  dlsite_genres?: string[];
+  /** Download is offered when available; `reason` explains a disabled one. */
+  download: { available: boolean; reason: string };
+}
+
+export interface DiscoverGameResponse extends ApiBasicResponse {
+  game?: DiscoverGameDetails;
+}
+
+export interface DiscoverScreenshotsResponse extends ApiBasicResponse {
+  screenshots?: { thumb: string; full: string }[];
+}
+
+export interface DiscoverAddResponse extends ApiBasicResponse {
+  game_id?: number;
+  /** True when Discover added a new library game (not an existing match). */
+  created?: boolean;
+}
+
+export interface DiscoverDiscardResponse extends ApiBasicResponse {
+  removed?: boolean;
+}
+
 export interface CollectionsResponse extends ApiBasicResponse {
   collections?: string[];
 }
@@ -2483,6 +2604,36 @@ class ApiService {
 
   async checkCatalogNow(): Promise<CatalogStatusResponse> {
     return this.invoke<CatalogStatusResponse>("check_catalog_now");
+  }
+
+  async getDiscoverStatus(): Promise<DiscoverStatusResponse> {
+    return this.invoke<DiscoverStatusResponse>("get_discover_status");
+  }
+
+  async getDiscoverFilters(): Promise<DiscoverFiltersResponse> {
+    return this.invoke<DiscoverFiltersResponse>("get_discover_filters");
+  }
+
+  async searchDiscover(query: DiscoverQuery): Promise<DiscoverSearchResponse> {
+    return this.invoke<DiscoverSearchResponse>("search_discover", query);
+  }
+
+  async getDiscoverGame(key: string): Promise<DiscoverGameResponse> {
+    return this.invoke<DiscoverGameResponse>("get_discover_game", key);
+  }
+
+  async getDiscoverScreenshots(key: string): Promise<DiscoverScreenshotsResponse> {
+    return this.invoke<DiscoverScreenshotsResponse>("get_discover_screenshots", key);
+  }
+
+  /** Adds the game as wishlisted from catalog data (no F95 request). */
+  async addDiscoverGame(key: string): Promise<DiscoverAddResponse> {
+    return this.invoke<DiscoverAddResponse>("add_discover_game", key);
+  }
+
+  /** Removes a game Discover added for a download that never started; the backend decides. */
+  async discardDiscoverGame(gameId: number): Promise<DiscoverDiscardResponse> {
+    return this.invoke<DiscoverDiscardResponse>("discard_discover_game", gameId);
   }
 
   async exportLibraryBackup(

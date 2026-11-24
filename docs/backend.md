@@ -85,6 +85,60 @@ the catalog.
   it). It is guarded by the device-local setting `catalog_rating_fill_sha`, so
   each snapshot is used once.
 
+### Discover index
+
+`core/catalog_discover.py` builds `<data dir>/discover-index.db`, a
+device-local index for the Discover page with one row per catalog game group
+(`game_groups`; one row per entry when a snapshot has no groups). Rows hold the
+card fields already resolved (title, developer, newest version, a cover the
+window may load, sites, tags, status, engine, weighted F95 rating, release and
+update times) and a normalized `search_text`. `tags` holds the tag list and
+`entry_ids` every identity of every entry, for the library markers.
+`Api.discover_index` (`DiscoverIndex`) builds it first in
+`_on_catalog_installed`, on the catalog thread, when the file is missing, has an
+older layout (`meta.format`) or was built from another snapshot
+(`meta.catalog_sha256`). It writes a temp file next to the index and uses
+`os.replace`, so a failed build keeps the old index. Turning the catalog off
+deletes the index; so does a start with the catalog off or not installed.
+Library export and sync never include it.
+
+`core/api_mixins/discover.py` (`DiscoverMixin`, a `LibraryMixin` subclass) is
+the bridge for the Discover page. Every method except `get_discover_status`
+returns `{success: False, error_code: "catalog_off" | "not_ready"}` while the
+catalog is off or the index is not built.
+
+- `get_discover_status()` returns `{enabled, installed, ready, building, error,
+  built_at}`.
+- `get_discover_filters()` returns the tag list (`key`, `name`, `count`), the
+  engines and the statuses with game counts.
+- `search_discover(params)` validates the query with `parse_query` (unknown
+  values are dropped; pages hold at most 120 games) and returns `{games, total,
+  next_offset}`. Each query reads the library identities (F95 and LC thread
+  IDs, `game_links`) and joins them with `entry_ids`, so the `library` marker
+  (`installed` or `wishlisted`) and "Hide my games" always follow the current
+  library.
+- `get_discover_game(key)` adds the preview details from the catalog: the
+  entries with their page URLs and LC tier, the overview (F95, else LC), the
+  original title, aliases, languages, DLsite genres, and `download:
+  {available, reason}` ("Needs LC Plus" for an LC-only Premium thread without
+  LC Plus).
+- `get_discover_screenshots(key)` returns the F95 catalog screenshots (preview
+  and full-size hosts), else the LC ones as local `lc-images` addresses from
+  `LcImageKeys` (LC images of a game that also has an F95 thread need "Use
+  LewdCorner").
+- `add_discover_game(key)` returns `{game_id, created}`. A game that already
+  matches a library game returns that game, except a match by store links
+  alone, which gets the F95 thread attached. Otherwise it calls
+  `add_game(..., fetch_metadata=False)` with an empty executable and the
+  catalog fields, the store links of every entry, and the LC thread under the
+  library's LC rules ("Use LewdCorner", LC Plus for Premium, not yet claimed;
+  an LC-only game always keeps its thread). No F95 request is sent: the
+  rating and review count, the catalog fills and the Completed state come
+  from the catalog.
+- `discard_discover_game(game_id)` deletes a game only when Discover created
+  it in this app session (`_discover_created`), it is still wishlisted and it
+  has no download-queue job; otherwise it returns `{removed: false}`.
+
 The publisher stores the F95 review count in the optional
 `f95_thread_details.rating_count` snapshot column. A positive number is a
 count collected from the thread page. Zero means the page explicitly reports

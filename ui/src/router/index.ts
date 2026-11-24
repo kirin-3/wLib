@@ -3,6 +3,7 @@ import { confirmLeave } from "../utils/leaveGuard";
 import { createRouter, createWebHashHistory } from "vue-router";
 import type { RouteRecordRaw } from "vue-router";
 import LibraryView from "../views/LibraryView.vue";
+import DiscoverView from "../views/DiscoverView.vue";
 import SettingsView from "../views/SettingsView.vue";
 import ExtensionView from "../views/ExtensionView.vue";
 import UpdatesView from "../views/UpdatesView.vue";
@@ -17,6 +18,11 @@ const routes: RouteRecordRaw[] = [
     path: "/",
     name: "library",
     component: LibraryView,
+  },
+  {
+    path: "/discover",
+    name: "discover",
+    component: DiscoverView,
   },
   {
     path: "/updates",

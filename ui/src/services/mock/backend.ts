@@ -12,6 +12,7 @@ import { rewriteMockGameCollections, validateMockCollectionList, writeMockCollec
 import { readMockCompanions, writeMockCompanions } from "./companions";
 import { MOCK_CATALOG_SOURCES, MOCK_DIAGNOSTICS, MOCK_DIAGNOSTICS_REPORT, MOCK_DIAGNOSTICS_TOOLS, MOCK_SCREENSHOT_SET_B } from "./fixtures";
 import { MockGameFiles } from "./gameFiles";
+import { MockDiscover } from "./discover";
 import { MockDownloads } from "./downloads";
 import { mockGameSaves } from "./gameSaves";
 import { isRecord, readMockGames } from "./games";
@@ -91,6 +92,7 @@ export class MockBackend {
   _mockArchiveStatus: ArchiveInstallStatus = { running: false, stage: "", done: 0, total: 0 };
   _mockGameFiles = new MockGameFiles((id) => this._mockRunningGames.has(id));
   _mockWebMedia = new MockWebMedia();
+  _mockDiscover = new MockDiscover();
   _mockF95Account = new MockF95Account();
   _mockWebPlayerExports = new Map<number, number>();
   _mockDownloads = new MockDownloads(() => this._mockRunningGames.size > 0, () => {
@@ -324,6 +326,32 @@ export class MockBackend {
       case "get_move_status":
       case "cancel_game_move":
         return this._mockGameFiles.respond(method, args);
+      case "get_discover_status":
+      case "get_discover_filters":
+      case "search_discover":
+      case "get_discover_game":
+      case "get_discover_screenshots":
+      case "add_discover_game":
+      case "discard_discover_game":
+        return this._mockDiscover.respond(method, args, {
+          addGame: (title, f95Url, lcUrl, version, links) => {
+            const added = new Array<unknown>(26).fill("");
+            added[0] = title;
+            added[2] = f95Url;
+            added[3] = version;
+            added[14] = "auto";
+            added[16] = links;
+            added[17] = lcUrl;
+            added[20] = null;
+            added[22] = null;
+            added[23] = null;
+            return this.respond("add_game", added) as { success?: boolean; id?: number; attached?: boolean; error?: string };
+          },
+          deleteGame: (id) => {
+            void this.respond("delete_game", [id]);
+          },
+          catalogEnabled: readMockSettings().catalog_enabled,
+        });
       case "start_web_media_conversion":
       case "cancel_web_media_conversion":
       case "get_web_media_conversion_status":

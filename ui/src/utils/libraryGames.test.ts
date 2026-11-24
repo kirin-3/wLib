@@ -675,3 +675,17 @@ test("matchesMinRatingFilter checks weighted rating threshold, exact value, miss
   );
   assert.deepEqual(combined, [above, exact]);
 });
+
+test("weightedRating matches the shared Discover test vector", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { weightedRating } = await import("./libraryGames.ts");
+  const fixture = new URL("../../../tests/fixtures/weighted_rating_cases.json", import.meta.url);
+  const { cases } = JSON.parse(readFileSync(fixture, "utf8")) as {
+    cases: [number | null, number | null, number | null][];
+  };
+  for (const [rating, count, expected] of cases) {
+    const score = weightedRating({ rating: rating === null ? undefined : String(rating), rating_count: count ?? undefined });
+    if (expected === null) assert.equal(score, null, `${rating} / ${count}`);
+    else assert.ok(score !== null && Math.abs(score - expected) < 1e-9, `${rating} / ${count}: ${score}`);
+  }
+});

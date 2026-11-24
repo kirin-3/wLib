@@ -546,6 +546,8 @@ class LibraryMixin(ApiBase):
         thread_abandoned: bool | None = None,
         thread_states_seen_at: str = "",
         original_title: str = "",
+        *,
+        fetch_metadata: bool = True,
     ) -> dict[str, object]:
         import sqlite3
 
@@ -792,7 +794,10 @@ class LibraryMixin(ApiBase):
 
         self.cover_cache.wake()
         self._schedule_steam_sync()
-        metadata_pending = bool(normalized_url) and game_id is not None
+        # Discover adds from catalog data only and sends no F95 request.
+        metadata_pending = (
+            fetch_metadata and bool(normalized_url) and game_id is not None
+        )
         if metadata_pending:
             assert game_id is not None
             needs_metadata_backfill = (

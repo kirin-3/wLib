@@ -1,4 +1,7 @@
 {
+  "add_discover_game": [
+    "key"
+  ],
   "add_game": [
     "title",
     "exe_path",
@@ -143,6 +146,9 @@
   "detect_external_library": [
     "source"
   ],
+  "discard_discover_game": [
+    "game_id"
+  ],
   "disconnect_mega_account": [],
   "disconnect_pixeldrain_account": [],
   "disconnect_rpdl_account": [],
@@ -197,6 +203,14 @@
   "get_diagnostics": [],
   "get_diagnostics_report": [],
   "get_diagnostics_tools": [],
+  "get_discover_filters": [],
+  "get_discover_game": [
+    "key"
+  ],
+  "get_discover_screenshots": [
+    "key"
+  ],
+  "get_discover_status": [],
   "get_download_accounts": [],
   "get_download_queue": [
     "include_history"
@@ -516,6 +530,9 @@
   ],
   "scan_games_folder": [
     "folder"
+  ],
+  "search_discover": [
+    "params"
   ],
   "send_rpdl_torrent_to_watch_folder": [
     "torrent_id"
