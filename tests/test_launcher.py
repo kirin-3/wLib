@@ -5555,7 +5555,7 @@ def _nwjs_game(tmp_path, *, library_folder="lib"):
     return str(binary)
 
 
-def _launch_native_env(binary, **launch_kwargs):
+def _launch_native_popen_call(binary, **launch_kwargs):
     with (
         patch("core.launcher.get_setting", return_value="false"),
         patch("subprocess.Popen") as popen,
@@ -5563,7 +5563,15 @@ def _launch_native_env(binary, **launch_kwargs):
     ):
         popen.return_value = MagicMock()
         assert Launcher().launch(binary, **launch_kwargs)["success"] is True
-    return popen.call_args.kwargs["env"]
+    return popen.call_args
+
+
+def _launch_native_env(binary, **launch_kwargs):
+    return _launch_native_popen_call(binary, **launch_kwargs).kwargs["env"]
+
+
+def _launch_native_command(binary, **launch_kwargs):
+    return _launch_native_popen_call(binary, **launch_kwargs).args[0]
 
 
 @_LINUX_HOST_ONLY
@@ -5651,3 +5659,48 @@ def test_native_binary_without_nwjs_runtime_keeps_the_host_environment(
 
     assert "GLIBC_TUNABLES" not in env
     assert env["XDG_CACHE_HOME"] == str(tmp_path / "host-cache")
+
+
+@_LINUX_HOST_ONLY
+def test_nwjs_bundle_launch_renders_on_the_host_gpu(tmp_path):
+    binary = _nwjs_game(tmp_path)
+
+    command = _launch_native_command(binary)
+
+    assert command == [binary, "--use-gl=desktop"]
+
+
+@_LINUX_HOST_ONLY
+def test_nwjs_bundle_launch_keeps_the_gpu_flag_inside_a_percent_command_line(
+    tmp_path,
+):
+    binary = _nwjs_game(tmp_path)
+
+    command = _launch_native_command(
+        binary, command_line_args="MANGOHUD=1 %command% --window"
+    )
+
+    assert command == [binary, "--use-gl=desktop", "--window"]
+
+
+@_LINUX_HOST_ONLY
+@pytest.mark.parametrize(
+    "gpu_argument", ["--use-gl=egl", "--use-gl=swiftshader", "--disable-gpu"]
+)
+def test_nwjs_bundle_launch_respects_an_explicit_gpu_choice(tmp_path, gpu_argument):
+    binary = _nwjs_game(tmp_path)
+
+    command = _launch_native_command(
+        binary, command_line_args=f"%command% {gpu_argument}"
+    )
+
+    assert command == [binary, gpu_argument]
+
+
+@_LINUX_HOST_ONLY
+def test_native_binary_without_nwjs_runtime_gets_no_gpu_flag(tmp_path):
+    binary = _nwjs_game(tmp_path, library_folder=None)
+
+    command = _launch_native_command(binary)
+
+    assert command == [binary]

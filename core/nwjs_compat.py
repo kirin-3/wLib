@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from core.host_platform import get_cache_dir
 
@@ -14,6 +14,13 @@ EXECSTACK_TUNABLE_NAME = "glibc.rtld.execstack"
 EXECSTACK_ALLOWED = f"{EXECSTACK_TUNABLE_NAME}=2"
 CACHE_HOME_VARIABLE = "XDG_CACHE_HOME"
 NWJS_CACHE_FOLDER = "nwjs"
+HOST_GPU_ARGUMENT = "--use-gl=desktop"
+GPU_ARGUMENT_PREFIXES = (
+    "--use-gl",
+    "--use-angle",
+    "--disable-gpu",
+    "--in-process-gpu",
+)
 
 
 def is_nwjs_bundle(game_dir: str) -> bool:
@@ -43,3 +50,14 @@ def nwjs_host_env(
         CACHE_HOME_VARIABLE: os.path.join(get_cache_dir(), NWJS_CACHE_FOLDER),
     }
     return {name: value for name, value in overrides.items() if name not in user_env}
+
+
+def nwjs_gpu_arguments(game_dir: str, args: Sequence[str]) -> list[str]:
+    """The bundled Chromium 65 cannot start its default GPU path on a current
+    Mesa stack and falls back to SwiftShader, which draws the whole game on
+    the CPU."""
+    if not is_nwjs_bundle(game_dir):
+        return []
+    if any(arg.startswith(GPU_ARGUMENT_PREFIXES) for arg in args):
+        return []
+    return [HOST_GPU_ARGUMENT]

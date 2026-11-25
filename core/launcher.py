@@ -31,7 +31,7 @@ from .database import (
 from . import display_info, game_sandbox, locale_emulator, rpgmaker_runner
 from . import gamescope as gamescope_mod
 from .gamescope import GamescopeOptions
-from .nwjs_compat import nwjs_host_env
+from .nwjs_compat import nwjs_gpu_arguments, nwjs_host_env
 from .host_platform import (
     get_cheat_engine_dir,
     get_default_wine_prefix,
@@ -2766,7 +2766,9 @@ class Launcher:
                 or is_elf(exe_path)
                 or is_script(exe_path)
             ):
-                command = build_command([exe_path], args)
+                command = build_command(
+                    [exe_path, *nwjs_gpu_arguments(game_dir, args)], args
+                )
                 print(f"Executing Linux binary natively: {' '.join(command)}")
                 return execute_process(command, process_env)
 
