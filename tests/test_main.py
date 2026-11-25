@@ -1107,6 +1107,9 @@ def test_main_gives_the_extension_server_the_api_and_the_window(monkeypatch):
     assert isinstance(seen["api"], FakeApi)
     assert seen["api_at_ready"] is seen["api"]
     assert seen["window"] is window
+    min_width, min_height = fake_webview.create_window.call_args.kwargs["min_size"]
+    # Fits a Steam Deck screen and half of a 1920 px wide screen.
+    assert min_width <= 960 and min_height <= 800
 
 
 def test_main_terminates_vite_when_window_creation_fails(monkeypatch):

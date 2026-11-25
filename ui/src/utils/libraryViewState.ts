@@ -40,6 +40,7 @@ export interface FilterSections {
   presets: boolean;
   collections: boolean;
   status: boolean;
+  install: boolean;
   rating: boolean;
   threadStates: boolean;
   sources: boolean;
@@ -133,6 +134,7 @@ export const DEFAULT_FILTER_SECTIONS: FilterSections = {
   presets: true,
   collections: true,
   status: true,
+  install: true,
   rating: true,
   threadStates: true,
   sources: true,
@@ -195,6 +197,39 @@ export const toggleSortState = (current: SortState, field: SortField): SortState
 /** The sort menu: another field starts with its default direction; the active field keeps its direction. */
 export const chooseSortField = (current: SortState, field: SortField): SortState =>
   current.sortBy === field ? { ...current } : { sortBy: field, sortDir: defaultSortDir(field) };
+
+/** Names of the sort fields, as the View menu and its button show them. */
+export const SORT_FIELD_LABELS: Record<SortField, string> = {
+  title: "Title",
+  version: "Version",
+  play_status: "Status",
+  engine: "Engine",
+  date_added: "Date added",
+  last_played: "Last played",
+  playtime_seconds: "Playtime",
+  rating: "F95 rating",
+  weighted_rating: "Weighted rating",
+  own_rating: "My rating",
+};
+
+/** Fields that only the list view column headers offered before; the View menu shows them in list view or while active. */
+export const LIST_ONLY_SORT_FIELDS: ReadonlySet<SortField> = new Set<SortField>(["version", "play_status", "engine"]);
+
+const SORT_ORDER_LABELS: Record<SortField, Record<SortDir, string>> = {
+  title: { asc: "A to Z", desc: "Z to A" },
+  play_status: { asc: "A to Z", desc: "Z to A" },
+  engine: { asc: "A to Z", desc: "Z to A" },
+  version: { asc: "Lowest first", desc: "Highest first" },
+  date_added: { asc: "Oldest first", desc: "Newest first" },
+  last_played: { asc: "Least recent first", desc: "Most recent first" },
+  playtime_seconds: { asc: "Least played first", desc: "Most played first" },
+  rating: { asc: "Lowest first", desc: "Highest first" },
+  weighted_rating: { asc: "Lowest first", desc: "Highest first" },
+  own_rating: { asc: "Lowest first", desc: "Highest first" },
+};
+
+/** The order a sort shows, in words that match the field: "Z to A", "Newest first". */
+export const sortOrderLabel = (field: SortField, dir: SortDir): string => SORT_ORDER_LABELS[field][dir];
 const VALID_FILTER_COLLECTIONS = new Set<FilterCollection>([
   "All",
   "Favorites",
@@ -384,6 +419,10 @@ export const normalizeFilterSections = (value: unknown): FilterSections => {
       typeof source?.status === "boolean"
         ? source.status
         : DEFAULT_FILTER_SECTIONS.status,
+    install:
+      typeof source?.install === "boolean"
+        ? source.install
+        : DEFAULT_FILTER_SECTIONS.install,
     rating:
       typeof source?.rating === "boolean"
         ? source.rating

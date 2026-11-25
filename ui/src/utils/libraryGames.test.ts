@@ -3,7 +3,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildTagFilterOptions,
+  formatCardRating,
   formatLastPlayed,
+  formatLibrarySummary,
   formatPlaytime,
   defaultTargetLabel,
   getEffectiveLaunchTargets,
@@ -28,6 +30,9 @@ import {
   toggleTagFilter,
   cycleFilterValue,
   filterValueState,
+  setFilterValueState,
+  toggleIncludedFilterValue,
+  toggleExcludedFilterValue,
   tagFilterKey,
   pinnedTagKeysFor,
   orderTagOptions,
@@ -393,6 +398,27 @@ test("playtime and last-played formatting", () => {
   assert.notEqual(formatLastPlayed("2026-01-02T00:00:00Z"), "Never");
 });
 
+test("cover ratings use one format with the review count only in the label", () => {
+  assert.deepEqual(formatCardRating({ rating: "4.5/5 (138 reviews)" }), {
+    value: "4.5",
+    label: "F95 rating 4.5 out of 5 from 138 reviews",
+  });
+  assert.deepEqual(formatCardRating({ rating: "3.69" }), { value: "3.7", label: "F95 rating 3.7 out of 5" });
+  assert.equal(formatCardRating({ rating: "3.0" })?.value, "3.0");
+  assert.equal(formatCardRating({ rating: "5/5", rating_count: 1 })?.label, "F95 rating 5.0 out of 5 from 1 review");
+  assert.equal(formatCardRating({ rating: "4.0/5 (1,204 reviews)" })?.label, "F95 rating 4.0 out of 5 from 1204 reviews");
+  assert.equal(formatCardRating({ rating: "" }), null);
+  assert.equal(formatCardRating({ rating: "0" }), null);
+  assert.equal(formatCardRating({ rating: "7.5" }), null);
+});
+
+test("library summary counts games and updates", () => {
+  assert.equal(formatLibrarySummary(0, 0), "");
+  assert.equal(formatLibrarySummary(1, 0), "1 game");
+  assert.equal(formatLibrarySummary(25, 4), "25 games · 4 updates");
+  assert.equal(formatLibrarySummary(2, 1), "2 games · 1 update");
+});
+
 test("launch targets list the default first, then by sort order", () => {
   const targets = getEffectiveLaunchTargets({
     id: 7,
@@ -503,6 +529,36 @@ test("cycling a tag removes every spelling from both lists", () => {
     );
     assert.equal(inBoth, false);
   }
+});
+
+test("a pill click toggles include; the exclude control toggles exclude", () => {
+  let lists = { included: [] as string[], excluded: [] as string[] };
+  lists = toggleIncludedFilterValue(lists.included, lists.excluded, "sandbox", tagFilterKey);
+  assert.deepEqual(lists, { included: ["sandbox"], excluded: [] });
+  lists = toggleIncludedFilterValue(lists.included, lists.excluded, "Sandbox", tagFilterKey);
+  assert.deepEqual(lists, { included: [], excluded: [] });
+  lists = toggleExcludedFilterValue(lists.included, lists.excluded, "sandbox", tagFilterKey);
+  assert.deepEqual(lists, { included: [], excluded: ["sandbox"] });
+  lists = toggleExcludedFilterValue(lists.included, lists.excluded, "sandbox", tagFilterKey);
+  assert.deepEqual(lists, { included: [], excluded: [] });
+  // An included value switches straight to excluded, and back to included.
+  lists = toggleExcludedFilterValue(["sandbox", "rpg"], [], "SANDBOX", tagFilterKey);
+  assert.deepEqual(lists, { included: ["rpg"], excluded: ["SANDBOX"] });
+  lists = toggleIncludedFilterValue(lists.included, lists.excluded, "sandbox", tagFilterKey);
+  assert.deepEqual(lists, { included: ["rpg", "sandbox"], excluded: [] });
+  // Engines use the exact trimmed value.
+  assert.deepEqual(toggleIncludedFilterValue(["rpgm"], [], "RPGM"), { included: ["rpgm", "RPGM"], excluded: [] });
+});
+
+test("setting a filter value state removes every spelling from both lists", () => {
+  assert.deepEqual(
+    setFilterValueState(["Sandbox", "rpg"], ["sandbox "], "sandbox", "include", tagFilterKey),
+    { included: ["rpg", "sandbox"], excluded: [] },
+  );
+  assert.deepEqual(
+    setFilterValueState(["Sandbox"], ["SANDBOX"], "sandbox", "neutral", tagFilterKey),
+    { included: [], excluded: [] },
+  );
 });
 
 test("tag filters hide games with any excluded tag", () => {
@@ -688,4 +744,33 @@ test("weightedRating matches the shared Discover test vector", async () => {
     if (expected === null) assert.equal(score, null, `${rating} / ${count}`);
     else assert.ok(score !== null && Math.abs(score - expected) < 1e-9, `${rating} / ${count}: ${score}`);
   }
+});
+
+test("no-results state names its cause", async () => {
+  const { describeLibraryNoResults } = await import("./libraryGames.ts");
+  const base = { collection: "", collectionGameCount: 10, quickFilter: "All" as const, otherFilterCount: 0, search: "" };
+  assert.deepEqual(describeLibraryNoResults({ ...base, collection: "RPG", collectionGameCount: 0, search: "x", otherFilterCount: 2 }), {
+    kind: "collection-empty",
+    title: "“RPG” has no games yet",
+    detail: "Right-click a game, choose Collections…, then select this collection.",
+  });
+  const favorites = describeLibraryNoResults({ ...base, quickFilter: "Favorites" });
+  assert.equal(favorites.kind, "quick-filter-empty");
+  assert.equal(favorites.title, "No favorites yet");
+  assert.equal(describeLibraryNoResults({ ...base, quickFilter: "Favorites", collection: "RPG" }).title, "No favorites in “RPG”");
+  // A quick filter with other filters or a search is an ordinary no-match.
+  assert.equal(describeLibraryNoResults({ ...base, quickFilter: "Favorites", otherFilterCount: 1 }).kind, "no-match");
+  assert.equal(describeLibraryNoResults({ ...base, quickFilter: "Favorites", search: "zz" }).kind, "no-match");
+  const searched = describeLibraryNoResults({ ...base, search: "  zelda  " });
+  assert.equal(searched.title, "No games match “zelda”");
+  assert.equal(searched.detail, "Check the spelling, or search by developer or tag.");
+  const both = describeLibraryNoResults({ ...base, search: "zelda", otherFilterCount: 1, quickFilter: "Favorites", collection: "RPG" });
+  assert.equal(both.title, "No games match “zelda” in “RPG”");
+  assert.equal(both.detail, "2 filters are on. The search only looks in games that pass them.");
+  assert.equal(describeLibraryNoResults({ ...base, search: "zelda", otherFilterCount: 1 }).detail, "1 filter is on. The search only looks in games that pass it.");
+  const filtered = describeLibraryNoResults({ ...base, otherFilterCount: 1 });
+  assert.equal(filtered.title, "No games match your filters");
+  assert.equal(filtered.detail, "1 filter is on. Remove one above, or clear them all.");
+  assert.equal(describeLibraryNoResults(base).title, "No games to show");
+  assert.equal(describeLibraryNoResults({ ...base, search: "a".repeat(80) }).title, `No games match “${"a".repeat(47)}…”`);
 });

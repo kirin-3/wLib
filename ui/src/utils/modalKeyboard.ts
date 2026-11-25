@@ -28,8 +28,12 @@ export const handleModalKeydown = (event: KeyboardEvent): void => {
   }
   if (event.key !== "Tab") return;
 
+  // Hidden controls (for example a pill's exclude button that shows on focus
+  // only) cannot take focus, so they never count as the first or last stop.
   const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-    (element) => element.getClientRects().length > 0,
+    (element) =>
+      element.getClientRects().length > 0 &&
+      (typeof getComputedStyle !== "function" || getComputedStyle(element).visibility !== "hidden"),
   );
   const first = items[0];
   const last = items[items.length - 1];

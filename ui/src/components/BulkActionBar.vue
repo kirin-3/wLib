@@ -2,12 +2,14 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useTemplateRef } from "vue";
 import { useEventListener } from "../composables/useEventListener";
+import { toCssPx } from "../utils/interfaceScalePreference";
 import { IconChevronDown, IconChevronLeft, IconChevronRight } from "@tabler/icons-vue";
 import type { GameRecord } from "../services/api";
 import { addTagCsv, launchModeApplicable, removeTagCsv } from "../utils/bulkActions";
 import { ENGINE_OPTIONS, isEngine } from "../utils/engines";
 import { gameTags, isWishlisted } from "../utils/libraryGames";
 import { normalizePlayStatus } from "../utils/playStatus";
+import BulkMenuItem from "./BulkMenuItem.vue";
 
 type MenuId = "status" | "collections" | "updates" | "runtime" | "metadata" | "maintenance";
 type SubView = "" | "launch-mode" | "add-tag" | "remove-tag" | "engine" | "collection";
@@ -72,19 +74,29 @@ const closeMenu = (restoreFocus = true): boolean => {
 
 const focusFirstItem = async () => {
   await nextTick();
-  root.value?.querySelector<HTMLElement>("[role='menu'] [role='menuitem']:not(:disabled), [role='menu'] input, [role='menu'] select")?.focus();
+  root.value?.querySelector<HTMLElement>("[role='menu'] [role='menuitem']:not([aria-disabled='true']), [role='menu'] input, [role='menu'] select")?.focus();
 };
 
-// Fixed placement above the trigger, clamped into the window, so the scrolling
-// library area and a narrow window never clip the panel.
+// Fixed placement above the trigger (below it when there is more room there),
+// clamped into the window, so the scrolling library area and a narrow or short
+// window never clip the panel. Rectangles use viewport pixels; styles use CSS
+// pixels (the interface scale zooms the root).
+const EDGE = 8;
 const placePanel = async (id: MenuId) => {
   const rect = triggers.get(id)?.getBoundingClientRect();
   if (!rect) return;
-  panelStyle.value = { left: `${rect.left}px`, bottom: `${window.innerHeight - rect.top + 6}px`, visibility: "hidden" };
+  panelStyle.value = { left: `${toCssPx(rect.left)}px`, bottom: `${toCssPx(window.innerHeight - rect.top + 6)}px`, visibility: "hidden" };
   await nextTick();
-  const width = root.value?.querySelector<HTMLElement>("[role='menu']")?.getBoundingClientRect().width ?? 0;
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-  panelStyle.value = { left: `${left}px`, bottom: `${window.innerHeight - rect.top + 6}px` };
+  const box = root.value?.querySelector<HTMLElement>("[role='menu']")?.getBoundingClientRect();
+  const width = box?.width ?? 0;
+  const height = box?.height ?? 0;
+  const left = Math.max(EDGE, Math.min(rect.left, window.innerWidth - width - EDGE));
+  const above = rect.top - 6 - EDGE;
+  const below = window.innerHeight - rect.bottom - 6 - EDGE;
+  const vertical = height <= above || above >= below
+    ? { bottom: `${toCssPx(window.innerHeight - rect.top + 6)}px`, maxHeight: `${toCssPx(Math.max(above, 120))}px` }
+    : { top: `${toCssPx(rect.bottom + 6)}px`, maxHeight: `${toCssPx(Math.max(below, 120))}px` };
+  panelStyle.value = { left: `${toCssPx(left)}px`, ...vertical };
 };
 
 const toggleMenu = (id: MenuId) => {
@@ -108,7 +120,8 @@ const run = (action: string, value?: string) => {
 const onMenuKeydown = (event: KeyboardEvent) => {
   if (event.key === "Escape") { event.stopPropagation(); closeMenu(); return; }
   if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-  const items = [...(root.value?.querySelectorAll<HTMLElement>("[role='menu'] [role='menuitem']:not(:disabled)") ?? [])];
+  // Unavailable items stay in the arrow-key order, so their reason is read too.
+  const items = [...(root.value?.querySelectorAll<HTMLElement>("[role='menu'] [role='menuitem']") ?? [])];
   if (!items.length) return;
   event.preventDefault();
   const index = items.indexOf(document.activeElement as HTMLElement);
@@ -125,13 +138,26 @@ useEventListener(window, "resize", onResize);
 
 defineExpose({ closeMenu, focusFirst: () => root.value?.querySelector<HTMLElement>("button, select")?.focus() });
 
-// Reasons double as disabled tooltips so each action says why it is unavailable.
+// Each unavailable item shows its reason under its label (see BulkMenuItem).
+const BUSY_REASON = "Wait for the running bulk action to finish";
+const unavailable = (...reasons: (string | false)[]): string =>
+  props.busy ? BUSY_REASON : reasons.find((reason): reason is string => !!reason) ?? "";
 const statusSetNothing = (value: string) => props.games.every((game) => normalizePlayStatus(game.play_status, game.status) === value);
 const allFavorite = computed(() => props.games.every((game) => game.is_favorite));
 const noneFavorite = computed(() => props.games.every((game) => !game.is_favorite));
 const hasCollection = (game: GameRecord, name: string) => (game.collections || []).some((entry) => entry.toLowerCase() === name.toLowerCase());
-const collectionAddDisabled = computed(() => !collectionChoice.value || props.games.every((game) => hasCollection(game, collectionChoice.value)));
-const collectionRemoveDisabled = computed(() => !collectionChoice.value || props.games.every((game) => !hasCollection(game, collectionChoice.value)));
+const collectionAddReason = computed(() => {
+  if (!collectionChoice.value) return "Choose a collection first";
+  return props.games.every((game) => hasCollection(game, collectionChoice.value)) ? "Every selected game is already in this collection" : "";
+});
+const collectionRemoveReason = computed(() => {
+  if (!collectionChoice.value) return "Choose a collection first";
+  return props.games.every((game) => !hasCollection(game, collectionChoice.value)) ? "No selected game is in this collection" : "";
+});
+const checkReason = computed(() => {
+  if (!props.eligibleChecks) return "Selected games have no active update thread";
+  return props.checking ? "An update check is running" : "";
+});
 
 const removableTags = computed(() => {
   const seen = new Map<string, string>();
@@ -189,10 +215,10 @@ const infoReason = computed(() => {
       <div v-if="openMenu === menu.id" class="bulk-menu-panel" :style="panelStyle" role="menu" :aria-label="`${menu.label} actions`">
         <!-- Status -->
         <template v-if="menu.id === 'status'">
-          <button v-for="item in statuses" :key="item.value" role="menuitem" :disabled="busy || statusSetNothing(item.value)" @click="run('status', item.value)">Set status: {{ item.label }}</button>
+          <BulkMenuItem v-for="item in statuses" :key="item.value" :reason="unavailable(statusSetNothing(item.value) && 'Every selected game already has this status')" @select="run('status', item.value)">Set status: {{ item.label }}</BulkMenuItem>
           <hr />
-          <button role="menuitem" :disabled="busy || allFavorite" :title="allFavorite ? 'All selected games are already favorites' : ''" @click="run('favorite')">Favorite</button>
-          <button role="menuitem" :disabled="busy || noneFavorite" :title="noneFavorite ? 'No selected games are favorites' : ''" @click="run('unfavorite')">Unfavorite</button>
+          <BulkMenuItem :reason="unavailable(allFavorite && 'All selected games are already favorites')" @select="run('favorite')">Favorite</BulkMenuItem>
+          <BulkMenuItem :reason="unavailable(noneFavorite && 'No selected games are favorites')" @select="run('unfavorite')">Unfavorite</BulkMenuItem>
         </template>
 
         <!-- Collections -->
@@ -203,28 +229,28 @@ const infoReason = computed(() => {
               <option v-for="name in collections" :key="name">{{ name }}</option>
             </select>
           </label>
-          <button role="menuitem" :disabled="busy || collectionAddDisabled" title="Choose a collection that is missing from at least one selected game" @click="run('add', collectionChoice)">Add to collection</button>
-          <button role="menuitem" :disabled="busy || collectionRemoveDisabled" title="Choose a collection present on at least one selected game" @click="run('remove-collection', collectionChoice)">Remove from collection</button>
+          <BulkMenuItem :reason="unavailable(collectionAddReason)" @select="run('add', collectionChoice)">Add to collection</BulkMenuItem>
+          <BulkMenuItem :reason="unavailable(collectionRemoveReason)" @select="run('remove-collection', collectionChoice)">Remove from collection</BulkMenuItem>
         </template>
 
         <!-- Updates -->
         <template v-else-if="menu.id === 'updates'">
-          <button role="menuitem" :disabled="busy || checking || !eligibleChecks" :title="!eligibleChecks ? 'Selected games have no active update thread' : checking ? 'An update check is running' : 'Check selected games'" @click="run('check')">Check for updates</button>
-          <button role="menuitem" :disabled="busy || !eligibleUpdates" title="Requires an available update" @click="run('updated')">Mark as updated</button>
-          <button role="menuitem" :disabled="busy || !eligibleUpdates" title="Requires an available update" @click="run('skip')">Skip version</button>
+          <BulkMenuItem :reason="unavailable(checkReason)" @select="run('check')">Check for updates</BulkMenuItem>
+          <BulkMenuItem :reason="unavailable(!eligibleUpdates && 'No selected game has an available update')" @select="run('updated')">Mark as updated</BulkMenuItem>
+          <BulkMenuItem :reason="unavailable(!eligibleUpdates && 'No selected game has an available update')" @select="run('skip')">Skip version</BulkMenuItem>
         </template>
 
         <!-- Runtime (Linux only) -->
         <template v-else-if="menu.id === 'runtime'">
           <template v-if="subView === 'launch-mode'">
             <button role="menuitem" class="bulk-back" @click="subView = ''"><IconChevronLeft class="ui-action-icon" aria-hidden="true" />Back</button>
-            <button v-for="mode in launchModes" :key="mode.value" role="menuitem" :disabled="busy || launchModeDisabled(mode.value)" :title="launchModeDisabled(mode.value) ? 'Selected games are already in this mode or running' : ''" @click="run('launch-mode', mode.value)">{{ mode.label }}</button>
+            <BulkMenuItem v-for="mode in launchModes" :key="mode.value" :reason="unavailable(launchModeDisabled(mode.value) && 'Selected games are already in this mode or running')" @select="run('launch-mode', mode.value)">{{ mode.label }}</BulkMenuItem>
           </template>
           <template v-else>
-            <button role="menuitem" :disabled="busy" @click="closeMenu(false); emit('wine')">Set Wine/Proton…</button>
-            <button role="menuitem" :disabled="busy" @click="enterSubView('launch-mode')"><span>Set launch mode…</span><IconChevronRight class="ui-action-icon" aria-hidden="true" /></button>
-            <button role="menuitem" :disabled="busy || !sandboxOnCount" :title="!sandboxOnCount ? 'All selected games are already sandboxed' : ''" @click="run('sandbox-on')">Sandbox on</button>
-            <button role="menuitem" :disabled="busy || !sandboxOffCount" :title="!sandboxOffCount ? 'No selected game is sandboxed' : ''" @click="run('sandbox-off')">Sandbox off</button>
+            <BulkMenuItem :reason="unavailable()" @select="closeMenu(false); emit('wine')">Set Wine/Proton…</BulkMenuItem>
+            <BulkMenuItem :reason="unavailable()" @select="enterSubView('launch-mode')"><span>Set launch mode…</span><IconChevronRight class="ui-action-icon" aria-hidden="true" /></BulkMenuItem>
+            <BulkMenuItem :reason="unavailable(!sandboxOnCount && 'All selected games are already sandboxed')" @select="run('sandbox-on')">Sandbox on</BulkMenuItem>
+            <BulkMenuItem :reason="unavailable(!sandboxOffCount && 'No selected game is sandboxed')" @select="run('sandbox-off')">Sandbox off</BulkMenuItem>
           </template>
         </template>
 
@@ -233,10 +259,10 @@ const infoReason = computed(() => {
           <template v-if="subView === 'add-tag'">
             <button role="menuitem" class="bulk-back" @click="subView = ''"><IconChevronLeft class="ui-action-icon" aria-hidden="true" />Back</button>
             <label class="bulk-field">Tag
-              <input v-model="tagInput" list="bulk-tag-suggestions" type="text" aria-label="Tag to add" @keydown.enter.prevent="!addTagReason && run('add-tag', tagInput)" />
+              <input v-model="tagInput" list="bulk-tag-suggestions" type="text" aria-label="Tag to add" @keydown.enter.prevent="!unavailable(addTagReason) && run('add-tag', tagInput)" />
             </label>
             <datalist id="bulk-tag-suggestions"><option v-for="tag in tagSuggestions" :key="tag" :value="tag" /></datalist>
-            <button role="menuitem" class="bulk-submit" :disabled="busy || !!addTagReason" :title="addTagReason" @click="run('add-tag', tagInput)">Add tag</button>
+            <BulkMenuItem class="bulk-submit" :reason="unavailable(addTagReason)" @select="run('add-tag', tagInput)">Add tag</BulkMenuItem>
           </template>
           <template v-else-if="subView === 'remove-tag'">
             <button role="menuitem" class="bulk-back" @click="subView = ''"><IconChevronLeft class="ui-action-icon" aria-hidden="true" />Back</button>
@@ -245,7 +271,7 @@ const infoReason = computed(() => {
                 <option v-for="tag in removableTags" :key="tag" :value="tag">{{ tag }}</option>
               </select>
             </label>
-            <button role="menuitem" class="bulk-submit" :disabled="busy || !!removeTagReason" :title="removeTagReason" @click="run('remove-tag', removeTagChoice)">Remove tag</button>
+            <BulkMenuItem class="bulk-submit" :reason="unavailable(removeTagReason)" @select="run('remove-tag', removeTagChoice)">Remove tag</BulkMenuItem>
           </template>
           <template v-else-if="subView === 'engine'">
             <button role="menuitem" class="bulk-back" @click="subView = ''"><IconChevronLeft class="ui-action-icon" aria-hidden="true" />Back</button>
@@ -255,21 +281,21 @@ const infoReason = computed(() => {
                 <option v-for="engine in ENGINE_OPTIONS" :key="engine" :value="engine">{{ engine }}</option>
               </select>
             </label>
-            <button role="menuitem" class="bulk-submit" :disabled="busy || !!engineReason" :title="engineReason" @click="run('engine', engineInput)">Set engine</button>
+            <BulkMenuItem class="bulk-submit" :reason="unavailable(engineReason)" @select="run('engine', engineInput)">Set engine</BulkMenuItem>
           </template>
           <template v-else>
-            <button role="menuitem" :disabled="busy" @click="enterSubView('add-tag')"><span>Add tag…</span><IconChevronRight class="ui-action-icon" aria-hidden="true" /></button>
-            <button role="menuitem" :disabled="busy || !removableTags.length" :title="!removableTags.length ? 'No selected game has tags' : ''" @click="enterSubView('remove-tag')"><span>Remove tag…</span><IconChevronRight class="ui-action-icon" aria-hidden="true" /></button>
-            <button role="menuitem" :disabled="busy" @click="enterSubView('engine')"><span>Set engine…</span><IconChevronRight class="ui-action-icon" aria-hidden="true" /></button>
+            <BulkMenuItem :reason="unavailable()" @select="enterSubView('add-tag')"><span>Add tag…</span><IconChevronRight class="ui-action-icon" aria-hidden="true" /></BulkMenuItem>
+            <BulkMenuItem :reason="unavailable(!removableTags.length && 'No selected game has tags')" @select="enterSubView('remove-tag')"><span>Remove tag…</span><IconChevronRight class="ui-action-icon" aria-hidden="true" /></BulkMenuItem>
+            <BulkMenuItem :reason="unavailable()" @select="enterSubView('engine')"><span>Set engine…</span><IconChevronRight class="ui-action-icon" aria-hidden="true" /></BulkMenuItem>
           </template>
         </template>
 
         <!-- Maintenance -->
         <template v-else-if="menu.id === 'maintenance'">
-          <button role="menuitem" :disabled="busy || savesBusy" :title="savesDisabledReason || 'Back up the saves of each selected game that has a saves folder'" @click="run('backup-saves')">Back up saves</button>
-          <button role="menuitem" :disabled="busy || !!infoReason" :title="infoReason || 'Reads each selected game’s F95 thread, one paced request per game, and refreshes its cover, rating and F95 tags. Your own tag changes stay.'" @click="run('refresh-info')">Refresh F95 info</button>
-          <button role="menuitem" :disabled="busy || !installedCount" :title="installedCount ? 'Delete the files of each selected installed game' : 'No selected game is installed'" @click="closeMenu(false); emit('action', 'uninstall')">Uninstall...</button>
-          <button role="menuitem" :disabled="busy || !installedCount" :title="installedCount ? 'Move the folder of each selected installed game' : 'No selected game is installed'" @click="closeMenu(false); emit('action', 'move')">Move...</button>
+          <BulkMenuItem :reason="unavailable(savesDisabledReason)" :title="savesDisabledReason || busy ? undefined : 'Back up the saves of each selected game that has a saves folder'" @select="run('backup-saves')">Back up saves</BulkMenuItem>
+          <BulkMenuItem :reason="unavailable(infoReason)" :title="infoReason || busy ? undefined : 'Reads each selected game’s F95 thread, one paced request per game, and refreshes its cover, rating and F95 tags. Your own tag changes stay.'" @select="run('refresh-info')">Refresh F95 info</BulkMenuItem>
+          <BulkMenuItem :reason="unavailable(!installedCount && 'No selected game is installed')" :title="!installedCount || busy ? undefined : 'Delete the files of each selected installed game'" @select="closeMenu(false); emit('action', 'uninstall')">Uninstall...</BulkMenuItem>
+          <BulkMenuItem :reason="unavailable(!installedCount && 'No selected game is installed')" :title="!installedCount || busy ? undefined : 'Move the folder of each selected installed game'" @select="closeMenu(false); emit('action', 'move')">Move...</BulkMenuItem>
         </template>
       </div>
     </div>
@@ -288,7 +314,7 @@ const infoReason = computed(() => {
 .bulk-menu { position: relative; }
 .bulk-menu-panel {
   position: fixed; z-index: 100;
-  width: 15rem; max-width: calc(100vw - 16px); max-height: min(60vh, calc(100vh - 16px)); overflow-y: auto;
+  width: 15rem; max-width: calc(var(--app-vw) - 16px); max-height: min(60vh, calc(var(--app-vh) - 16px)); overflow-y: auto;
   display: flex; flex-direction: column; gap: 2px; padding: 0.4rem;
   background: var(--bg-surface); color: var(--text-primary);
   border: 1px solid var(--border-hover); border-radius: 0.5rem; box-shadow: var(--shadow-card);
@@ -298,12 +324,13 @@ const infoReason = computed(() => {
   width: 100%; padding: 0.45rem 0.5rem; border-radius: 0.3rem; text-align: left; font-size: 0.8rem;
   background: transparent; color: inherit;
 }
-.bulk-menu-panel [role="menuitem"]:hover:not(:disabled) { background: var(--bg-raised); }
+.bulk-menu-panel [role="menuitem"]:hover:not([aria-disabled="true"]) { background: var(--bg-raised); }
 .bulk-menu-panel [role="menuitem"]:focus-visible, .bulk-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.bulk-menu-panel [role="menuitem"]:disabled { opacity: 0.5; cursor: not-allowed; }
 .bulk-menu-panel .bulk-back { justify-content: flex-start; color: var(--text-secondary); }
-.bulk-menu-panel .bulk-submit { justify-content: center; margin-top: 0.25rem; background: var(--brand); color: var(--on-brand); font-weight: 700; }
-.bulk-menu-panel .bulk-submit:hover:not(:disabled) { background: var(--brand); filter: brightness(1.08); }
+.bulk-menu-panel .bulk-submit { justify-content: center; text-align: center; margin-top: 0.25rem; background: var(--brand); color: var(--on-brand); font-weight: 700; }
+.bulk-menu-panel .bulk-submit:hover:not([aria-disabled="true"]) { background: var(--brand); filter: brightness(1.08); }
+/* Unavailable: a quiet surface, so it does not read as the main action. */
+.bulk-menu-panel .bulk-submit[aria-disabled="true"] { background: var(--bg-raised); color: var(--text-primary); }
 .bulk-menu-panel hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
 .bulk-field { display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; color: var(--text-muted); padding: 0.25rem 0.5rem; }
 .bulk-field input, .bulk-field select {

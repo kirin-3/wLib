@@ -97,6 +97,10 @@ PYWEBVIEW_QT_PROFILE_NAME = "pywebview"
 PYWEBVIEW_HTTP_PORT = 42001
 RENDERER_DIAGNOSTICS_LOG = os.path.join(APP_DATA_DIR, "renderer-diagnostics.log")
 RENDERER_DIAGNOSTICS_MAX_BYTES = 512 * 1024
+# The smallest window the UI is laid out for. It fits a Steam Deck screen
+# (1280x800) and half of a 1920 px wide screen. Below 900 CSS px the sidebar
+# collapses to its icon rail, and below 1080 the Library filters open as a drawer.
+MIN_WINDOW_SIZE = (800, 600)
 renderer_log_lock = threading.Lock()
 
 if TYPE_CHECKING:
@@ -112,6 +116,7 @@ class WebviewModule(Protocol):
         js_api: Api,
         width: int,
         height: int,
+        min_size: tuple[int, int],
         background_color: str,
     ) -> Window: ...
 
@@ -1369,6 +1374,7 @@ def start_desktop(ssl_summary: str | None) -> None:
             js_api=api,
             width=1200,
             height=800,
+            min_size=MIN_WINDOW_SIZE,
             background_color="#101014",
         )
         window_ref = window

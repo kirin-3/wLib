@@ -19,15 +19,6 @@
 [data-tag-color="blue"] { --tag-bg: var(--tag-blue-bg); --tag-text: var(--tag-blue-text); --tag-border: var(--tag-blue-border); }
 [data-tag-color="purple"] { --tag-bg: var(--tag-purple-bg); --tag-text: var(--tag-purple-text); --tag-border: var(--tag-purple-border); }
 [data-tag-color="pink"] { --tag-bg: var(--tag-pink-bg); --tag-text: var(--tag-pink-text); --tag-border: var(--tag-pink-border); }
-.tag-pill[data-tag-color][aria-pressed="true"] {
-  border-color: var(--tag-text);
-  box-shadow: inset 0 0 0 1px var(--tag-text);
-}
-/* An excluded colored tag keeps its fill; the ban icon and strikethrough mark it. */
-.tag-pill[data-tag-color][aria-pressed="true"][data-filter-state="exclude"] {
-  border-color: var(--danger-border);
-  box-shadow: inset 0 0 0 1px var(--danger-border);
-}
 .tag-pill:focus-visible, .tag-swatch:focus-visible {
   outline: 2px solid var(--text-primary);
   outline-offset: 3px;

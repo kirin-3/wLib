@@ -4,10 +4,12 @@ import { activeFilterChips as buildFilterChips, removeFilterValue, type FilterCh
 import { confirmAction } from "../utils/confirm";
 import { controllerFocusText, useControllerActions } from "../utils/controllerActions";
 import {
+  describeLibraryNoResults,
   getEffectiveLaunchTargets,
   libraryDisplayState,
   type EffectiveLaunchTarget,
 } from "../utils/libraryGames";
+import { discoverSession } from "../utils/discoverView";
 import GameCard from "../components/library/GameCard.vue";
 import GameRow from "../components/library/GameRow.vue";
 import { runningGameIds, refreshRunningGames } from "../composables/useRunningGames";
@@ -34,6 +36,7 @@ import {
   IconArchive,
   IconBan,
   IconCheck,
+  IconChevronDown,
   IconCircleCheck,
   IconPlayerPause,
   IconProgress,
@@ -49,7 +52,6 @@ import {
   IconPanoramaHorizontalFilled,
   IconLayoutListFilled,
   IconFolderPlus,
-  IconPhotoFilled,
   IconPlus,
   IconSparkles,
   IconZoom,
@@ -58,6 +60,13 @@ import {
   IconSortAscending,
   IconSortDescending,
   IconX,
+  IconAlertTriangle,
+  IconRefresh,
+  IconChevronRight,
+  IconCompass,
+  IconExternalLink,
+  IconFileImport,
+  IconPuzzle,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
 import type { CompanionTool, GameRecord, LaunchMode, StoreLink } from "../services/api";
@@ -83,6 +92,9 @@ import {
   toggleStatusFilter,
   toggleSortState,
   chooseSortField,
+  LIST_ONLY_SORT_FIELDS,
+  SORT_FIELD_LABELS,
+  sortOrderLabel,
   VALID_SORT_FIELDS,
   type SortState,
   type FilterCollection,
@@ -100,7 +112,8 @@ import {
   type SortField,
 } from "../utils/libraryViewState";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
-import { libraryFiltersPaneOpen } from "../utils/navLayout";
+import { filtersPaneMode, libraryFiltersPaneOpen } from "../utils/navLayout";
+import { useWindowCssWidth } from "../utils/windowWidth";
 import { notify, notifyError, notifyUndo } from "../utils/toast";
 import {
   addTagCsv, engineSnapshot, launchModeApplicable, launchModeSnapshot, removeTagCsv, runBulk, runBulkSaveBackup,
@@ -121,7 +134,7 @@ import MoveQueuePanel from "../components/library/MoveQueuePanel.vue";
 import { useGameMoves } from "../composables/useGameMoves";
 import type { UninstallOptions } from "../services/api";
 import { useLibrarySelection } from "../composables/useLibrarySelection";
-import { modalStack } from "../utils/modalKeyboard";
+import { modalStack, useModalKeyboard } from "../utils/modalKeyboard";
 import { sandboxLaunchError } from "../utils/sandbox";
 import { localeEmulatorLaunchError } from "../utils/localeEmulator";
 import { openInstallArchive } from "../utils/installArchive";
@@ -130,6 +143,7 @@ import {
   buildTagFilterOptions,
   compareLibraryGames,
   gameFolder,
+  formatLibrarySummary,
   gameTags,
   hasAvailableUpdate,
   hasUnplayedUpdate,
@@ -142,9 +156,10 @@ import {
   matchesEngineFilter,
   matchesSourceFilter,
   matchesTagFilter,
-  cycleFilterValue,
   engineFilterKey,
   filterValueState,
+  toggleExcludedFilterValue,
+  toggleIncludedFilterValue,
   orderTagOptions,
   pinnedTagKeysFor,
   tagFilterKey,
@@ -209,6 +224,8 @@ const router = useRouter();
 const games = gamesStore.games;
 const gamesLoaded = gamesStore.loaded;
 const loadError = ref<string | null>(null);
+// The bridge's reason for the failed load, when it gave one.
+const loadErrorCause = gamesStore.error;
 const displayState = computed(() => libraryDisplayState(gamesLoaded.value, loadError.value, games.value.length, filteredGames.value.length));
 const customStatuses = ref<string[]>([]);
 // True once Settings has answered, so the custom status list is authoritative.
@@ -298,12 +315,13 @@ const tableColumns: Array<{ key: SortField; label: string; class?: string }> = [
 const updateCount = computed(
   () => games.value.filter((game) => hasAvailableUpdate(game)).length,
 );
+const librarySummary = computed(() => formatLibrarySummary(games.value.length, updateCount.value));
 const collections: Array<{
   value: FilterCollection;
   label: string;
   icon: typeof IconClock;
 }> = [
-  { value: "All", label: "All Games", icon: IconLayoutGridFilled },
+  { value: "All", label: "No quick filter", icon: IconLayoutGridFilled },
   { value: "Favorites", label: "Favorites", icon: IconHeartFilled },
   { value: "Updates available", label: "Updates available", icon: IconArrowUp },
   { value: "New since finished", label: "New since finished", icon: IconSparkles },
@@ -375,8 +393,8 @@ const threadStateOptions = THREAD_STATE_FILTER_VALUES.map((value) => ({
   label: THREAD_STATE_FILTER_LABELS[value],
   icon: threadStateIcons[value],
 }));
-const applyThreadStateFilter = (value: ThreadStateFilter, event: Event): void => {
-  const checked = (event.target as HTMLInputElement).checked;
+const toggleThreadStateFilter = (value: ThreadStateFilter): void => {
+  const checked = !filterThreadStates.value.includes(value);
   const others = filterThreadStates.value.filter((entry) => entry !== value);
   // Keep the section's order so the chips and saved presets read the same way.
   filterThreadStates.value = THREAD_STATE_FILTER_VALUES.filter(
@@ -385,6 +403,7 @@ const applyThreadStateFilter = (value: ThreadStateFilter, event: Event): void =>
 };
 const cardSize = ref<CardSize>(DEFAULT_LIBRARY_VIEW_STATE.cardSize);
 const cardScales = [0.75, 0.875, 1, 1.25, 1.5] as const;
+const cardSizeNames = ["Smallest", "Small", "Medium", "Large", "Largest"] as const;
 const layoutMode = ref<LayoutMode>(DEFAULT_LIBRARY_VIEW_STATE.layoutMode);
 const sortBy = ref<SortField>(DEFAULT_LIBRARY_VIEW_STATE.sortBy);
 const sortDir = ref<SortDir>(DEFAULT_LIBRARY_VIEW_STATE.sortDir);
@@ -440,11 +459,10 @@ const applySortState = (state: SortState) => {
 };
 // List view column headers.
 const toggleSort = (field: SortField) => applySortState(toggleSortState({ sortBy: sortBy.value, sortDir: sortDir.value }, field));
-// The sort menu in the other layouts; the direction button reverses the order.
+// The View menu's sort fields.
 const setSortField = (field: string) => {
   if (VALID_SORT_FIELDS.has(field as SortField)) applySortState(chooseSortField({ sortBy: sortBy.value, sortDir: sortDir.value }, field as SortField));
 };
-const reverseSortDir = () => { sortDir.value = sortDir.value === "asc" ? "desc" : "asc"; };
 
 const selectCollection = (collection: FilterCollection) => {
   filterCollection.value = collection;
@@ -454,11 +472,29 @@ const selectCollection = (collection: FilterCollection) => {
   }
 };
 
+// Wide windows show the filters pane beside the games, and its open state is
+// saved. Narrower windows show it as a drawer over the games; the drawer always
+// starts closed and its state is not saved (see utils/navLayout.ts).
+const windowCssWidth = useWindowCssWidth();
+const filtersAsDrawer = computed(() => filtersPaneMode(windowCssWidth.value) === "drawer");
+const filtersDrawerOpen = ref(false);
+const filtersPaneShown = computed(() => (filtersAsDrawer.value ? filtersDrawerOpen.value : !isFiltersCollapsed.value));
+const filtersPane = useTemplateRef<HTMLElement>("filtersPane");
+const closeFiltersDrawer = () => { filtersDrawerOpen.value = false; };
+// Focus moves into the drawer, Tab stays in it, Escape closes it, and focus
+// returns to the Filters button.
+useModalKeyboard(filtersPane, () => filtersAsDrawer.value && filtersDrawerOpen.value, closeFiltersDrawer);
 const toggleFiltersPane = () => {
-  isFiltersCollapsed.value = !isFiltersCollapsed.value;
+  if (filtersAsDrawer.value) filtersDrawerOpen.value = !filtersDrawerOpen.value;
+  else isFiltersCollapsed.value = !isFiltersCollapsed.value;
 };
-// The app sidebar collapses while the pane is open (see utils/navLayout.ts).
-watch(isFiltersCollapsed, (collapsed) => { libraryFiltersPaneOpen.value = !collapsed; });
+watch(filtersAsDrawer, (drawer) => {
+  // A drawer that is open when the window widens stays open as the pane.
+  if (!drawer && filtersDrawerOpen.value) isFiltersCollapsed.value = false;
+  filtersDrawerOpen.value = false;
+});
+// The app sidebar collapses while the pane is open beside the games.
+watch([filtersAsDrawer, isFiltersCollapsed], ([drawer, collapsed]) => { libraryFiltersPaneOpen.value = !drawer && !collapsed; });
 
 const toggleFilterSection = (section: keyof FilterSections) => {
   filterSections.value[section] = !filterSections.value[section];
@@ -473,19 +509,46 @@ const allStatuses = computed(() =>
   ]),
 );
 
-const sortOptions: Array<{ key: SortField; label: string }> = [
-  { key: "title", label: "A-Z" },
-  { key: "date_added", label: "Newest" },
-  { key: "last_played", label: "Recent" },
-  { key: "playtime_seconds", label: "Playtime" },
-  { key: "rating", label: "F95 rating" },
-  { key: "weighted_rating", label: "Weighted rating" },
-  { key: "own_rating", label: "My rating" },
+// The View menu: layout, sort field, sort order and card size in one place.
+// It and the list view column headers change the same sort state.
+const SORT_MENU_FIELDS: SortField[] = [
+  "title", "version", "play_status", "engine", "date_added", "last_played",
+  "playtime_seconds", "rating", "weighted_rating", "own_rating",
 ];
-// List view can also sort by these columns; the sort button names them when they are active.
-const listOnlySortLabels: Partial<Record<SortField, string>> = { version: "Version", play_status: "Status", engine: "Engine" };
-const sortFieldLabel = computed(() => sortOptions.find(option => option.key === sortBy.value)?.label ?? listOnlySortLabels[sortBy.value] ?? "Sort");
-const sortMenuItems = computed<MenuButtonItem[]>(() => sortOptions.map(option => ({ id: option.key, label: option.label, checked: sortBy.value === option.key })));
+const layoutOptions: Array<{ value: LayoutMode; label: string; icon: typeof IconClock }> = [
+  { value: "grid", label: "Grid", icon: IconLayoutGridFilled },
+  { value: "list", label: "List", icon: IconLayoutListFilled },
+  { value: "compact", label: "Compact", icon: IconColumns2Filled },
+  { value: "banner", label: "Banner", icon: IconPanoramaHorizontalFilled },
+];
+const currentLayout = computed(() => layoutOptions.find((option) => option.value === layoutMode.value) ?? layoutOptions[0]!);
+const sortOrderText = computed(() => sortOrderLabel(sortBy.value, sortDir.value));
+const sortSummary = computed(() => `${SORT_FIELD_LABELS[sortBy.value]}, ${sortOrderText.value}`);
+const viewMenuItems = computed<MenuButtonItem[]>(() => [
+  ...layoutOptions.map((option) => ({
+    id: `layout:${option.value}`, label: option.label, icon: option.icon, group: "Layout", checked: layoutMode.value === option.value,
+  })),
+  // Version, status and engine are list columns; other layouts offer them only while they are the active sort.
+  ...SORT_MENU_FIELDS.filter((field) => layoutMode.value === "list" || !LIST_ONLY_SORT_FIELDS.has(field) || sortBy.value === field).map((field) => ({
+    id: `sort:${field}`, label: SORT_FIELD_LABELS[field], group: "Sort by", checked: sortBy.value === field,
+  })),
+  ...(["asc", "desc"] as const).map((dir) => ({
+    id: `dir:${dir}`, label: sortOrderLabel(sortBy.value, dir), icon: dir === "asc" ? IconSortAscending : IconSortDescending, group: "Order", checked: sortDir.value === dir,
+  })),
+  ...(layoutMode.value === "list" ? [] : cardSizeNames.map((name, size) => ({
+    id: `size:${size}`, label: name, group: "Card size", checked: cardSize.value === size,
+  }))),
+]);
+const chooseViewMenuItem = (id: string) => {
+  const [kind, value = ""] = id.split(":");
+  if (kind === "layout" && layoutOptions.some((option) => option.value === value)) layoutMode.value = value as LayoutMode;
+  else if (kind === "sort") setSortField(value);
+  else if (kind === "dir" && (value === "asc" || value === "desc")) sortDir.value = value;
+  else if (kind === "size") {
+    const size = Number(value);
+    if (size >= 0 && size < cardSizeNames.length) cardSize.value = size as CardSize;
+  }
+};
 const addMenuItems: MenuButtonItem[] = [
   { id: "import", label: "Import folder", icon: IconFolderPlus },
   { id: "archive", label: "Install from archive", icon: IconArchive },
@@ -495,26 +558,28 @@ const chooseAddMenuItem = (id: string) => {
   else if (id === "archive") openInstallArchive();
 };
 
-// Source, engine and tag pills cycle neutral -> include -> exclude -> neutral.
-// Tags are case-insensitive, so every spelling of the tag leaves both lists.
+// Source, engine and tag pills: a click toggles include, and the pill's
+// exclude button, Alt+click or the minus key toggles exclude. Tags are
+// case-insensitive, so every spelling of the tag leaves both lists.
+type FilterValueToggle = typeof toggleIncludedFilterValue;
 const sourceState = (source: string) =>
   filterValueState(filterSources.value, filterExcludedSources.value, source);
-const cycleSource = (source: string) => {
-  const next = cycleFilterValue(filterSources.value, filterExcludedSources.value, source);
+const setSourceFilter = (toggle: FilterValueToggle, source: string) => {
+  const next = toggle(filterSources.value, filterExcludedSources.value, source);
   filterSources.value = next.included;
   filterExcludedSources.value = next.excluded;
 };
 const engineState = (engine: string) =>
   filterValueState(filterEngines.value, filterExcludedEngines.value, engine, engineFilterKey);
-const cycleEngine = (engine: string) => {
-  const next = cycleFilterValue(filterEngines.value, filterExcludedEngines.value, engine, engineFilterKey);
+const setEngineFilter = (toggle: FilterValueToggle, engine: string) => {
+  const next = toggle(filterEngines.value, filterExcludedEngines.value, engine, engineFilterKey);
   filterEngines.value = next.included;
   filterExcludedEngines.value = next.excluded;
 };
 const tagState = (tag: string) =>
   filterValueState(filterTags.value, filterExcludedTags.value, tag, tagFilterKey);
-const cycleTag = (tag: string) => {
-  const next = cycleFilterValue(filterTags.value, filterExcludedTags.value, tag, tagFilterKey);
+const setTagFilter = (toggle: FilterValueToggle, tag: string) => {
+  const next = toggle(filterTags.value, filterExcludedTags.value, tag, tagFilterKey);
   filterTags.value = next.included;
   filterExcludedTags.value = next.excluded;
 };
@@ -524,12 +589,30 @@ const cycleTag = (tag: string) => {
 const statusFilterActive = (status: string): boolean =>
   hasStatusFilter(filterStatuses.value, status);
 
-const applyStatusFilter = (status: string, event: Event): void => {
+const toggleStatusFilterValue = (status: string): void => {
   filterStatuses.value = toggleStatusFilter(
     filterStatuses.value,
     status,
-    (event.target as HTMLInputElement).checked,
+    !statusFilterActive(status),
   );
+};
+
+// Install state and rating are single-choice pills: a click picks the value,
+// and a click on the picked value clears the filter.
+const installStateOptions: Array<{ value: Exclude<FilterInstallState, "">; label: string }> = [
+  { value: "installed", label: "Installed" },
+  { value: "wishlist", label: "Wishlist" },
+];
+const toggleInstallState = (value: FilterInstallState): void => {
+  filterInstallState.value = filterInstallState.value === value ? "" : value;
+};
+const ratingOptions: Array<{ value: Exclude<FilterMinRating, "">; label: string }> = [
+  { value: "3.5", label: "3.5+" },
+  { value: "4.0", label: "4.0+" },
+  { value: "4.5", label: "4.5+" },
+];
+const toggleMinRating = (value: FilterMinRating): void => {
+  filterMinRating.value = filterMinRating.value === value ? "" : value;
 };
 
 const normalizeEngineFilterValue = engineFilterKey;
@@ -545,9 +628,6 @@ const uniqueEngines = computed(() => {
 });
 
 const tagOptions = computed(() => buildTagFilterOptions(games.value));
-const tagCounts = computed(
-  () => new Map(tagOptions.value.map((option) => [option.label, option.count])),
-);
 const uniqueTags = computed(() => tagOptions.value.map((option) => option.label));
 
 // Active tags sit in a pinned group at the top of the tag list. The group comes
@@ -563,8 +643,11 @@ const settlePinnedTags = () => {
   const list = tagList.value;
   const active = document.activeElement;
   // A focused pill that changes group is a new element, so keep its focus.
+  // The pill's exclude button has no data-tag; its pill's main button has.
   const focusedTag =
-    list && active instanceof HTMLElement && list.contains(active) ? active.dataset.tag : undefined;
+    list && active instanceof HTMLElement && list.contains(active)
+      ? (active.closest(".filter-pill")?.querySelector<HTMLElement>("[data-tag]") ?? active).dataset.tag
+      : undefined;
   pinnedTagKeys.value = pinnedTagKeysFor(filterTags.value, filterExcludedTags.value);
   if (focusedTag === undefined) return;
   void nextTick(() => {
@@ -610,20 +693,9 @@ watch(
   { deep: true },
 );
 watch(tagSearchQuery, settlePinnedTags);
-watch(isFiltersCollapsed, (collapsed) => { if (!collapsed) settlePinnedTags(); });
+watch(filtersPaneShown, (shown) => { if (shown) settlePinnedTags(); });
 watch(() => filterSections.value.tags, (open) => { if (open) settlePinnedTags(); });
 
-const activeFilterCount = computed(
-  () =>
-    (filterCollection.value !== "All" ? 1 : 0) +
-    (filterStatuses.value.length > 0 ? 1 : 0) +
-    (filterInstallState.value ? 1 : 0) +
-    (filterMinRating.value ? 1 : 0) +
-    (filterThreadStates.value.length > 0 ? 1 : 0) +
-    (filterSources.value.length || filterExcludedSources.value.length ? 1 : 0) +
-    (filterEngines.value.length || filterExcludedEngines.value.length ? 1 : 0) +
-    (filterTags.value.length || filterExcludedTags.value.length ? 1 : 0),
-);
 const activeFilterChips = computed(() => buildFilterChips({
   statuses: filterStatuses.value, install: filterInstallState.value, minRating: filterMinRating.value, sources: filterSources.value,
   threadStates: filterThreadStates.value,
@@ -633,6 +705,9 @@ const activeFilterChips = computed(() => buildFilterChips({
   statusLabels: Object.fromEntries(allStatuses.value.map(status => [status.value.toLowerCase(), status.label])),
   sourceLabels: Object.fromEntries(LIBRARY_SOURCES.map(source => [source.key, source.label])),
 }));
+// One per chip, so the Filters badge, its name and the no-results text count
+// the same things the chip row shows.
+const activeFilterCount = computed(() => activeFilterChips.value.length);
 const removeFilterChip = (chip: FilterChip) => {
   switch (chip.kind) {
     case "status": filterStatuses.value = removeFilterValue(filterStatuses.value, chip.value); break;
@@ -656,6 +731,10 @@ const removeFilterChip = (chip: FilterChip) => {
 };
 const clearFilters = () => {
   searchQuery.value = "";
+  clearFilterValues();
+};
+// Clears every filter but keeps the search.
+const clearFilterValues = () => {
   filterStatuses.value = [];
   filterInstallState.value = "";
   filterMinRating.value = "";
@@ -808,6 +887,95 @@ const filteredGames = computed(() => {
 
 watch(() => filteredGames.value.map((game) => game.id), (ids) => selection.prune(ids));
 
+// --- Empty and no-results states ----------------------------------------------
+const activeCollectionGameCount = computed(() => {
+  const key = activeCollection.value.toLowerCase();
+  return games.value.filter(
+    (game) =>
+      !isPendingRemoval(game.id) &&
+      !isPendingUninstallRemoval(game.id) &&
+      (!key || (game.collections || []).some((name) => name.toLowerCase() === key)),
+  ).length;
+});
+const otherFilterCount = computed(() => activeFilterCount.value - (filterCollection.value !== "All" ? 1 : 0));
+const noResults = computed(() => describeLibraryNoResults({
+  collection: activeCollection.value,
+  collectionGameCount: activeCollectionGameCount.value,
+  quickFilter: filterCollection.value,
+  otherFilterCount: otherFilterCount.value,
+  search: appliedSearch.value,
+}));
+const noResultsSearch = computed(() => appliedSearch.value.trim());
+const noResultsIcon = computed(() => {
+  if (noResults.value.kind === "collection-empty") return IconListCheck;
+  if (noResults.value.kind === "quick-filter-empty") {
+    return collections.find((item) => item.value === filterCollection.value)?.icon ?? IconZoom;
+  }
+  return IconZoom;
+});
+// "Look in Discover" only while the catalog is on and installed. Asked each
+// time the state shows, because Settings can turn the catalog off.
+const discoverAvailable = ref(false);
+let discoverStatusRequest = 0;
+watch(
+  () => displayState.value === "no-results" && noResults.value.kind === "no-match" && !!noResultsSearch.value,
+  async (needed) => {
+    const request = ++discoverStatusRequest;
+    if (!needed) return;
+    try {
+      const status = await api.getDiscoverStatus();
+      if (request === discoverStatusRequest) {
+        discoverAvailable.value = status.success !== false && status.enabled !== false && !!status.installed;
+      }
+    } catch {
+      if (request === discoverStatusRequest) discoverAvailable.value = false;
+    }
+  },
+  { immediate: true },
+);
+const lookInDiscover = () => {
+  discoverSession.search = noResultsSearch.value;
+  discoverSession.scrollTop = 0;
+  void router.push("/discover");
+};
+const clearSearch = () => {
+  searchQuery.value = "";
+  searchInput.value?.focus();
+};
+const GETTING_STARTED_URL = "https://github.com/kirin-3/wLib/wiki/Getting-Started";
+const openGettingStarted = async () => {
+  try {
+    const result = await api.openInBrowser(GETTING_STARTED_URL);
+    if (!result.success) notifyError(`Could not open the user guide:\n\n${result.error || "Unknown error"}`);
+  } catch (cause) {
+    notifyError(`Could not open the user guide: ${String(cause)}`);
+  }
+};
+// The first-run ways to add games, after the primary "Import a folder".
+const firstRunActions: Array<{ id: string; label: string; detail: string; icon: typeof IconClock; run: () => void }> = [
+  {
+    id: "extension",
+    label: "Use the browser extension",
+    detail: "Add a game from its F95Zone page with one click.",
+    icon: IconPuzzle,
+    run: () => void router.push("/extension"),
+  },
+  {
+    id: "external",
+    label: "Import from another app",
+    detail: "F95Checker, Atlas, Playnite and more.",
+    icon: IconFileImport,
+    run: () => void router.push("/import-export#external"),
+  },
+  {
+    id: "manual",
+    label: "Add one game",
+    detail: "Enter a title, an executable or a thread link.",
+    icon: IconPlus,
+    run: () => { showAddModal.value = true; },
+  },
+];
+
 // Only the cards near the visible area are in the page (see utils/libraryWindow.ts).
 // Empty space above and below them keeps the full scroll height.
 const libraryScroller = useTemplateRef<HTMLElement>("libraryScroller");
@@ -913,6 +1081,14 @@ const handleCardClick = (game: GameRecord, event: MouseEvent | KeyboardEvent) =>
   if (!selectedIds.value.size) selecting.value = false;
 };
 const clearSelection = () => { selection.clear(); selecting.value = false; };
+// Cards and rows expose their selected state only in selection mode, so a card
+// that opens details is not announced as an unchecked item.
+const selectionMode = computed(() => selecting.value || selectedIds.value.size > 0);
+const libraryItemHint = computed(() =>
+  selectionMode.value
+    ? "Enter toggles selection. Shift+Enter selects a range. Shift+F10 opens actions."
+    : "Enter opens details. Ctrl+Enter selects. Shift+F10 opens actions.",
+);
 
 const selectedGames = computed(() => filteredGames.value.filter((game) => selectedIds.value.has(game.id)));
 const bulkBusy = ref(false);
@@ -2169,7 +2345,7 @@ watch(showImportModal, (open) => {
 
 onMounted(() => {
   restoreLibraryViewState();
-  libraryFiltersPaneOpen.value = !isFiltersCollapsed.value;
+  libraryFiltersPaneOpen.value = !filtersAsDrawer.value && !isFiltersCollapsed.value;
   onWebviewReady(() => {
     void loadTagColors().catch(console.error);
     void loadGames();
@@ -2196,28 +2372,54 @@ onUnmounted(() => {
 
 <template>
   <div ref="libraryControllerScope" class="h-full flex overflow-hidden">
-    <!-- Filters Sidebar -->
+    <!-- Filters: a pane beside the games in wide windows, a drawer over them in narrow ones. -->
+    <div
+      v-if="filtersAsDrawer && filtersDrawerOpen"
+      class="filters-backdrop"
+      aria-hidden="true"
+      @click="closeFiltersDrawer"
+    ></div>
     <aside
-      :inert="isFiltersCollapsed"
-      :aria-hidden="isFiltersCollapsed"
-      :class="[
-        'filters-pane shrink-0 h-full collapse-width-transition',
-        isFiltersCollapsed ? 'w-0 filters-pane-collapsed' : 'w-64',
-      ]"
+      ref="filtersPane"
+      :inert="!filtersPaneShown"
+      :aria-hidden="!filtersPaneShown"
+      :role="filtersAsDrawer ? 'dialog' : undefined"
+      :aria-modal="filtersAsDrawer ? 'true' : undefined"
+      :aria-labelledby="filtersAsDrawer ? 'library-filters-title' : undefined"
+      :tabindex="filtersAsDrawer ? -1 : undefined"
+      :class="
+        filtersAsDrawer
+          ? ['filters-pane filters-drawer', { 'filters-drawer--open': filtersDrawerOpen }]
+          : ['filters-pane shrink-0 h-full collapse-width-transition', isFiltersCollapsed ? 'w-0 filters-pane-collapsed' : 'w-64']
+      "
     >
-      <div class="w-64 h-full flex flex-col overflow-y-auto">
-        <div class="p-6 pb-2 pt-4">
+      <div class="h-full flex flex-col overflow-y-auto" :class="filtersAsDrawer ? 'w-full' : 'w-64'">
+        <div v-if="filtersAsDrawer" class="filters-drawer-head">
+          <h2 id="library-filters-title" class="filters-drawer-title">Filters</h2>
           <button
-            @click="toggleFilterSection('collections')"
-            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
-            style="color: var(--text-muted)"
+            type="button"
+            class="ui-icon-btn filters-drawer-close"
+            aria-label="Close filters"
+            title="Close filters"
+            @click="closeFiltersDrawer"
           >
-            <span>Quick filters</span>
-            <span class="text-sm">{{
-              filterSections.collections ? "▾" : "▸"
-            }}</span>
+            <IconX class="w-5 h-5" aria-hidden="true" />
           </button>
-          <div v-show="filterSections.collections" ref="quickFiltersList" class="space-y-1 mt-3">
+        </div>
+        <div class="px-4 pb-2 pt-4">
+          <div class="filter-section-head">
+            <button
+              type="button"
+              class="filter-section-toggle ui-hover-surface"
+              :aria-expanded="filterSections.collections"
+              aria-controls="library-filter-collections"
+              @click="toggleFilterSection('collections')"
+            >
+              <IconChevronDown class="filter-section-chevron" aria-hidden="true" />
+              <span>Quick filters</span>
+            </button>
+          </div>
+          <div v-show="filterSections.collections" id="library-filter-collections" ref="quickFiltersList" class="space-y-1 mt-3">
             <button
               v-for="collection in collections"
               :key="collection.value"
@@ -2241,18 +2443,20 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div v-if="savedPresets.length" class="p-6 pb-2 pt-4">
-          <button
-            @click="toggleFilterSection('presets')"
-            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
-            style="color: var(--text-muted)"
-          >
-            <span>Saved filters</span>
-            <span class="text-sm">{{
-              filterSections.presets ? "▾" : "▸"
-            }}</span>
-          </button>
-          <div v-show="filterSections.presets" class="space-y-1 mt-3">
+        <div v-if="savedPresets.length" class="px-4 pb-2 pt-4">
+          <div class="filter-section-head">
+            <button
+              type="button"
+              class="filter-section-toggle ui-hover-surface"
+              :aria-expanded="filterSections.presets"
+              aria-controls="library-filter-presets"
+              @click="toggleFilterSection('presets')"
+            >
+              <IconChevronDown class="filter-section-chevron" aria-hidden="true" />
+              <span>Saved filters</span>
+            </button>
+          </div>
+          <div v-show="filterSections.presets" id="library-filter-presets" class="space-y-1 mt-3">
             <div
               v-for="preset in savedPresets"
               :key="preset.name"
@@ -2288,203 +2492,292 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="p-6 pb-2 pt-4">
-          <button
-            @click="toggleFilterSection('status')"
-            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
-            style="color: var(--text-muted)"
+        <!-- Every filter value below is a pill: a filled pill with a check is on,
+             a red pill with a ban icon is excluded. The label beside each
+             heading says how the picked values combine. -->
+        <div class="px-4 pb-2 pt-4">
+          <div class="filter-section-head">
+            <button
+              type="button"
+              class="filter-section-toggle ui-hover-surface"
+              :aria-expanded="filterSections.status"
+              aria-controls="library-filter-status"
+              @click="toggleFilterSection('status')"
+            >
+              <IconChevronDown class="filter-section-chevron" aria-hidden="true" />
+              <span id="library-filter-status-label">Play status</span>
+            </button>
+            <span class="filter-rule" title="Shows games with any of the picked play statuses">any of</span>
+            <button
+              v-if="filterStatuses.length"
+              type="button"
+              class="filter-clear filter-clear--icon"
+              aria-label="Clear play status filters"
+              title="Clear play status filters"
+              @click="filterStatuses = []"
+            >
+              <IconX class="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          </div>
+          <div
+            v-show="filterSections.status"
+            id="library-filter-status"
+            role="group"
+            aria-labelledby="library-filter-status-label"
+            class="filter-pill-list mt-3"
           >
-            <span>Play Status</span>
-            <span class="text-sm">{{ filterSections.status ? "▾" : "▸" }}</span>
-          </button>
-          <div v-show="filterSections.status" class="space-y-1 mt-3">
-            <label
+            <FilterPill
               v-for="s in allStatuses"
               :key="s.value"
-              class="flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors ui-hover-surface"
+              :label="s.label"
+              :state="statusFilterActive(s.value) ? 'include' : 'neutral'"
+              @activate="toggleStatusFilterValue(s.value)"
             >
-              <input
-                type="checkbox"
-                :checked="statusFilterActive(s.value)"
-                @change="applyStatusFilter(s.value, $event)"
-                class="filters-checkbox rounded"
-              />
-              <span class="ui-status-option" :class="s.toneClass">
-                <component :is="s.icon" class="ui-status-icon" />
-                <span>{{ s.label }}</span>
-              </span>
-            </label>
+              <template #icon>
+                <component :is="s.icon" class="filter-status-icon" :class="s.toneClass" aria-hidden="true" />
+              </template>
+            </FilterPill>
           </div>
         </div>
 
-        <div class="p-6 pb-2 pt-4">
-          <label class="block px-2 text-xs uppercase tracking-widest font-bold" style="color: var(--text-muted)">
-            Install state
-            <select v-model="filterInstallState" class="library-search-input mt-3 w-full rounded-lg px-3 py-2 text-sm normal-case tracking-normal font-medium">
-              <option value="">All</option>
-              <option value="installed">Installed</option>
-              <option value="wishlist">Wishlist</option>
-            </select>
-          </label>
-        </div>
-
-        <div class="p-6 pb-2 pt-4">
-          <button
-            @click="toggleFilterSection('rating')"
-            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
-            style="color: var(--text-muted)"
-            :aria-expanded="filterSections.rating"
-          >
-            <span>F95 rating</span>
-            <span class="text-sm">{{ filterSections.rating ? "▾" : "▸" }}</span>
-          </button>
-          <div v-show="filterSections.rating" class="mt-3 px-2">
-            <select
-              v-model="filterMinRating"
-              aria-label="Minimum weighted F95 rating"
-              class="library-search-input w-full rounded-lg px-3 py-2 text-sm normal-case tracking-normal font-medium"
+        <div class="px-4 pb-2 pt-4">
+          <div class="filter-section-head">
+            <button
+              type="button"
+              class="filter-section-toggle ui-hover-surface"
+              :aria-expanded="filterSections.install"
+              aria-controls="library-filter-install"
+              @click="toggleFilterSection('install')"
             >
-              <option value="">Any</option>
-              <option value="3.5">3.5+ weighted</option>
-              <option value="4.0">4.0+ weighted</option>
-              <option value="4.5">4.5+ weighted</option>
-            </select>
+              <IconChevronDown class="filter-section-chevron" aria-hidden="true" />
+              <span id="library-filter-install-label">Install state</span>
+            </button>
+            <span class="filter-rule" title="Click the picked value again to show all games">one of</span>
+          </div>
+          <div
+            v-show="filterSections.install"
+            id="library-filter-install"
+            role="group"
+            aria-labelledby="library-filter-install-label"
+            class="filter-pill-list mt-3"
+          >
+            <FilterPill
+              v-for="option in installStateOptions"
+              :key="option.value"
+              :label="option.label"
+              :state="filterInstallState === option.value ? 'include' : 'neutral'"
+              @activate="toggleInstallState(option.value)"
+            />
           </div>
         </div>
 
-        <div class="p-6 pb-2 pt-4">
-          <button
-            @click="toggleFilterSection('threadStates')"
-            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
-            style="color: var(--text-muted)"
-            :aria-expanded="filterSections.threadStates"
+        <div class="px-4 pb-2 pt-4">
+          <div class="filter-section-head">
+            <button
+              type="button"
+              class="filter-section-toggle ui-hover-surface"
+              :aria-expanded="filterSections.rating"
+              aria-controls="library-filter-rating"
+              @click="toggleFilterSection('rating')"
+            >
+              <IconChevronDown class="filter-section-chevron" aria-hidden="true" />
+              <span id="library-filter-rating-label">Weighted rating</span>
+            </button>
+            <span class="filter-rule" title="Shows games with at least this weighted F95 rating. Click the picked value again to show all games">one of</span>
+          </div>
+          <div
+            v-show="filterSections.rating"
+            id="library-filter-rating"
+            role="group"
+            aria-labelledby="library-filter-rating-label"
+            class="filter-pill-list mt-3"
           >
-            <span>Thread state</span>
-            <span class="text-sm">{{ filterSections.threadStates ? "▾" : "▸" }}</span>
-          </button>
-          <div v-show="filterSections.threadStates" class="space-y-1 mt-3">
-            <label
+            <FilterPill
+              v-for="option in ratingOptions"
+              :key="option.value"
+              :label="option.label"
+              :title="`Weighted F95 rating of ${option.value} or higher`"
+              :state="filterMinRating === option.value ? 'include' : 'neutral'"
+              @activate="toggleMinRating(option.value)"
+            />
+          </div>
+        </div>
+
+        <div class="px-4 pb-2 pt-4">
+          <div class="filter-section-head">
+            <button
+              type="button"
+              class="filter-section-toggle ui-hover-surface"
+              :aria-expanded="filterSections.threadStates"
+              aria-controls="library-filter-thread"
+              @click="toggleFilterSection('threadStates')"
+            >
+              <IconChevronDown class="filter-section-chevron" aria-hidden="true" />
+              <span id="library-filter-thread-label">Thread state</span>
+            </button>
+            <span class="filter-rule" title="Shows games in any of the picked thread states">any of</span>
+            <button
+              v-if="filterThreadStates.length"
+              type="button"
+              class="filter-clear filter-clear--icon"
+              aria-label="Clear thread state filters"
+              title="Clear thread state filters"
+              @click="filterThreadStates = []"
+            >
+              <IconX class="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          </div>
+          <div
+            v-show="filterSections.threadStates"
+            id="library-filter-thread"
+            role="group"
+            aria-labelledby="library-filter-thread-label"
+            class="filter-pill-list mt-3"
+          >
+            <FilterPill
               v-for="option in threadStateOptions"
               :key="option.value"
-              class="flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors ui-hover-surface"
+              :label="option.label"
+              :state="filterThreadStates.includes(option.value) ? 'include' : 'neutral'"
+              @activate="toggleThreadStateFilter(option.value)"
             >
-              <input
-                type="checkbox"
-                :checked="filterThreadStates.includes(option.value)"
-                @change="applyThreadStateFilter(option.value, $event)"
-                class="filters-checkbox rounded"
-              />
-              <span class="ui-status-option">
-                <component :is="option.icon" class="ui-status-icon" />
-                <span>{{ option.label }}</span>
-              </span>
-            </label>
+              <template #icon>
+                <component :is="option.icon" aria-hidden="true" />
+              </template>
+            </FilterPill>
           </div>
         </div>
 
-        <p class="filter-legend mx-6 mt-4 px-2 text-[0.6875rem] leading-snug" style="color: var(--text-muted)">
-          Pills: click once to show, twice to hide, three times to clear.
-        </p>
-
-        <div class="p-6 pb-2 pt-4">
-          <button
-            @click="toggleFilterSection('sources')"
-            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
-            style="color: var(--text-muted)"
+        <div class="px-4 pb-2 pt-4">
+          <div class="filter-section-head">
+            <button
+              type="button"
+              class="filter-section-toggle ui-hover-surface"
+              :aria-expanded="filterSections.sources"
+              aria-controls="library-filter-sources"
+              @click="toggleFilterSection('sources')"
+            >
+              <IconChevronDown class="filter-section-chevron" aria-hidden="true" />
+              <span id="library-filter-sources-label">Sources</span>
+            </button>
+            <span class="filter-rule" title="Shows games from any included source and from none of the excluded ones">any of</span>
+            <button
+              v-if="filterSources.length || filterExcludedSources.length"
+              type="button"
+              class="filter-clear filter-clear--icon"
+              aria-label="Clear source filters"
+              title="Clear source filters"
+              @click="clearSourceFilters"
+            >
+              <IconX class="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          </div>
+          <div
+            v-show="filterSections.sources"
+            id="library-filter-sources"
+            role="group"
+            aria-labelledby="library-filter-sources-label"
+            class="filter-pill-list mt-3"
           >
-            <span>Sources</span>
-            <span class="text-sm">{{ filterSections.sources ? "▾" : "▸" }}</span>
-          </button>
-          <div v-show="filterSections.sources" class="mt-3">
-            <div class="mb-2 flex items-center justify-between gap-2">
-              <p class="text-xs" style="color: var(--text-muted)">Matches any included value</p>
-              <button v-if="filterSources.length || filterExcludedSources.length" @click="clearSourceFilters"
-                class="cursor-pointer hover:text-red-400 text-[0.625rem] normal-case tracking-normal transition-colors"
-                style="color: var(--text-muted)">Clear</button>
-            </div>
-            <div class="flex flex-wrap gap-1.5">
-              <FilterPill
-                v-for="source in LIBRARY_SOURCES"
-                :key="source.key"
-                :label="source.label"
-                :state="sourceState(source.key)"
-                @activate="cycleSource(source.key)"
-              />
+            <FilterPill
+              v-for="source in LIBRARY_SOURCES"
+              :key="source.key"
+              :label="source.label"
+              :state="sourceState(source.key)"
+              excludable
+              @activate="setSourceFilter(toggleIncludedFilterValue, source.key)"
+              @exclude="setSourceFilter(toggleExcludedFilterValue, source.key)"
+            />
+          </div>
+        </div>
+
+        <div class="px-4 pb-2 pt-4">
+          <div class="filter-section-head">
+            <button
+              type="button"
+              class="filter-section-toggle ui-hover-surface"
+              :aria-expanded="filterSections.engines"
+              aria-controls="library-filter-engines"
+              @click="toggleFilterSection('engines')"
+            >
+              <IconChevronDown class="filter-section-chevron" aria-hidden="true" />
+              <span id="library-filter-engines-label">Engines</span>
+            </button>
+            <span class="filter-rule" title="Shows games made with any included engine and with none of the excluded ones">any of</span>
+            <button
+              v-if="filterEngines.length || filterExcludedEngines.length"
+              type="button"
+              class="filter-clear filter-clear--icon"
+              aria-label="Clear engine filters"
+              title="Clear engine filters"
+              @click="clearEngineFilters"
+            >
+              <IconX class="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          </div>
+          <div
+            v-show="filterSections.engines"
+            id="library-filter-engines"
+            role="group"
+            aria-labelledby="library-filter-engines-label"
+            class="filter-pill-list mt-3"
+          >
+            <FilterPill
+              v-for="engine in uniqueEngines"
+              :key="engine"
+              :label="engine"
+              :state="engineState(engine)"
+              excludable
+              @activate="setEngineFilter(toggleIncludedFilterValue, engine)"
+              @exclude="setEngineFilter(toggleExcludedFilterValue, engine)"
+            />
+            <div
+              v-if="!uniqueEngines.length"
+              class="text-xs italic"
+              style="color: var(--text-muted)"
+            >
+              No engines found
             </div>
           </div>
         </div>
 
-        <div class="p-6 pb-2 pt-4">
-          <button
-            @click="toggleFilterSection('engines')"
-            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
-            style="color: var(--text-muted)"
-          >
-            <span>Engines</span>
-            <span class="text-sm">{{ filterSections.engines ? "▾" : "▸" }}</span>
-          </button>
-          <div v-show="filterSections.engines" class="mt-3">
-            <div class="mb-2 flex items-center justify-between gap-2">
-              <p class="text-xs" style="color: var(--text-muted)">Matches any included value</p>
-              <button
-                v-if="filterEngines.length || filterExcludedEngines.length"
-                @click="clearEngineFilters"
-                class="cursor-pointer hover:text-red-400 text-[0.625rem] normal-case tracking-normal transition-colors"
-                style="color: var(--text-muted)"
-              >
-                Clear
-              </button>
-            </div>
-            <div class="flex flex-wrap gap-1.5">
-              <FilterPill
-                v-for="engine in uniqueEngines"
-                :key="engine"
-                :label="engine"
-                :state="engineState(engine)"
-                @activate="cycleEngine(engine)"
-              />
-              <div
-                v-if="!uniqueEngines.length"
-                class="text-xs italic"
-                style="color: var(--text-muted)"
-              >
-                No engines found
-              </div>
-            </div>
+        <div class="px-4 pb-6 pt-4 flex-1">
+          <div class="filter-section-head">
+            <button
+              type="button"
+              class="filter-section-toggle ui-hover-surface"
+              :aria-expanded="filterSections.tags"
+              aria-controls="library-filter-tags"
+              @click="toggleFilterSection('tags')"
+            >
+              <IconChevronDown class="filter-section-chevron" aria-hidden="true" />
+              <span id="library-filter-tags-label">Tags</span>
+            </button>
+            <span class="filter-rule" title="Shows games that have every included tag and none of the excluded ones">all of</span>
+            <button
+              v-if="filterTags.length || filterExcludedTags.length"
+              type="button"
+              class="filter-clear filter-clear--icon"
+              aria-label="Clear tag filters"
+              title="Clear tag filters"
+              @click="clearTagFilters"
+            >
+              <IconX class="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
           </div>
-        </div>
-
-        <div class="p-6 pt-4 flex-1">
-          <button
-            @click="toggleFilterSection('tags')"
-            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
-            style="color: var(--text-muted)"
-          >
-            <span>Tags</span>
-            <span class="text-sm">{{ filterSections.tags ? "▾" : "▸" }}</span>
-          </button>
-          <div v-show="filterSections.tags" class="mt-3">
+          <div v-show="filterSections.tags" id="library-filter-tags" class="mt-3">
             <input
               v-model="tagSearchQuery"
               type="search"
               aria-label="Search tags"
               placeholder="Search tags..."
-              class="library-search-input w-full rounded-lg px-3 py-2 text-xs mb-2"
+              class="library-search-input w-full rounded-lg px-3 py-2 text-xs mb-3"
             />
-            <div class="mb-2 flex items-center justify-between gap-2">
-              <p class="text-xs" style="color: var(--text-muted)">Matches all included tags</p>
-              <button
-                v-if="filterTags.length || filterExcludedTags.length"
-                @click="clearTagFilters"
-                class="cursor-pointer hover:text-red-400 text-[0.625rem] normal-case tracking-normal transition-colors"
-                style="color: var(--text-muted)"
-              >
-                Clear
-              </button>
-            </div>
             <div
               ref="tagList"
-              class="max-h-64 overflow-y-auto"
+              role="group"
+              aria-labelledby="library-filter-tags-label"
+              class="filter-tag-list max-h-64 overflow-y-auto"
               @pointerenter="onTagListPointerEnter"
               @pointerleave="onTagListPointerLeave"
               @pointerdown="onTagListPointerDown"
@@ -2495,7 +2788,7 @@ onUnmounted(() => {
                 v-if="orderedTags.pinned.length"
                 role="group"
                 aria-label="Active tags"
-                class="pinned-tags flex flex-wrap gap-1.5 p-1.5 mb-2 rounded-lg"
+                class="pinned-tags filter-pill-list p-2 mb-2 rounded-lg"
               >
                 <FilterPill
                   v-for="option in orderedTags.pinned"
@@ -2505,13 +2798,15 @@ onUnmounted(() => {
                   :count="option.count"
                   :color="colorForTag(option.label)"
                   :state="tagState(option.label)"
+                  excludable
                   class="tag-pill"
-                  @activate="cycleTag(option.label)"
+                  @activate="setTagFilter(toggleIncludedFilterValue, option.label)"
+                  @exclude="setTagFilter(toggleExcludedFilterValue, option.label)"
                   @contextmenu="openTagColorPicker($event, option.label)"
                   @keydown.shift.f10.prevent="openTagColorPicker($event, option.label)"
                 />
               </div>
-              <div class="flex flex-wrap gap-1.5">
+              <div class="filter-pill-list">
                 <FilterPill
                   v-for="option in orderedTags.rest"
                   :key="option.label"
@@ -2520,8 +2815,10 @@ onUnmounted(() => {
                   :count="option.count"
                   :color="colorForTag(option.label)"
                   :state="tagState(option.label)"
+                  excludable
                   class="tag-pill"
-                  @activate="cycleTag(option.label)"
+                  @activate="setTagFilter(toggleIncludedFilterValue, option.label)"
+                  @exclude="setTagFilter(toggleExcludedFilterValue, option.label)"
                   @contextmenu="openTagColorPicker($event, option.label)"
                   @keydown.shift.f10.prevent="openTagColorPicker($event, option.label)"
                 />
@@ -2540,7 +2837,7 @@ onUnmounted(() => {
     </aside>
 
     <!-- Main Content Area -->
-    <div ref="libraryScroller" class="flex-1 min-w-0 p-5 overflow-y-auto flex flex-col relative">
+    <div ref="libraryScroller" class="library-scroller flex-1 min-w-0 p-5 overflow-y-auto flex flex-col relative">
       <header class="library-header mb-4 shrink-0">
         <div class="library-header-row">
           <h2
@@ -2550,23 +2847,25 @@ onUnmounted(() => {
             <IconDeviceGamepad2 class="ui-page-heading-icon" />
             <span>Your Library</span>
           </h2>
-          <p class="library-subtitle text-sm pl-3" aria-hidden="true">
-            Manage and play your imported games.
+          <p v-if="librarySummary" class="library-subtitle text-sm pl-3">
+            {{ librarySummary }}
           </p>
-          <p class="sr-only">Manage and play your imported games.</p>
+          <!-- Always secondary: the first-run panel owns the primary action of an empty
+               library, and with games, Play and the update markers lead. -->
           <MenuButton
             split
             class="library-add-menu"
             :items="addMenuItems"
             menu-label="More ways to add"
             button-label="More ways to add"
+            main-label="Add game"
             align="end"
             @main="showAddModal = true"
             @select="chooseAddMenuItem"
           >
             <template #main>
-              <IconLibraryPlus class="ui-action-icon" />
-              Add game
+              <IconLibraryPlus class="ui-action-icon" aria-hidden="true" />
+              <span class="library-add-label">Add game</span>
             </template>
           </MenuButton>
         </div>
@@ -2605,16 +2904,17 @@ onUnmounted(() => {
                 class="library-search-input rounded-lg px-2 py-1 text-sm w-36"
                 @keydown.escape.prevent="cancelCollectionRename"
               />
-              <button type="submit" class="ui-icon-btn p-1 rounded" title="Save name">
-                <IconCheck class="w-4 h-4" />
+              <button type="submit" class="ui-icon-btn p-1 rounded" title="Save name" aria-label="Save collection name">
+                <IconCheck class="w-4 h-4" aria-hidden="true" />
               </button>
               <button
                 type="button"
                 class="ui-icon-btn p-1 rounded"
                 title="Cancel rename"
+                aria-label="Cancel rename"
                 @click="cancelCollectionRename"
               >
-                <IconX class="w-4 h-4" />
+                <IconX class="w-4 h-4" aria-hidden="true" />
               </button>
             </form>
             <button
@@ -2649,16 +2949,17 @@ onUnmounted(() => {
               class="library-search-input rounded-lg px-2 py-1 text-sm w-36"
               @keydown.escape.prevent="cancelInlineCollectionCreate"
             />
-            <button type="submit" class="ui-icon-btn p-1 rounded" title="Create collection">
-              <IconCheck class="w-4 h-4" />
+            <button type="submit" class="ui-icon-btn p-1 rounded" title="Create collection" aria-label="Create collection">
+              <IconCheck class="w-4 h-4" aria-hidden="true" />
             </button>
             <button
               type="button"
               class="ui-icon-btn p-1 rounded"
               title="Cancel"
+              aria-label="Cancel new collection"
               @click="cancelInlineCollectionCreate"
             >
-              <IconX class="w-4 h-4" />
+              <IconX class="w-4 h-4" aria-hidden="true" />
             </button>
           </form>
           <button
@@ -2681,7 +2982,7 @@ onUnmounted(() => {
         </p>
       </div>
 
-      <!-- Search, sort and view controls share one wrapping row -->
+      <!-- Search, Filters, Select and the View menu share one row; narrow columns put search on its own row. -->
       <div class="library-toolbar mb-4 shrink-0">
         <div class="library-toolbar-search relative">
           <IconZoom
@@ -2696,58 +2997,34 @@ onUnmounted(() => {
             placeholder="Search titles, aliases, developer, tags or engine..."
             class="library-search-input w-full rounded-lg pl-10 pr-10 py-2 text-sm focus:outline-none"
           />
+          <!-- Named after the field, so it differs from the no-results "Clear search" button. -->
           <button
             v-if="searchQuery"
-            @click="
-              searchQuery = '';
-              searchInput?.focus();
-            "
-            aria-label="Clear search"
+            type="button"
+            aria-label="Clear search field"
+            title="Clear search field"
             class="ui-icon-btn absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded"
+            @click="clearSearch"
           >
-            <IconX class="w-4 h-4" />
+            <IconX class="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
 
         <div class="library-toolbar-controls">
-          <div v-if="layoutMode !== 'list'" class="flex items-center">
-            <MenuButton
-              radio
-              class="library-sort-menu"
-              :items="sortMenuItems"
-              menu-label="Sort by"
-              :button-label="`Sort by: ${sortFieldLabel}`"
-              button-title="Sort by"
-              @select="setSortField"
-            >
-              {{ sortFieldLabel }}
-            </MenuButton>
-            <button
-              type="button"
-              class="library-toolbar-btn library-sort-dir ui-action-btn ui-hover-surface"
-              :aria-label="sortDir === 'asc' ? 'Sort direction: ascending' : 'Sort direction: descending'"
-              :title="sortDir === 'asc' ? 'Ascending. Click to reverse.' : 'Descending. Click to reverse.'"
-              @click="reverseSortDir"
-            >
-              <IconSortAscending v-if="sortDir === 'asc'" class="ui-action-icon" />
-              <IconSortDescending v-else class="ui-action-icon" />
-            </button>
-          </div>
-
           <button
             @click="toggleFiltersPane"
             class="library-toolbar-btn ui-action-btn relative ui-hover-surface active:scale-95"
-            :aria-expanded="!isFiltersCollapsed"
-            :title="
-              isFiltersCollapsed ? 'Show Filters Pane' : 'Hide Filters Pane'
-            "
+            :aria-expanded="filtersPaneShown"
+            :aria-label="activeFilterCount > 0 ? `Filters, ${activeFilterCount} active` : 'Filters'"
+            :title="filtersPaneShown ? 'Hide filters' : 'Show filters'"
           >
-            <IconFilterFilled class="ui-action-icon" />
-            <span>Filters</span>
+            <IconFilterFilled class="ui-action-icon" aria-hidden="true" />
+            <span class="library-toolbar-label">Filters</span>
             <span
               v-if="activeFilterCount > 0"
-              class="absolute -top-1.5 -right-1.5 min-w-5 h-5 rounded-full px-1 text-[0.625rem] font-bold flex items-center justify-center"
+              class="absolute -top-1.5 -right-1.5 min-w-5 h-5 rounded-full px-1 text-xs font-bold flex items-center justify-center"
               style="background: var(--brand); color: var(--on-brand)"
+              aria-hidden="true"
             >
               {{ activeFilterCount }}
             </span>
@@ -2755,88 +3032,53 @@ onUnmounted(() => {
           <button
             type="button"
             class="library-toolbar-btn ui-action-btn ui-hover-surface active:scale-95"
-            :aria-pressed="selecting || selectedIds.size > 0"
+            :aria-pressed="selectionMode"
+            aria-label="Select"
+            title="Select games for bulk actions"
             @click="selecting = !selecting; if (!selecting) selection.clear()"
           >
-            <IconListCheck class="ui-action-icon" />
-            <span>Select</span>
+            <IconListCheck class="ui-action-icon" aria-hidden="true" />
+            <span class="library-toolbar-label">Select</span>
           </button>
 
-          <span class="text-xs whitespace-nowrap" style="color: var(--text-muted)"
-            >{{ filteredGames.length }} game{{
-              filteredGames.length !== 1 ? "s" : ""
-            }}</span
+          <!-- Layout, sort, order and card size. The list column headers change the same sort. -->
+          <MenuButton
+            radio
+            :columns="2"
+            class="library-view-menu"
+            align="end"
+            :items="viewMenuItems"
+            menu-label="View options"
+            :button-label="`View: ${currentLayout.label}, sorted by ${sortSummary}`"
+            :button-title="`View options. ${currentLayout.label} layout, sorted by ${sortSummary}`"
+            @select="chooseViewMenuItem"
           >
+            <component :is="currentLayout.icon" class="ui-action-icon" aria-hidden="true" />
+            <span class="library-toolbar-label">View</span>
+            <span class="library-view-sort">{{ sortSummary }}</span>
+          </MenuButton>
 
-          <div v-if="layoutMode !== 'list'" class="flex items-center gap-2" style="color: var(--text-muted)">
-            <IconPhotoFilled class="size-3" aria-hidden="true" />
-            <input v-model.number="cardSize" type="range" min="0" max="4" step="1" aria-label="Card size"
-              class="card-size-control w-20 cursor-pointer" />
-            <IconPhotoFilled class="size-5" aria-hidden="true" />
-          </div>
-
-          <!-- Layout Toggle -->
-          <div
-            class="flex items-center rounded-lg p-1"
-            style="
-              background: var(--bg-surface);
-              border: 1px solid var(--border);
-            "
+          <span
+            v-if="filteredGames.length !== games.length"
+            class="library-result-count text-xs whitespace-nowrap"
+            >{{ filteredGames.length }} of {{ games.length }}</span
           >
-            <button
-              @click="layoutMode = 'grid'"
-              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
-              :style="
-                layoutMode === 'grid'
-                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                  : 'color: var(--text-muted)'
-              "
-              title="Grid view" aria-label="Grid view" :aria-pressed="layoutMode === 'grid'"
-            >
-              <IconColumns2Filled class="ui-action-icon" />
-            </button>
-            <button
-              @click="layoutMode = 'list'"
-              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
-              :style="
-                layoutMode === 'list'
-                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                  : 'color: var(--text-muted)'
-              "
-              title="List view" aria-label="List view" :aria-pressed="layoutMode === 'list'"
-            >
-              <IconLayoutListFilled class="ui-action-icon" />
-            </button>
-            <button
-              @click="layoutMode = 'compact'"
-              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
-              :style="
-                layoutMode === 'compact'
-                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                  : 'color: var(--text-muted)'
-              "
-              title="Compact view" aria-label="Compact view" :aria-pressed="layoutMode === 'compact'"
-            >
-              <IconLayoutGridFilled class="ui-action-icon opacity-90" />
-            </button>
-            <button
-              @click="layoutMode = 'banner'"
-              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
-              :style="
-                layoutMode === 'banner'
-                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                  : 'color: var(--text-muted)'
-              "
-              title="Banner view" aria-label="Banner view" :aria-pressed="layoutMode === 'banner'"
-            >
-              <IconPanoramaHorizontalFilled class="ui-action-icon" />
-            </button>
-          </div>
         </div>
       </div>
 
-      <div v-if="activeFilterChips.length" class="flex flex-wrap items-center gap-2 px-6 pb-3" role="group" aria-label="Active filters">
-        <button v-for="chip in activeFilterChips" :key="chip.key" class="ui-action-btn ui-hover-surface px-3 py-1 rounded-full text-xs" style="color: var(--text-primary); border: 1px solid var(--border); background: var(--bg-raised)" :aria-label="`Remove filter ${chip.label}`" @click="removeFilterChip(chip)">{{ chip.label }} <span aria-hidden="true">×</span></button>
+      <div v-if="activeFilterChips.length" class="flex flex-wrap items-center gap-2 pb-3" role="group" aria-label="Active filters">
+        <button
+          v-for="chip in activeFilterChips"
+          :key="chip.key"
+          class="filter-chip ui-action-btn px-3 py-1 rounded-full text-xs"
+          :class="{ 'filter-chip--excluded': chip.excluded }"
+          :aria-label="`Remove filter ${chip.label}`"
+          @click="removeFilterChip(chip)"
+        >
+          <IconBan v-if="chip.excluded" class="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+          <span>{{ chip.label }}</span>
+          <IconX class="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+        </button>
         <button
           v-if="!savePresetOpen"
           ref="savePresetButton"
@@ -2870,12 +3112,24 @@ onUnmounted(() => {
           >Save</button>
           <span v-if="presetError" id="save-preset-error" role="alert" class="text-xs" style="color: var(--danger-text)">{{ presetError }}</span>
         </form>
-        <button class="ui-action-btn px-3 py-1 text-xs hover:text-red-400" style="color: var(--text-muted)" @click="clearFilters">Clear all</button>
+        <button class="filter-clear filter-clear--all ui-action-btn" @click="clearFilters">Clear all</button>
       </div>
 
+      <!-- Keyboard help for the focused card or row (their aria-describedby). -->
+      <p id="library-item-hint" class="sr-only">{{ libraryItemHint }}</p>
       <div v-if="displayState === 'error'" class="empty-state flex-1" role="alert">
+        <IconAlertTriangle class="empty-state-icon" aria-hidden="true" />
         <h3 class="empty-state-title">{{ loadError }}</h3>
-        <button class="ui-action-btn px-3 py-2 rounded-lg" @click="loadGames">Retry</button>
+        <p v-if="loadErrorCause" class="library-load-cause">Cause: {{ loadErrorCause }}</p>
+        <p class="empty-state-subtext">Retry, or restart wLib if this keeps happening.</p>
+        <button
+          class="ui-action-btn px-3 py-1.5 rounded-lg text-sm font-medium border active:scale-95 active:bg-[var(--bg-overlay)]"
+          style="color: var(--text-primary); border-color: var(--border-hover)"
+          @click="loadGames"
+        >
+          <IconRefresh class="ui-action-icon" aria-hidden="true" />
+          Retry
+        </button>
       </div>
       <div v-else-if="displayState === 'loading'" class="library-skeletons grid gap-5 pb-12"
         :class="layoutMode === 'list' ? 'library-skeletons--list' : `library-cards--${layoutMode}`"
@@ -2883,26 +3137,104 @@ onUnmounted(() => {
         <div v-for="n in 12" :key="n" class="library-skeleton rounded-xl"
           :class="`library-skeleton--${layoutMode}`" aria-hidden="true"></div>
       </div>
-      <div v-else-if="displayState === 'empty'" class="empty-state flex-1">
-        <IconDeviceGamepad2Filled class="empty-state-icon" />
-        <h3 class="empty-state-title">Your library is empty</h3>
-        <p class="empty-state-subtext">Add your first game to get started</p>
-        <p class="empty-state-hint">
-          Use the Add game button above to import your first title.
+      <section
+        v-else-if="displayState === 'empty'"
+        class="empty-state library-first-run flex-1"
+        aria-labelledby="library-first-run-title"
+      >
+        <IconDeviceGamepad2Filled class="empty-state-icon" aria-hidden="true" />
+        <h3 id="library-first-run-title" class="empty-state-title">Add your games</h3>
+        <p class="empty-state-subtext library-first-run-lead">
+          wLib keeps each game's version, updates and playtime in one place.
         </p>
-      </div>
-
-      <div v-else-if="displayState === 'no-results'" class="empty-state flex-1">
-        <IconZoom class="empty-state-icon" />
-        <h3 class="empty-state-title">No games found</h3>
-        <p class="empty-state-subtext">Try adjusting your search or filters</p>
         <button
-          @click="clearFilters"
-          class="ui-action-btn px-3 py-1.5 rounded-lg text-sm font-medium border active:scale-95 active:bg-[var(--bg-overlay)]"
-          style="color: var(--text-secondary); border-color: var(--border)"
+          type="button"
+          class="library-first-run-primary"
+          data-controller-primary
+          aria-describedby="library-first-run-primary-hint"
+          @click="showImportModal = true"
         >
-          Clear filters
+          <IconFolderPlus class="ui-action-icon" aria-hidden="true" />
+          Import a folder of games
         </button>
+        <p id="library-first-run-primary-hint" class="empty-state-hint">
+          Each subfolder that holds a game becomes one game.
+        </p>
+        <ul class="library-first-run-list" aria-label="Other ways to add games">
+          <li v-for="action in firstRunActions" :key="action.id">
+            <button type="button" class="library-first-run-option" @click="action.run()">
+              <component :is="action.icon" class="library-first-run-option-icon" aria-hidden="true" />
+              <span class="library-first-run-option-text">
+                <span class="library-first-run-option-label">{{ action.label }}</span>
+                <span class="library-first-run-option-detail">{{ action.detail }}</span>
+              </span>
+              <IconChevronRight class="library-first-run-option-chevron" aria-hidden="true" />
+            </button>
+          </li>
+        </ul>
+        <button type="button" class="library-first-run-help" @click="openGettingStarted">
+          New to wLib? Read the Getting Started guide
+          <IconExternalLink class="library-first-run-help-icon" aria-hidden="true" />
+          <span class="sr-only">(opens in your browser)</span>
+        </button>
+      </section>
+
+      <div v-else-if="displayState === 'no-results'" class="empty-state library-no-results flex-1">
+        <component :is="noResultsIcon" class="empty-state-icon" aria-hidden="true" />
+        <div class="library-no-results-text" role="status">
+          <h3 class="empty-state-title">{{ noResults.title }}</h3>
+          <p v-if="noResults.detail" class="empty-state-subtext">{{ noResults.detail }}</p>
+        </div>
+        <div class="library-no-results-actions">
+          <button
+            v-if="noResults.kind === 'collection-empty'"
+            type="button"
+            class="library-no-results-btn ui-action-btn"
+            data-controller-primary
+            @click="activeCollection = ''"
+          >
+            Show all games
+          </button>
+          <template v-else>
+            <button
+              v-if="noResultsSearch"
+              type="button"
+              class="library-no-results-btn ui-action-btn"
+              data-controller-primary
+              @click="clearSearch"
+            >
+              <IconX class="ui-action-icon" aria-hidden="true" />
+              Clear search
+            </button>
+            <button
+              v-if="activeFilterCount"
+              type="button"
+              class="library-no-results-btn ui-action-btn"
+              :data-controller-primary="noResultsSearch ? undefined : ''"
+              @click="clearFilterValues"
+            >
+              <IconFilterFilled class="ui-action-icon" aria-hidden="true" />
+              {{ noResults.kind === "quick-filter-empty" && !activeCollection ? "Show all games" : "Clear filters" }}
+            </button>
+            <button
+              v-if="activeCollection && noResults.kind === 'no-match'"
+              type="button"
+              class="library-no-results-btn ui-action-btn"
+              @click="activeCollection = ''"
+            >
+              Look in all games
+            </button>
+            <button
+              v-if="discoverAvailable && noResultsSearch && noResults.kind === 'no-match'"
+              type="button"
+              class="library-no-results-btn ui-action-btn"
+              @click="lookInDiscover"
+            >
+              <IconCompass class="ui-action-icon" aria-hidden="true" />
+              Look in Discover
+            </button>
+          </template>
+        </div>
       </div>
 
       <div v-else-if="layoutMode === 'list'" ref="listScroller" class="library-table-wrap pb-12">
@@ -2950,6 +3282,7 @@ onUnmounted(() => {
               :move-state="gameMoves.moveStateFor(game.id).state"
               :move-percent="gameMoves.moveStateFor(game.id).percent"
               :selected="selectedIds.has(game.id)"
+              :selection-mode="selectionMode"
               :running="runningGameIds.has(game.id)"
               :primary="shownWindow.start + index === shownWindow.primary"
               @activate="handleCardClick"
@@ -2967,6 +3300,10 @@ onUnmounted(() => {
       <div
         v-else
         ref="windowContainer"
+        role="grid"
+        aria-label="Games"
+        aria-multiselectable="true"
+        :aria-rowcount="filteredGames.length"
         class="library-cards library-window grid gap-4 pb-12"
         :style="libraryGridStyle"
         :class="
@@ -2989,7 +3326,8 @@ onUnmounted(() => {
           :menu-open="openLaunchTargetMenuId === game.id"
           :updating="updatingId === game.id"
           :update-busy="updatingId !== null"
-          :selection-mode="selecting || selectedIds.size > 0"
+          :selection-mode="selectionMode"
+          :row-index="shownWindow.start + index + 1"
           :primary="shownWindow.start + index === shownWindow.primary"
           @activate="handleCardClick"
           @contextmenu="openContextMenu"
@@ -3276,8 +3614,6 @@ onUnmounted(() => {
 :global(.motion-off .library-skeleton) { animation: none; }
 @media (prefers-reduced-motion: reduce) { .library-skeleton { animation: none; } }
 
-.card-size-control { accent-color: var(--brand); }
-.card-size-control:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
 
 .library-cards--grid {
   grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(220px * var(--card-scale, 1))), 1fr));
@@ -3293,7 +3629,7 @@ onUnmounted(() => {
   color: var(--on-brand);
   border-radius: 0.3rem;
   padding: 0.15rem 0.35rem;
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 .collections-tab-strip {
@@ -3385,7 +3721,7 @@ onUnmounted(() => {
 }
 .library-table th {
   color: var(--text-muted);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
 }
 .game-context-menu {
   position: fixed;
@@ -3442,6 +3778,62 @@ onUnmounted(() => {
   border-right: 0 solid transparent;
 }
 
+/* Narrow windows: the pane slides in over the games from the left edge. */
+.filters-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: var(--overlay-scrim);
+}
+.filters-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 46;
+  width: min(20rem, calc(var(--app-vw) - 3rem));
+  height: var(--app-vh);
+  box-shadow: var(--shadow-modal);
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition: transform var(--motion-slow) cubic-bezier(0.16, 1, 0.3, 1), visibility 0s linear var(--motion-slow);
+}
+.filters-drawer--open {
+  transform: none;
+  visibility: visible;
+  transition: transform var(--motion-slow) cubic-bezier(0.16, 1, 0.3, 1), visibility 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .filters-drawer,
+  .filters-drawer--open {
+    transition: none;
+  }
+}
+.filters-drawer-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.75rem 0.75rem 0.5rem 1rem;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+.filters-drawer-title {
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 700;
+}
+.filters-drawer-close {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.5rem;
+  color: var(--text-secondary);
+}
+
 .library-search-input {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -3452,18 +3844,274 @@ onUnmounted(() => {
   border-color: var(--brand);
   box-shadow: 0 0 0 3px var(--brand-glow);
 }
-
-.filters-checkbox {
-  border-color: var(--border);
-  background: transparent;
+/* The browser default placeholder is too faint (3.3:1 on white); the muted
+   token keeps 4.5:1 or more in both themes. */
+.library-search-input::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+.library-load-cause {
+  max-width: 60ch;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
-.filters-checkbox:focus {
+/* First run: one primary action, then the other ways in as a quiet list. */
+.library-first-run {
+  width: 100%;
+  max-width: 30rem;
+  margin-inline: auto;
+}
+.library-first-run-lead {
+  max-width: 44ch;
+  text-wrap: balance;
+}
+.library-first-run-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding: 0.625rem 1.125rem;
+  border-radius: 0.625rem;
+  border: 1px solid var(--brand);
+  background: var(--brand);
+  color: var(--on-brand);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  box-shadow: var(--shadow-brand);
+  transition: filter var(--motion-fast) ease-out, transform var(--motion-fast) ease-out;
+}
+.library-first-run-primary:hover { filter: brightness(1.08); }
+.library-first-run-primary:active { transform: scale(0.97); }
+.library-first-run-list {
+  width: 100%;
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--bg-surface);
+  overflow: hidden;
+  text-align: left;
+}
+.library-first-run-list li + li { border-top: 1px solid var(--border); }
+.library-first-run-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  color: var(--text-primary);
+  text-align: left;
+  transition: background-color var(--motion-fast) ease-out;
+}
+.library-first-run-option:hover { background: var(--bg-raised); }
+.library-first-run-option:focus-visible { outline-offset: -2px; }
+.library-first-run-option-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+.library-first-run-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+  flex: 1;
+}
+.library-first-run-option-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.library-first-run-option-detail {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+.library-first-run-option-chevron {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform var(--motion-fast) ease-out, color var(--motion-fast) ease-out;
+}
+.library-first-run-option:hover .library-first-run-option-chevron {
+  color: var(--text-primary);
+  transform: translateX(2px);
+}
+.library-first-run-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  text-decoration: underline;
+  text-decoration-color: var(--border-hover);
+  text-underline-offset: 3px;
+}
+.library-first-run-help:hover {
+  color: var(--text-primary);
+  text-decoration-color: currentColor;
+}
+.library-first-run-help-icon { width: 0.875rem; height: 0.875rem; }
+
+/* No results: the cause, then only the ways out that apply. */
+.library-no-results-text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.375rem;
+  max-width: 52ch;
+}
+.library-no-results-text .empty-state-title {
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+.library-no-results-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+.library-no-results-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--border-hover);
+  border-radius: 0.5rem;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.library-no-results-btn:hover {
+  background: var(--bg-raised);
+  border-color: var(--text-muted);
+}
+.library-no-results-btn:active {
+  background: var(--bg-overlay);
+  transform: scale(0.97);
+}
+
+/* Active-filter chips. An excluded value keeps the pill's ban icon and red
+   tone, so the row reads the same way as the pane. */
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text-primary);
+}
+.filter-chip:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-overlay);
+}
+.filter-chip--excluded,
+.filter-chip--excluded:hover {
+  border-color: var(--danger-text);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+.filter-chip:focus-visible {
   outline: 2px solid var(--brand);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
-/* Heading row: the subtitle is hidden before the heading or "Add game" would wrap; an sr-only copy stays. */
+/* Filter section heading: the toggle, the match rule and a Clear button. */
+.filter-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 1.75rem;
+}
+.filter-section-toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.25rem 0.25rem;
+  border-radius: 0.375rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-align: left;
+  text-transform: uppercase;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.filter-section-toggle > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-section-toggle:focus-visible,
+.filter-clear:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.filter-section-chevron {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex-shrink: 0;
+  transition: transform 0.15s ease-out;
+}
+.filter-section-toggle[aria-expanded="false"] .filter-section-chevron {
+  transform: rotate(-90deg);
+}
+.filter-rule {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  cursor: help;
+}
+.filter-clear {
+  flex-shrink: 0;
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.3rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+.filter-clear:hover {
+  color: var(--danger-text);
+}
+.filter-clear--icon {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+}
+.filter-clear--all {
+  padding: 0.25rem 0.75rem;
+}
+/* The row gap leaves room for a pill's exclude button on its top corner. */
+.filter-pill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.375rem;
+}
+.filter-status-icon {
+  color: var(--ui-status-text, currentColor);
+}
+/* Padding keeps the exclude button of the top and right pills inside the
+   scroll area instead of clipping it or adding a sideways scroll bar. */
+.filter-tag-list {
+  overflow-x: hidden;
+  padding: 0.5rem 0.5rem 0.25rem 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .filter-section-chevron { transition: none; }
+}
+
+/* Heading row: the subtitle is hidden visually before the heading or "Add game" would wrap; screen readers keep it. */
 .library-header {
   container-type: inline-size;
 }
@@ -3483,50 +4131,60 @@ onUnmounted(() => {
 .library-add-menu {
   margin-left: auto;
 }
+/* Very narrow: a smaller heading and an icon-only "Add game" (its name stays). */
+@container (max-width: 24rem) {
+  .library-header-row h2 {
+    font-size: 1.5rem;
+  }
+  .library-add-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
 @container (max-width: 44rem) {
   .library-subtitle {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 }
 .library-add-menu :deep(.menu-button-trigger) {
-  border-color: var(--brand);
-  background: var(--brand);
-  color: var(--on-brand);
   font-size: 0.875rem;
   font-weight: 600;
 }
-.library-add-menu :deep(.menu-button-main) {
-  box-shadow: var(--shadow-brand);
-}
-.library-add-menu :deep(.menu-button-toggle) {
-  border-left-color: color-mix(in srgb, var(--on-brand) 35%, var(--brand));
-}
-.library-add-menu :deep(.menu-button-trigger:hover:not(:disabled)) {
-  border-color: var(--brand);
-  background: var(--brand);
-  filter: brightness(1.08);
-}
 
-/* One toolbar row; the view controls wrap as a group before the search field gets too small. */
+/* One toolbar row. In a narrow column the search field takes its own row, and
+   in a very narrow one the buttons drop their text (their names stay). */
 .library-toolbar {
+  container-type: inline-size;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem 0.75rem;
 }
 .library-toolbar-search {
-  flex: 1 1 12rem;
-  min-width: 12rem;
+  flex: 1 1 14rem;
+  min-width: 0;
 }
 .library-toolbar-controls {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
   min-width: 0;
   margin-left: auto;
 }
 .library-toolbar-btn {
+  position: relative;
   min-height: 2.375rem;
   padding: 0.375rem 0.75rem;
   border: 1px solid var(--border);
@@ -3534,26 +4192,60 @@ onUnmounted(() => {
   color: var(--text-primary);
   font-size: 0.875rem;
   font-weight: 500;
+  white-space: nowrap;
 }
 .library-toolbar-btn[aria-pressed="true"] {
   background: var(--brand-glow);
   border-color: var(--brand-deep);
   color: var(--brand);
 }
-.library-sort-menu :deep(.menu-button-toggle) {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
+.library-view-menu :deep(.menu-button-toggle) {
   background: transparent;
   font-size: 0.875rem;
 }
-.library-sort-menu :deep(.menu-button-trigger:hover:not(:disabled)) {
+.library-view-menu :deep(.menu-button-trigger:hover:not(:disabled)) {
   background: var(--bg-overlay);
 }
-.library-sort-dir {
-  margin-left: -1px;
-  padding-inline: 0.5rem;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
+/* The current sort, beside "View", so the order is readable without opening the menu. */
+.library-view-sort {
+  max-width: 14rem;
+  overflow: hidden;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+.library-result-count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+@container (max-width: 40rem) {
+  .library-toolbar-search {
+    flex-basis: 100%;
+  }
+  .library-toolbar-controls {
+    flex: 1 1 auto;
+    margin-left: 0;
+  }
+  .library-view-menu {
+    margin-left: auto;
+  }
+}
+@container (max-width: 30rem) {
+  .library-view-sort {
+    display: none;
+  }
+}
+@container (max-width: 20rem) {
+  .library-toolbar-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
 }
 
 .pinned-tags {

@@ -35,6 +35,7 @@ import type {
   LibraryBackupSection,
   LibraryBackupWarning,
 } from "../services/api";
+import { useRoute } from "vue-router";
 
 type BackupTab = "export" | "import" | "external" | "f95";
 
@@ -358,6 +359,16 @@ const openExternalTab = () => {
   activeTab.value = "external";
   if (!externalDetectedSources.has(externalSource.value)) void detectExternal();
 };
+
+// A link such as /import-export#external opens that tab (the Library's
+// first-run state links here).
+const route = useRoute();
+const followTabHash = () => {
+  const tab = route.hash.slice(1);
+  if (tab === "external") openExternalTab();
+  else if (tab === "export" || tab === "import" || tab === "f95") activeTab.value = tab;
+};
+watch(() => route.hash, followTabHash, { immediate: true });
 
 const browseExternalFile = async () => {
   if (browsing.value) return;

@@ -4,6 +4,9 @@ import assert from "node:assert/strict";
 
 import {
   chooseSortField,
+  sortOrderLabel,
+  SORT_FIELD_LABELS,
+  VALID_SORT_FIELDS,
   defaultSortDir,
   toggleSortState,
   DEFAULT_FILTER_SECTIONS,
@@ -142,6 +145,7 @@ test("readLibraryViewState migrates legacy keys when no blob exists", () => {
     presets: true,
     collections: false,
     status: true,
+    install: true,
     rating: true,
     threadStates: true,
     sources: true,
@@ -240,6 +244,7 @@ test("readLibraryViewState prefers current blob and prunes unsupported engines a
     presets: true,
     collections: true,
     status: false,
+    install: true,
     rating: true,
     threadStates: true,
     sources: true,
@@ -539,7 +544,7 @@ test("source filters validate fixed keys and default for older state and presets
   assert.deepEqual(normalizeFilterPreset({ name: "Old" })?.filterSources, []);
   assert.deepEqual(normalizeFilterPreset({ name: "New", filterSources: ["dlsite", "unknown"] })?.filterSources, ["dlsite"]);
   assert.deepEqual(normalizeLibraryViewState({ filterSections: { presets: false, collections: false, status: true, engines: false, tags: true } }).filterSections,
-    { presets: false, collections: false, status: true, rating: true, threadStates: true, sources: true, engines: false, tags: true });
+    { presets: false, collections: false, status: true, install: true, rating: true, threadStates: true, sources: true, engines: false, tags: true });
 });
 
 test("sort menu choice uses the field's default direction and keeps the active field", () => {
@@ -681,4 +686,17 @@ test("filterMinRating and rating section validate four steps, persist, and defau
   // Presets keep valid steps and default to "" when saved before the rating filter existed.
   assert.equal(normalizeFilterPreset({ name: "Good ones", filterMinRating: "4.0" })?.filterMinRating, "4.0");
   assert.equal(normalizeFilterPreset({ name: "Old preset" })?.filterMinRating, "");
+});
+
+test("the sort order label matches the field and the direction", () => {
+  assert.equal(sortOrderLabel("title", "asc"), "A to Z");
+  assert.equal(sortOrderLabel("title", "desc"), "Z to A");
+  assert.equal(sortOrderLabel("date_added", "desc"), "Newest first");
+  assert.equal(sortOrderLabel("date_added", "asc"), "Oldest first");
+  assert.equal(sortOrderLabel("rating", "desc"), "Highest first");
+  assert.equal(sortOrderLabel("playtime_seconds", "asc"), "Least played first");
+  for (const field of VALID_SORT_FIELDS) {
+    assert.ok(SORT_FIELD_LABELS[field]);
+    assert.notEqual(sortOrderLabel(field, "asc"), sortOrderLabel(field, "desc"));
+  }
 });

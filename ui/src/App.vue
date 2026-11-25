@@ -40,7 +40,8 @@ import {
   themeCycleLabel,
   themePreference,
 } from "./utils/themePreference";
-import { isNavAutoCollapsed, libraryFiltersPaneOpen, navAutoOverride } from "./utils/navLayout";
+import { isNavAutoCollapsed, libraryFiltersPaneOpen, navAutoOverride, wantsNavAutoCollapse } from "./utils/navLayout";
+import { useWindowCssWidth } from "./utils/windowWidth";
 import { confirmAction } from "./utils/confirm";
 import { trackSyncProblem } from "./utils/syncProblem";
 import { gamesStore } from "./composables/useGamesStore";
@@ -126,18 +127,21 @@ const getInitialNavCollapsed = (): boolean => {
   }
 };
 const isNavCollapsed = ref(getInitialNavCollapsed());
-// The Library filters pane collapses the sidebar while it is open; this state is never saved.
+// The Library filters pane (beside the games) and narrow windows collapse the
+// sidebar; this state is never saved.
+const windowCssWidth = useWindowCssWidth();
 const navAutoCollapsed = computed(() =>
-  isNavAutoCollapsed(route.name, libraryFiltersPaneOpen.value, navAutoOverride.value),
+  isNavAutoCollapsed(route.name, libraryFiltersPaneOpen.value, navAutoOverride.value, windowCssWidth.value),
 );
 const navCollapsed = computed(
   () => tvModeActive.value || isNavCollapsed.value || navAutoCollapsed.value,
 );
-// The override lasts until the pane closes or the user leaves the Library.
+// The override lasts until nothing wants the sidebar collapsed: the pane
+// closes, the user leaves the Library, or the window gets wide again.
 watch(
-  () => [libraryFiltersPaneOpen.value, route.name] as const,
-  ([paneOpen, name]) => {
-    if (!paneOpen || name !== "library") navAutoOverride.value = false;
+  () => wantsNavAutoCollapse(route.name, libraryFiltersPaneOpen.value, windowCssWidth.value),
+  (wanted) => {
+    if (!wanted) navAutoOverride.value = false;
   },
 );
 const fadeTransitionName = computed(() => (motionEnabled.value ? "fade" : ""));

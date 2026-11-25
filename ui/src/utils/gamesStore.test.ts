@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createGamesStore, reconcileGames } from "./gamesStore.ts";
+import { createGamesStore, loadFailureMessage, reconcileGames } from "./gamesStore.ts";
 
 interface Game { id: number; title: string; tags?: string[] }
 
@@ -72,6 +72,41 @@ test("a failed load keeps the old list and reports false", async () => {
     console.error = originalError;
   }
   assert.equal(store.games.value.length, 2);
+});
+
+test("a failed load keeps its cause until the next good load", async () => {
+  let fail: "" | "throw" | "result" = "throw";
+  const store = createGamesStore<Game>(async () => {
+    if (fail === "throw") throw new Error("database is locked\nTraceback (most recent call last): ...");
+    if (fail === "result") return { success: false, error: "Disk full" };
+    return library();
+  });
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(await store.refresh(), false);
+    assert.equal(store.error.value, "database is locked");
+    assert.equal(store.loaded.value, false);
+    fail = "result";
+    assert.equal(await store.refresh(), false);
+    assert.equal(store.error.value, "Disk full");
+    assert.equal(store.games.value.length, 0);
+  } finally {
+    console.error = originalError;
+  }
+  fail = "";
+  assert.equal(await store.refresh(), true);
+  assert.equal(store.error.value, "");
+});
+
+test("load failure messages come from errors, bridge results and plain text", () => {
+  assert.equal(loadFailureMessage(new Error("  boom  ")), "boom");
+  assert.equal(loadFailureMessage({ name: "OperationalError", message: "no such table: games" }), "no such table: games");
+  assert.equal(loadFailureMessage({ success: false, error: "Disk full" }), "Disk full");
+  assert.equal(loadFailureMessage({ success: false }), "");
+  assert.equal(loadFailureMessage("offline"), "offline");
+  assert.equal(loadFailureMessage(null), "");
+  assert.equal(loadFailureMessage(42), "");
 });
 
 test("patch replaces one game object and the next load restores server data", async () => {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { GameRecord, LaunchTarget } from "../services/api.ts";
-import type { FilterMinRating, SortDir, SortField, ThreadStateFilter } from "./libraryViewState.ts";
+import type { FilterCollection, FilterMinRating, SortDir, SortField, ThreadStateFilter } from "./libraryViewState.ts";
 import { getPlayStatusMeta, normalizePlayStatus } from "./playStatus.ts";
 import { automaticTags } from "./threadDetails.ts";
 import { hasNewerVersion, normalizeVersion } from "./versionOrder.ts";
@@ -97,6 +97,55 @@ export const cycleFilterValue = (
   else if (state === "include") nextExcluded.push(value);
   return { included: nextIncluded, excluded: nextExcluded };
 };
+
+// Puts a value in one state. Every spelling with the same key leaves both
+// lists first, so a value is never in both lists.
+export const setFilterValueState = (
+  included: readonly string[],
+  excluded: readonly string[],
+  value: string,
+  state: FilterValueState,
+  key: (value: string) => string = exactFilterKey,
+): FilterValueLists => {
+  const target = key(value);
+  const nextIncluded = included.filter((entry) => key(entry) !== target);
+  const nextExcluded = excluded.filter((entry) => key(entry) !== target);
+  if (state === "include") nextIncluded.push(value);
+  else if (state === "exclude") nextExcluded.push(value);
+  return { included: nextIncluded, excluded: nextExcluded };
+};
+
+// A click on a library filter pill: an included value goes back to neutral,
+// any other value becomes included.
+export const toggleIncludedFilterValue = (
+  included: readonly string[],
+  excluded: readonly string[],
+  value: string,
+  key: (value: string) => string = exactFilterKey,
+): FilterValueLists =>
+  setFilterValueState(
+    included,
+    excluded,
+    value,
+    filterValueState(included, excluded, value, key) === "include" ? "neutral" : "include",
+    key,
+  );
+
+// The pill's exclude button (or Alt+click, or the minus key): an excluded
+// value goes back to neutral, any other value becomes excluded.
+export const toggleExcludedFilterValue = (
+  included: readonly string[],
+  excluded: readonly string[],
+  value: string,
+  key: (value: string) => string = exactFilterKey,
+): FilterValueLists =>
+  setFilterValueState(
+    included,
+    excluded,
+    value,
+    filterValueState(included, excluded, value, key) === "exclude" ? "neutral" : "exclude",
+    key,
+  );
 
 export const isWishlisted = (game: Pick<GameRecord, "exe_path">): boolean =>
   !String(game.exe_path || "").trim();
@@ -431,6 +480,92 @@ export function libraryDisplayState(
   return filteredCount ? "list" : "no-results";
 }
 
+// Why a library with games shows none, so the no-results state can name the
+// cause and offer only the ways out that apply.
+export interface LibraryNoResultsInput {
+  /** The selected collection tab, "" for All. */
+  collection: string;
+  /** Games in that collection before search and filters. */
+  collectionGameCount: number;
+  quickFilter: FilterCollection;
+  /** Active filters other than the quick filter. */
+  otherFilterCount: number;
+  search: string;
+}
+export interface LibraryNoResults {
+  kind: "collection-empty" | "quick-filter-empty" | "no-match";
+  title: string;
+  detail: string;
+}
+
+const QUICK_FILTER_EMPTY: Record<Exclude<FilterCollection, "All">, { title: string; scoped: string; detail: string }> = {
+  Favorites: {
+    title: "No favorites yet",
+    scoped: "No favorites in",
+    detail: "Right-click a game and choose Favorite to add it here.",
+  },
+  "Updates available": {
+    title: "No updates available",
+    scoped: "No updates available in",
+    detail: "Every game is on the latest version that wLib knows of.",
+  },
+  "Unplayed update": {
+    title: "No unplayed updates",
+    scoped: "No unplayed updates in",
+    detail: "A game shows here when you install a new version and have not played it yet.",
+  },
+  "New since finished": {
+    title: "No new versions of finished games",
+    scoped: "No new versions of finished games in",
+    detail: "A finished game shows here when you install a newer version of it.",
+  },
+  "Recently played": {
+    title: "No games played yet",
+    scoped: "No played games in",
+    detail: "Games that you start from wLib show here.",
+  },
+};
+
+const filterCountText = (count: number): string =>
+  count === 1 ? "1 filter is on." : `${count} filters are on.`;
+
+export function describeLibraryNoResults(input: LibraryNoResultsInput): LibraryNoResults {
+  const typed = input.search.trim();
+  // A long query would push the title over several lines.
+  const search = typed.length > 48 ? `${typed.slice(0, 47).trimEnd()}…` : typed;
+  const scope = input.collection ? ` in “${input.collection}”` : "";
+  if (input.collection && input.collectionGameCount <= 0) {
+    return {
+      kind: "collection-empty",
+      title: `“${input.collection}” has no games yet`,
+      detail: "Right-click a game, choose Collections…, then select this collection.",
+    };
+  }
+  if (!search && !input.otherFilterCount && input.quickFilter !== "All") {
+    const copy = QUICK_FILTER_EMPTY[input.quickFilter];
+    return {
+      kind: "quick-filter-empty",
+      title: input.collection ? `${copy.scoped} “${input.collection}”` : copy.title,
+      detail: copy.detail,
+    };
+  }
+  const filterCount = input.otherFilterCount + (input.quickFilter !== "All" ? 1 : 0);
+  if (search) {
+    return {
+      kind: "no-match",
+      title: `No games match “${search}”${scope}`,
+      detail: filterCount
+        ? `${filterCountText(filterCount)} The search only looks in games that pass ${filterCount === 1 ? "it" : "them"}.`
+        : "Check the spelling, or search by developer or tag.",
+    };
+  }
+  return {
+    kind: "no-match",
+    title: filterCount ? `No games match your filters${scope}` : `No games to show${scope}`,
+    detail: filterCount ? `${filterCountText(filterCount)} Remove one above, or clear them all.` : "",
+  };
+}
+
 export interface EffectiveLaunchTarget {
   id: string;
   label: string;
@@ -441,6 +576,36 @@ export interface EffectiveLaunchTarget {
 export const formatPlaytime = (seconds: number | null | undefined): string => {
   if (!seconds) return "0.0 hrs";
   return (seconds / 3600).toFixed(1) + " hrs";
+};
+
+/** One cover rating format: the F95 score with one decimal, and the review count for the label only. */
+export interface CardRating {
+  value: string;
+  label: string;
+}
+
+export const formatCardRating = (
+  game: Pick<GameRecord, "rating" | "rating_count">,
+): CardRating | null => {
+  const text = String(game.rating || "");
+  const match = text.match(/\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const score = parseFloat(match[0]);
+  if (!Number.isFinite(score) || score <= 0 || score > 5) return null;
+  const counted = typeof game.rating_count === "number" && Number.isFinite(game.rating_count) && game.rating_count > 0
+    ? game.rating_count
+    : Number(text.match(/\((\d[\d,]*)\s+reviews?\)/i)?.[1]?.replace(/,/g, "") || 0);
+  const value = score.toFixed(1);
+  const reviews = counted > 0 ? ` from ${counted} ${counted === 1 ? "review" : "reviews"}` : "";
+  return { value, label: `F95 rating ${value} out of 5${reviews}` };
+};
+
+/** The Library heading line, for example "25 games · 4 updates". */
+export const formatLibrarySummary = (gameCount: number, updateCount: number): string => {
+  if (gameCount <= 0) return "";
+  const games = `${gameCount} ${gameCount === 1 ? "game" : "games"}`;
+  if (updateCount <= 0) return games;
+  return `${games} · ${updateCount} ${updateCount === 1 ? "update" : "updates"}`;
 };
 
 export const formatLastPlayed = (value?: string | null): string => {
