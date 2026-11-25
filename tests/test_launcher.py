@@ -5740,7 +5740,7 @@ def test_sandboxed_nwjs_bundle_keeps_the_tunable_and_a_private_cache(
     from core import game_sandbox
 
     sandbox_home = tmp_path / "sandbox-home"
-    monkeypatch.delenv("GLIBC_TUNABLES", raising=False)
+    monkeypatch.setenv("GLIBC_TUNABLES", "glibc.rtld.execstack=2")
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(
         "core.launcher.game_sandbox.prepare_sandbox_home", lambda _: str(sandbox_home)
