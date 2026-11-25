@@ -23,12 +23,23 @@ from core.storage_usage import (
     measure,
 )
 
+# These tests check the POSIX back end (st_blocks, symlinks, hard links, chmod).
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX measurement back end"
+)
 
+
+def _allocated(*paths: Path) -> int:
+    """Size on disk of each path itself. Folders use blocks too (like `du`)."""
+    return sum(os.lstat(path).st_blocks * 512 for path in paths)
+
+
+@posix_only
 def test_measure_many_small_files_uses_allocated_blocks(tmp_path: Path):
     folder = tmp_path / "small"
     folder.mkdir()
     payload = b"x" * 5000
-    expected_blocks = 0
+    expected_blocks = _allocated(folder)
     for idx in range(200):
         file_path = folder / f"f{idx:03d}.bin"
         _ = file_path.write_bytes(payload)
@@ -43,6 +54,7 @@ def test_measure_many_small_files_uses_allocated_blocks(tmp_path: Path):
     assert result.bytes > 200 * 5000
 
 
+@posix_only
 def test_measure_sparse_file_counts_allocated_space(tmp_path: Path):
     folder = tmp_path / "sparse"
     folder.mkdir()
@@ -51,15 +63,15 @@ def test_measure_sparse_file_counts_allocated_space(tmp_path: Path):
         _ = handle.seek(10 * 1024 * 1024)
         _ = handle.write(b"end")
 
-    st = os.lstat(sparse_file)
     result = measure(folder)
     assert result.files == 1
     assert result.skipped == 0
-    assert result.bytes == st.st_blocks * 512
+    assert result.bytes == _allocated(folder, sparse_file)
     # Allocated size must be far smaller than the 10 MiB apparent size.
     assert result.bytes < 1024 * 1024
 
 
+@posix_only
 def test_measure_does_not_follow_symlink_to_outside_folder(tmp_path: Path):
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -75,6 +87,7 @@ def test_measure_does_not_follow_symlink_to_outside_folder(tmp_path: Path):
     assert result.bytes < 100 * 1024
 
 
+@posix_only
 def test_measure_does_not_cross_mount_point(tmp_path: Path, monkeypatch):
     game = tmp_path / "game"
     game.mkdir()
@@ -127,10 +140,14 @@ def test_measure_does_not_cross_mount_point(tmp_path: Path, monkeypatch):
     result = measure(game)
     assert result.files == 1
     assert result.skipped == 0
-    assert result.bytes == os.lstat(game / "local.bin").st_blocks * 512
+    # The mounted folder is skipped whole, including its own blocks.
+    assert result.bytes == _allocated(game, game / "local.bin")
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root can read chmod 000 directories")
+@pytest.mark.skipif(
+    sys.platform == "win32" or os.geteuid() == 0,
+    reason="needs POSIX permissions; root can read chmod 000 directories",
+)
 def test_measure_reports_unreadable_subfolder(tmp_path: Path):
     game = tmp_path / "game"
     game.mkdir()
@@ -146,7 +163,8 @@ def test_measure_reports_unreadable_subfolder(tmp_path: Path):
 
     assert result.files == 1
     assert result.skipped == 1
-    assert result.bytes == os.lstat(game / "ok.bin").st_blocks * 512
+    # The locked folder's own blocks count; its contents cannot be read.
+    assert result.bytes == _allocated(game, game / "ok.bin", locked)
 
 
 def test_measure_cancels_via_event(tmp_path: Path):
@@ -163,6 +181,7 @@ def test_measure_cancels_via_event(tmp_path: Path):
         _ = measure(folder, MeasureBudget(cancel=cancel))
 
 
+@posix_only
 def test_measure_counts_hard_links_once(tmp_path: Path):
     folder = tmp_path / "hardlinks"
     folder.mkdir()
@@ -171,7 +190,7 @@ def test_measure_counts_hard_links_once(tmp_path: Path):
     _ = first.write_bytes(b"h" * (64 * 1024))
     os.link(first, second)
 
-    expected = os.lstat(first).st_blocks * 512
+    expected = _allocated(folder, first)
     result = measure(folder)
     assert result.files == 1
     assert result.bytes == expected
@@ -186,7 +205,7 @@ def test_measure_counts_hard_links_once(tmp_path: Path):
     first_res = measure(folder, budget)
     second_res = measure(other, budget)
     assert first_res.bytes == expected
-    assert second_res.bytes == 0
+    assert second_res.bytes == _allocated(other)
     assert second_res.files == 0
 
 
@@ -218,6 +237,7 @@ def test_windows_dir_info_parser_offsets():
     ]
 
 
+@posix_only
 def test_low_priority_continues_when_syscall_fails(tmp_path: Path, monkeypatch):
     folder = tmp_path / "prio"
     folder.mkdir()
@@ -232,7 +252,7 @@ def test_low_priority_continues_when_syscall_fails(tmp_path: Path, monkeypatch):
         result = measure(folder)
 
     assert result.files == 1
-    assert result.bytes == os.lstat(folder / "data.bin").st_blocks * 512
+    assert result.bytes == _allocated(folder, folder / "data.bin")
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux /proc check")
@@ -662,8 +682,8 @@ def test_scan_service_full_stop_unavailable_and_persistence(
     report = service.get_report()
     assert report is not None
     assert report["version"] == 1
-    alpha_size = os.lstat(g1_exe).st_blocks * 512
-    beta_size = os.lstat(g2_exe).st_blocks * 512
+    alpha_size = measure(g1_dir).bytes
+    beta_size = measure(g2_dir).bytes
     assert report["games"]["1"]["parts"]["game"] == alpha_size
     assert report["games"]["2"]["parts"]["game"] == beta_size
 
@@ -821,7 +841,8 @@ def test_game_changed_and_recount_setting_battery_and_full_scan(
     assert service.wait_idle(timeout=5.0)
     after_mains = service.get_report()
     assert after_mains is not None
-    expected_new = orig_size + os.lstat(g1_dir / "dlc.bin").st_blocks * 512
+    expected_new = measure(g1_dir).bytes
+    assert expected_new > orig_size
     assert after_mains["games"]["1"]["changed"] is False
     assert after_mains["games"]["1"]["parts"]["game"] == expected_new
 
