@@ -1552,15 +1552,21 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         (DEFAULT_LAUNCH_MODE, *CANONICAL_LAUNCH_MODES),
     )
 
-    bump_sync_time = """
+    # Whole milliseconds since the Unix epoch. Adding '+0.001 seconds' to a
+    # floating-point Julian day can format back to the same millisecond on
+    # older SQLite, so the stored time would not move forward.
+    def _epoch_ms(expr: str) -> str:
+        return f"CAST(ROUND((julianday({expr}) - 2440587.5) * 86400000.0) AS INTEGER)"
+
+    stored_ms = _epoch_ms("settings.value")
+    now_ms = _epoch_ms("excluded.value")
+    bump_sync_time = f"""
         INSERT INTO settings (key, value)
         VALUES ('sync_local_modified_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         ON CONFLICT(key) DO UPDATE SET value = CASE
-            WHEN strftime('%Y-%m-%dT%H:%M:%fZ', settings.value) >= excluded.value
-            THEN COALESCE(
-                strftime('%Y-%m-%dT%H:%M:%fZ', settings.value, '+0.001 seconds'),
-                excluded.value
-            )
+            WHEN {stored_ms} >= {now_ms}
+            THEN strftime('%Y-%m-%dT%H:%M:%S', ({stored_ms} + 1) / 1000, 'unixepoch')
+                || printf('.%03dZ', ({stored_ms} + 1) % 1000)
             ELSE excluded.value END;
     """
     for action in ("INSERT", "DELETE"):

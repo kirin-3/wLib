@@ -311,7 +311,7 @@ def test_init_db_rebuilds_every_sync_trigger_with_safe_bump():
             "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync_%'"
         ).fetchall()
     assert rows
-    assert all("COALESCE" in str(sql) for _, sql in rows)
+    assert all("86400000" in str(sql) and "unixepoch" in str(sql) for _, sql in rows)
 
 
 def test_init_db_folds_itch_link_case_and_drops_duplicates():
