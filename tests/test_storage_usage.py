@@ -443,8 +443,9 @@ def test_storage_root_guard_refuses_library_home_root_and_other_game(tmp_path: P
     assert picked == ""
     assert "home" in err.lower()
 
-    # Picking filesystem root is refused.
-    picked_root, err_root = validate_picked_folder(games[1], "/", ctx)
+    # Picking the filesystem root is refused. Use the root that holds tmp_path:
+    # on Windows "/" is the drive of the working folder, which can differ.
+    picked_root, err_root = validate_picked_folder(games[1], tmp_path.anchor, ctx)
     assert picked_root == ""
     assert "root" in err_root.lower()
 

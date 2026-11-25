@@ -3,6 +3,7 @@
 import os
 
 import json
+from contextlib import closing
 
 import pytest
 
@@ -251,7 +252,7 @@ def rating_catalog(started, tmp_path, monkeypatch):
         rating_count: int | None = None,
         detail_status: str = "ok",
     ) -> None:
-        with sqlite3.connect(tmp_path / "catalog.db") as catalog:
+        with closing(sqlite3.connect(tmp_path / "catalog.db")) as catalog, catalog:
             catalog.execute(
                 "INSERT OR REPLACE INTO f95_threads (thread_id, title, rating, url, first_seen, last_seen) VALUES (?, 'T', ?, 'u', '', '')",
                 (thread_id, rating),
@@ -384,7 +385,7 @@ def test_catalog_fill_without_rating_count_column(rating_catalog, tmp_path):
     add_thread, _sha = rating_catalog
     game_id = _rated_game(1)
     add_thread(1, 4.3)
-    with sqlite3.connect(tmp_path / "catalog.db") as catalog:
+    with closing(sqlite3.connect(tmp_path / "catalog.db")) as catalog, catalog:
         catalog.execute("ALTER TABLE f95_thread_details DROP COLUMN rating_count")
     assert Api()._fill_ratings_from_catalog() == 1
     assert _rating(game_id) == ("4.3/5", None, BUILT_AT)
@@ -458,7 +459,7 @@ def f95_metadata_catalog(started, tmp_path, monkeypatch):
         prefixes: list[int] | None = None,
         tags: list[int] | None = None,
     ) -> None:
-        with sqlite3.connect(catalog_path) as catalog:
+        with closing(sqlite3.connect(catalog_path)) as catalog, catalog:
             catalog.execute(
                 "INSERT OR REPLACE INTO f95_threads "
                 "(thread_id, title, creator, version, rating, prefixes, tags, cover_url, url, first_seen, last_seen) "
@@ -798,7 +799,7 @@ def test_api_lookup_lc_partner_returns_f95_catalog_entry(
         prefixes=[1, 2],
         tags=[10, 11],
     )
-    with sqlite3.connect(catalog_path) as catalog:
+    with closing(sqlite3.connect(catalog_path)) as catalog, catalog:
         catalog.execute(
             "INSERT INTO lc_prefix_names (id, name) VALUES (1, 'Completed'), (2, 'Ren''Py')"
         )
