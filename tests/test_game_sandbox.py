@@ -912,6 +912,14 @@ def test_sandbox_environment_drops_host_secrets():
     assert "--die-with-parent" not in sandbox.BWRAP_NAMESPACE_OPTIONS
 
 
+def test_sandbox_environment_keeps_the_glibc_tunables_a_game_needs():
+    host = {"GLIBC_TUNABLES": "glibc.rtld.execstack=2"}
+
+    result = sandbox.sandbox_environment(dict(host), host)
+
+    assert result["GLIBC_TUNABLES"] == "glibc.rtld.execstack=2"
+
+
 def test_sandboxie_tools_run_without_a_console_window(monkeypatch):
     run = Mock(return_value=Mock(returncode=0, stdout="0\n", stderr=""))
     monkeypatch.setattr(sandbox.subprocess, "run", run)

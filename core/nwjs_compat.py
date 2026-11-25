@@ -15,11 +15,8 @@ EXECSTACK_ALLOWED = f"{EXECSTACK_TUNABLE_NAME}=2"
 CACHE_HOME_VARIABLE = "XDG_CACHE_HOME"
 NWJS_CACHE_FOLDER = "nwjs"
 HOST_GPU_ARGUMENT = "--use-gl=desktop"
-GPU_ARGUMENT_PREFIXES = (
-    "--use-gl",
-    "--use-angle",
-    "--disable-gpu",
-    "--in-process-gpu",
+GPU_ARGUMENT_NAMES = frozenset(
+    {"--use-gl", "--use-angle", "--disable-gpu", "--in-process-gpu"}
 )
 
 
@@ -46,10 +43,13 @@ def nwjs_host_env(
     if not is_nwjs_bundle(game_dir):
         return {}
     overrides = {
-        TUNABLES_VARIABLE: _tunables_allowing_execstack(env.get(TUNABLES_VARIABLE, "")),
-        CACHE_HOME_VARIABLE: os.path.join(get_cache_dir(), NWJS_CACHE_FOLDER),
+        TUNABLES_VARIABLE: _tunables_allowing_execstack(env.get(TUNABLES_VARIABLE, ""))
     }
-    return {name: value for name, value in overrides.items() if name not in user_env}
+    if CACHE_HOME_VARIABLE not in user_env:
+        overrides[CACHE_HOME_VARIABLE] = os.path.join(
+            get_cache_dir(), NWJS_CACHE_FOLDER
+        )
+    return overrides
 
 
 def nwjs_gpu_arguments(game_dir: str, args: Sequence[str]) -> list[str]:
@@ -58,6 +58,6 @@ def nwjs_gpu_arguments(game_dir: str, args: Sequence[str]) -> list[str]:
     the CPU."""
     if not is_nwjs_bundle(game_dir):
         return []
-    if any(arg.startswith(GPU_ARGUMENT_PREFIXES) for arg in args):
+    if any(arg.split("=", 1)[0] in GPU_ARGUMENT_NAMES for arg in args):
         return []
     return [HOST_GPU_ARGUMENT]

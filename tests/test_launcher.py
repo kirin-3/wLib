@@ -5704,3 +5704,69 @@ def test_native_binary_without_nwjs_runtime_gets_no_gpu_flag(tmp_path):
     command = _launch_native_command(binary)
 
     assert command == [binary]
+
+
+@_LINUX_HOST_ONLY
+def test_nwjs_bundle_launch_keeps_the_gpu_flag_beside_other_gpu_tuning_switches(
+    tmp_path,
+):
+    binary = _nwjs_game(tmp_path)
+
+    command = _launch_native_command(
+        binary, command_line_args="%command% --disable-gpu-vsync --use-glx"
+    )
+
+    assert command == [binary, "--use-gl=desktop", "--disable-gpu-vsync", "--use-glx"]
+
+
+@_LINUX_HOST_ONLY
+def test_nwjs_bundle_launch_adds_execstack_beside_unrelated_launch_option_tunables(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("GLIBC_TUNABLES", raising=False)
+
+    env = _launch_native_env(
+        _nwjs_game(tmp_path),
+        command_line_args="GLIBC_TUNABLES=glibc.malloc.hugetlb=1 %command%",
+    )
+
+    assert env["GLIBC_TUNABLES"] == "glibc.malloc.hugetlb=1:glibc.rtld.execstack=2"
+
+
+@_LINUX_HOST_ONLY
+def test_sandboxed_nwjs_bundle_keeps_the_tunable_and_a_private_cache(
+    tmp_path, monkeypatch
+):
+    from core import game_sandbox
+
+    sandbox_home = tmp_path / "sandbox-home"
+    monkeypatch.delenv("GLIBC_TUNABLES", raising=False)
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.prepare_sandbox_home", lambda _: str(sandbox_home)
+    )
+    monkeypatch.setattr(
+        game_sandbox,
+        "get_sandbox_status",
+        lambda: {"status": "ready", "path": "/usr/bin/bwrap"},
+    )
+    binary = _nwjs_game(tmp_path)
+
+    with (
+        patch("core.launcher.get_setting", return_value=""),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        popen.return_value = MagicMock()
+        result = Launcher().launch(
+            binary, game_id=12, sandbox_enabled=True, launch_mode="native"
+        )
+
+    assert result["success"], result
+    command = popen.call_args.args[0]
+    assert command[0] == "/usr/bin/bwrap"
+    assert "--use-gl=desktop" in command
+    assert popen.call_args.kwargs["env"]["GLIBC_TUNABLES"] == "glibc.rtld.execstack=2"
+    cache_home = command.index("XDG_CACHE_HOME")
+    assert command[cache_home - 1] == "--setenv"
+    assert command[cache_home + 1].endswith("/.cache")

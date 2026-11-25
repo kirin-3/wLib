@@ -63,6 +63,7 @@ SANDBOX_ENV_NAMES = frozenset(
         "PULSE_SINK",
         "PIPEWIRE_RUNTIME_DIR",
         "LD_LIBRARY_PATH",
+        "GLIBC_TUNABLES",
         "LIBGL_ALWAYS_SOFTWARE",
         "GAMEID",
         "STORE",
