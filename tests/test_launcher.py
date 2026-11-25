@@ -5543,15 +5543,23 @@ _LINUX_HOST_ONLY = pytest.mark.skipif(
 )
 
 
-def _nwjs_game(tmp_path, *, library_folder="lib"):
-    game_dir = tmp_path / "game"
+def _nwjs_game(
+    tmp_path, *, library_folder="lib", angle=False, library=b"\x7fELF", name="game"
+):
+    """NW.js 0.29 layout by default: SwiftShader's libEGL.so sits in
+    swiftshader/, not beside libnw.so. angle=True gives the 0.48+ layout."""
+    game_dir = tmp_path / name
     (game_dir / "lib").mkdir(parents=True)
+    (game_dir / "swiftshader").mkdir()
+    (game_dir / "swiftshader" / "libEGL.so").write_bytes(b"\x7fELF")
     binary = game_dir / "nw"
     binary.write_bytes(b"\x7fELF" + b"\0" * 12)
     binary.chmod(0o755)
     if library_folder is not None:
         (game_dir / library_folder).mkdir(exist_ok=True)
-        (game_dir / library_folder / "libnw.so").write_bytes(b"\x7fELF")
+        (game_dir / library_folder / "libnw.so").write_bytes(library)
+        if angle:
+            (game_dir / library_folder / "libEGL.so").write_bytes(b"\x7fELF")
     return str(binary)
 
 
@@ -5615,7 +5623,22 @@ def test_nwjs_bundle_launch_uses_a_private_font_cache_inside_wlib_cache(
 
     env = _launch_native_env(_nwjs_game(tmp_path))
 
-    assert env["XDG_CACHE_HOME"] == str(tmp_path / "host-cache" / "wLib" / "nwjs")
+    assert env["XDG_CACHE_HOME"] == str(
+        tmp_path / "host-cache" / "wLib" / "nwjs" / "build-4"
+    )
+
+
+@_LINUX_HOST_ONLY
+def test_each_nwjs_build_gets_its_own_font_cache(tmp_path, monkeypatch):
+    monkeypatch.delenv("WLIB_CACHE_DIR", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "host-cache"))
+
+    old = _launch_native_env(_nwjs_game(tmp_path, name="mv", library=b"a" * 10))
+    new = _launch_native_env(_nwjs_game(tmp_path, name="mz", library=b"b" * 20))
+    same = _launch_native_env(_nwjs_game(tmp_path, name="mv2", library=b"c" * 10))
+
+    assert old["XDG_CACHE_HOME"] != new["XDG_CACHE_HOME"]
+    assert old["XDG_CACHE_HOME"] == same["XDG_CACHE_HOME"]
 
 
 @_LINUX_HOST_ONLY
@@ -5695,6 +5718,16 @@ def test_nwjs_bundle_launch_respects_an_explicit_gpu_choice(tmp_path, gpu_argume
     )
 
     assert command == [binary, gpu_argument]
+
+
+@_LINUX_HOST_ONLY
+@pytest.mark.parametrize("library_folder", ["lib", ""])
+def test_nwjs_build_with_angle_keeps_its_default_gpu_path(tmp_path, library_folder):
+    binary = _nwjs_game(tmp_path, library_folder=library_folder, angle=True)
+
+    command = _launch_native_command(binary)
+
+    assert command == [binary]
 
 
 @_LINUX_HOST_ONLY
