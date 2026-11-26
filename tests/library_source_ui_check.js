@@ -16,22 +16,27 @@ async (page) => {
       localStorage.setItem('wlib-mock-settings', JSON.stringify({library_filter_presets:[{name:'Old'}]}));
     });
     await page.reload();
-    // Source pills cycle neutral -> include -> exclude; the name adds ", included" or ", excluded".
+    // A click on a source pill toggles include. Its "Exclude <name>" button toggles exclude.
+    // The pill's state is on the wrapper around both buttons; an excluded name adds ", excluded".
     const source = name => page.getByRole('button', {name: new RegExp(`^${name}(?:\\s*,\\s*(?:included|excluded))?$`)});
+    const sourceState = name => source(name).locator('xpath=..').getAttribute('data-filter-state');
+    const excludeSource = async name => { await source(name).hover(); await page.getByRole('button', {name: `Exclude ${name}`, exact: true}).click(); };
     const title = name => page.getByRole('button', {name, exact:true});
     await title('F95 only').waitFor();
     for (const [name, expected] of [['F95Zone',['F95 only','F95 DLsite']], ['DLsite',['F95 DLsite','Ryuugames linked']], ['VNDB',['Ryuugames linked']], ['Ryuugames',['Ryuugames linked']]]) {
       await source(name).click();
+      check(await sourceState(name) === 'include', `${name}: included`);
       for (const game of ['F95 only','F95 DLsite','Ryuugames linked']) check(await title(game).count() === (expected.includes(game) ? 1 : 0), `${name}: ${game}`);
-      await source(name).click();
-      check(await source(name).getAttribute('data-filter-state') === 'exclude', `${name}: excluded`);
+      await excludeSource(name);
+      check(await sourceState(name) === 'exclude', `${name}: excluded`);
       for (const game of ['F95 only','F95 DLsite','Ryuugames linked']) check(await title(game).count() === (expected.includes(game) ? 0 : 1), `${name} excluded: ${game}`);
-      await source(name).click();
-      check(await source(name).getAttribute('data-filter-state') === 'neutral', `${name}: neutral`);
+      await excludeSource(name);
+      check(await sourceState(name) === 'neutral', `${name}: neutral`);
     }
     await source('DLsite').click();
     await source('VNDB').click();
-    check((await page.getByRole('button', {name:/Filters/}).innerText()).includes('1'), 'sources should count as one filter group');
+    // The Filters badge counts one per chip, the same as the chip row.
+    check(await page.getByRole('button', {name:/^Filters/}).getAttribute('aria-label') === 'Filters, 2 active', 'each included source should count as one filter');
     await page.getByRole('button', {name:'Save as preset', exact:true}).click();
     await page.getByLabel('Saved filter name').fill('Sources test');
     await page.getByRole('button', {name:'Save', exact:true}).click();

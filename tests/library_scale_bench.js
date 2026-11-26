@@ -183,7 +183,7 @@ async (page) => {
     await page.evaluate(({ games }) => {
       delete window.pywebview;
       localStorage.setItem("wlib-mock-games", JSON.stringify(games));
-      localStorage.setItem("wlib-library-view-state", JSON.stringify({ layoutMode: "grid", sortBy: "title", sortDir: "asc", cardSize: 2, filterCollection: "All Games", isFiltersCollapsed: true }));
+      localStorage.setItem("wlib-library-view-state", JSON.stringify({ layoutMode: "grid", sortBy: "title", sortDir: "asc", cardSize: 2, filterCollection: "All", isFiltersCollapsed: true }));
     }, { games });
     // A goto to the same URL only changes the hash; the reload runs the init script.
     await page.goto(libraryUrl.toString());
@@ -290,23 +290,35 @@ async (page) => {
       const bench = window.__wlibBenchRuntime;
       const cards = () => [...document.querySelectorAll(".game-card, .game-row")];
       const checked = () => bench.selectedCount();
-      const button = label => document.querySelector(`button[aria-label="${label}"]`);
+      // Layout, sort order and card size are items in the View menu. The menu
+      // opens before the timer starts, so only the item click is measured.
+      const viewItem = async (group, pick) => {
+        document.querySelector('button[aria-label^="View: "]').click();
+        await bench.frames(2);
+        const menu = document.querySelector('[role="menu"][aria-label="View options"]');
+        const section = [...menu.querySelectorAll('[role="group"]')]
+          .find(element => document.getElementById(element.getAttribute("aria-labelledby"))?.textContent.trim() === group);
+        const items = [...section.querySelectorAll('[role="menuitemradio"]')];
+        return typeof pick === "string" ? items.find(item => item.textContent.trim() === pick) : pick(items);
+      };
+      const unchecked = items => items.find(item => item.getAttribute("aria-checked") !== "true");
       const search = document.querySelector('input[aria-label="Search games"]');
       const setSearch = value => { search.value = value; search.dispatchEvent(new Event("input", { bubbles: true })); };
       const click = (element, init) => element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
       const actions = {
         search_narrow: () => bench.measure(() => setSearch(args.query), () => cards().length === args.expected),
         search_clear: () => bench.measure(() => setSearch(""), () => cards().length > args.narrowed),
-        reverse_sort: () => {
+        reverse_sort: async () => {
           const first = cards()[0]?.getAttribute("data-game-id");
-          return bench.measure(() => document.querySelector(".library-sort-dir").click(), () => cards()[0]?.getAttribute("data-game-id") !== first);
+          const item = await viewItem("Order", unchecked);
+          return bench.measure(() => item.click(), () => cards()[0]?.getAttribute("data-game-id") !== first);
         },
-        card_size: () => {
-          const slider = document.querySelector('input[aria-label="Card size"]');
+        card_size: async () => {
           const columns = getComputedStyle(document.querySelector(".library-cards")).gridTemplateColumns;
-          const next = slider.value === "3" ? 2 : 3;
+          // Switch between Medium and Large, as the slider did between 2 and 3.
+          const item = await viewItem("Card size", items => items.find(entry => entry.textContent.trim() === "Large" && entry.getAttribute("aria-checked") !== "true") ?? items.find(entry => entry.textContent.trim() === "Medium"));
           return bench.measure(
-            () => { slider.value = String(next); slider.dispatchEvent(new Event("input", { bubbles: true })); slider.dispatchEvent(new Event("change", { bubbles: true })); },
+            () => item.click(),
             () => getComputedStyle(document.querySelector(".library-cards")).gridTemplateColumns !== columns,
           );
         },
@@ -314,8 +326,14 @@ async (page) => {
         ctrl_click_second: () => bench.measure(() => click(cards()[5], { ctrlKey: true }), () => checked() === 2),
         shift_click_range: () => bench.measure(() => click(document.querySelector(`[data-game-id="${args.targetId}"]`), { shiftKey: true }), () => checked() === args.expected),
         clear_selection: () => bench.measure(() => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })), () => checked() === 0),
-        grid_to_list: () => bench.measure(() => button("List view").click(), () => document.querySelector(".game-row") !== null && document.querySelector(".game-card") === null),
-        list_to_grid: () => bench.measure(() => button("Grid view").click(), () => document.querySelector(".game-card") !== null && document.querySelector(".game-row") === null),
+        grid_to_list: async () => {
+          const item = await viewItem("Layout", "List");
+          return bench.measure(() => item.click(), () => document.querySelector(".game-row") !== null && document.querySelector(".game-card") === null);
+        },
+        list_to_grid: async () => {
+          const item = await viewItem("Layout", "Grid");
+          return bench.measure(() => item.click(), () => document.querySelector(".game-card") !== null && document.querySelector(".game-row") === null);
+        },
         refresh: () => {
           const stored = JSON.parse(localStorage.getItem("wlib-mock-games"));
           const marker = `AAAA Refreshed ${Math.round(performance.now())}`;

@@ -3,6 +3,12 @@
 // playwright-cli run-code --filename tests/library_ui_check.js
 async (page) => {
   const check = (ok, message) => { if (!ok) throw new Error(message); };
+  // Layout, sort and card size are in the View menu.
+  const viewMenu = () => page.getByRole("menu", { name: "View options" });
+  const openView = async () => { await page.getByRole("button", { name: /^View: / }).click(); await viewMenu().waitFor(); };
+  const closeView = async () => { await page.keyboard.press("Escape"); await viewMenu().waitFor({ state: "hidden" }); };
+  const setLayout = async label => { await openView(); await viewMenu().getByRole("menuitemradio", { name: label, exact: true }).click(); await viewMenu().waitFor({ state: "hidden" }); };
+  const cardSizeCount = async () => { await openView(); const count = await viewMenu().getByRole("group", { name: "Card size" }).count(); await closeView(); return count; };
   const nativeDialogs = [];
   const onDialog = dialog => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); };
   page.on("dialog", onDialog);
@@ -33,13 +39,13 @@ async (page) => {
     const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("wlib-library-view-state")));
     check(saved.sortBy === "engine" && saved.sortDir === "asc", "Restoring Recently played must preserve the chosen sort");
 
-    check(await page.getByRole("slider", { name: "Card size" }).count() === 0, "Card size must be hidden in list view");
-    await page.getByRole("button", { name: "All Games", exact: true }).click();
+    check(await cardSizeCount() === 0, "Card size must be hidden in list view");
+    await page.getByRole("button", { name: "No quick filter", exact: true }).click();
     await page.getByRole("button", { name: "Recently played", exact: true }).click();
     check(await page.getByRole("button", { name: "Last played", exact: true }).locator("..").getAttribute("aria-sort") === "descending", "Selecting Recently played should default to newest first");
-    await page.getByRole("button", { name: "All Games", exact: true }).click();
-    await page.getByRole("button", { name: "Grid view", exact: true }).click();
-    check(await page.getByRole("slider", { name: "Card size" }).count() === 1, "Card size must appear in grid view");
+    await page.getByRole("button", { name: "No quick filter", exact: true }).click();
+    await setLayout("Grid");
+    check(await cardSizeCount() === 1, "Card size must appear in grid view");
     await page.setViewportSize({ width: 2560, height: 1000 });
     const columns = [];
     for (const cardSize of [0, 4]) {
@@ -48,20 +54,20 @@ async (page) => {
         localStorage.setItem("wlib-library-view-state", JSON.stringify({ ...state, cardSize }));
       }, cardSize);
       await page.reload();
-      await page.getByRole("slider", { name: "Card size" }).waitFor();
+      await page.locator(".library-cards").waitFor();
       columns.push(await page.locator(".library-cards").evaluate(el => getComputedStyle(el).gridTemplateColumns.split(" ").length));
     }
     check(columns[0] > columns[1], "Largest saved card size must yield fewer grid columns than smallest");
-    const card = page.getByRole("checkbox", { name: "Alpha. Press Enter for details.", exact: true });
+    const card = page.getByRole("row", { name: "Alpha", exact: true });
     const targets = card.getByRole("button", { name: "Choose launch target for Alpha", exact: true });
     await targets.click();
     await page.keyboard.press("Escape");
     check(await card.getByRole("button", { name: "Alternate", exact: true }).count() === 0, "Escape should close launch targets");
     await targets.click();
-    await card.getByRole("button", { name: "Play", exact: true }).click();
-    await card.getByRole("button", { name: "Stop", exact: true }).waitFor();
+    await card.getByRole("button", { name: "Play Alpha", exact: true }).click();
+    await card.getByRole("button", { name: "Stop Alpha", exact: true }).waitFor();
     check(await card.getByRole("button", { name: "Alternate", exact: true }).count() === 0, "Starting a game must close its launch targets");
-    await card.getByRole("button", { name: "Stop", exact: true }).click();
+    await card.getByRole("button", { name: "Stop Alpha", exact: true }).click();
 
     // Hold an older response, complete a mutation, then deliver the older data.
     const deferRefresh = async () => page.evaluate(() => {
@@ -81,7 +87,7 @@ async (page) => {
     await page.getByRole("button", { name: "Mark as updated to 2.0", exact: true }).click();
     await page.getByRole("link", { name: "Updates, 1 available", exact: true }).waitFor();
     await releaseRefresh();
-    check(await card.locator(".update-pill").count() === 0, "An old response must not restore the library update badge");
+    check(await card.locator(".update-marker").count() === 0, "An old response must not restore the library update badge");
     check(await page.getByRole("link", { name: "Updates, 1 available", exact: true }).count() === 1, "An old response must not restore the navigation count");
 
     await page.getByRole("link", { name: "Updates, 1 available", exact: true }).click();
@@ -91,7 +97,7 @@ async (page) => {
     await page.getByRole("menuitem", { name: "Mark updated", exact: true }).click();
     await page.getByRole("link", { name: "Updates, 0 available", exact: true }).waitFor();
     await releaseRefresh();
-    check(await page.getByRole("heading", { name: /^Updates Available/ }).count() === 0, "An old response must not restore the Updates list");
+    check(await page.getByRole("heading", { name: /^Updates available/ }).count() === 0, "An old response must not restore the Updates list");
     check(await page.getByRole("link", { name: "Updates, 0 available", exact: true }).count() === 1, "The zero update count must remain current");
     // Selection, bulk undo and delayed removal use a fresh browser mock fixture.
     await page.evaluate(() => {
@@ -104,8 +110,8 @@ async (page) => {
     const cards = page.locator('[data-game-id]');
     await cards.first().waitFor();
     await page.evaluate(() => { window.__bulkLaunches = 0; window.pywebview = { api: { launch_game: async () => { window.__bulkLaunches++; return { success: true }; } } }; });
-    for (const layout of ['Grid view', 'Banner view', 'List view', 'Compact view']) {
-      await page.getByRole('button', {name: layout, exact: true}).click();
+    for (const layout of ['Grid', 'Banner', 'List', 'Compact']) {
+      await setLayout(layout);
       await page.getByRole('button', {name: 'Select', exact: true}).click();
       await cards.first().click();
       await page.getByRole('region', {name: 'Bulk actions'}).getByText('1 selected').waitFor();
@@ -136,7 +142,7 @@ async (page) => {
     await page.waitForTimeout(200);
     check(await cards.count() === 0, 'Refresh must not restore pending removals');
     await page.getByRole('link', {name: 'Updates, 0 available'}).click();
-    check(await page.getByRole('heading', {name: /^Updates Available/}).count() === 0, 'Pending games must leave Updates');
+    check(await page.getByRole('heading', {name: /^Updates available/}).count() === 0, 'Pending games must leave Updates');
     await page.getByRole('link', {name: 'Library', exact: true}).click();
     await page.getByRole('button', {name: 'Undo', exact: true}).last().click();
     await cards.first().waitFor();

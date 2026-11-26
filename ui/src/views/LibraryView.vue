@@ -42,7 +42,9 @@ import {
   IconProgress,
   IconArrowLeft,
   IconArrowUp,
+  IconCircleDot,
   IconClock,
+  IconHistory,
   IconColumns2Filled,
   IconDeviceGamepad2,
   IconDeviceGamepad2Filled,
@@ -325,8 +327,8 @@ const collections: Array<{
   { value: "Favorites", label: "Favorites", icon: IconHeartFilled },
   { value: "Updates available", label: "Updates available", icon: IconArrowUp },
   { value: "New since finished", label: "New since finished", icon: IconSparkles },
-  { value: "Unplayed update", label: "Unplayed update", icon: IconClock },
-  { value: "Recently played", label: "Recently played", icon: IconClock },
+  { value: "Unplayed update", label: "Unplayed update", icon: IconCircleDot },
+  { value: "Recently played", label: "Recently played", icon: IconHistory },
 ];
 
 // Search & Filter state

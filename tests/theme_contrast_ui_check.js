@@ -97,7 +97,7 @@ async (page) => {
     await card.click({modifiers: ["Control"]});
     for (const theme of ["light", "dark"]) {
       await page.evaluate(theme => document.documentElement.classList.toggle("light", theme === "light"), theme);
-      check(await card.getAttribute("aria-checked") === "true", `${theme}: selected state missing`);
+      check(await card.getAttribute("aria-selected") === "true", `${theme}: selected state missing`);
       await measure(theme, [".selection-mark"]);
     }
     check(failures.length === 0, "Text below 4.5:1 contrast: " + JSON.stringify(failures));

@@ -12,11 +12,11 @@ async page => {
     const status = page.getByRole('button',{name:'Remove filter Status: Playing'});
     const engine = page.getByRole('button',{name:"Remove filter Engine: Ren'Py"});
     await status.waitFor(); await engine.waitFor();
-    check(await page.getByRole('button',{name:'Grid view'}).getAttribute('aria-pressed') === 'true','Grid selected');
-    for (const name of ['List view','Compact view','Banner view']) check(await page.getByRole('button',{name}).getAttribute('aria-pressed') === 'false',`${name} unselected`);
-    const sort = page.getByRole('button',{name:'Sort by: F95 rating',exact:true});
-    await sort.click();
-    const sortMenu = page.getByRole('menu',{name:'Sort by'});
+    // Layout and sort share the View menu.
+    await page.getByRole('button',{name:/^View: Grid, sorted by F95 rating/}).click();
+    const sortMenu = page.getByRole('menu',{name:'View options'});
+    check(await sortMenu.getByRole('menuitemradio',{name:'Grid',exact:true}).getAttribute('aria-checked') === 'true','Grid selected');
+    for (const name of ['List','Compact','Banner']) check(await sortMenu.getByRole('menuitemradio',{name,exact:true}).getAttribute('aria-checked') === 'false',`${name} unselected`);
     check(await sortMenu.getByRole('menuitemradio',{name:'F95 rating'}).getAttribute('aria-checked') === 'true','F95 rating checked');
     check(await sortMenu.getByRole('menuitemradio',{name:'My rating'}).getAttribute('aria-checked') === 'false','My rating listed');
     await page.keyboard.press('Escape'); await sortMenu.waitFor({state:'hidden'});
