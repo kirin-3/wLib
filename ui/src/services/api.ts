@@ -1913,6 +1913,30 @@ export interface CatalogStatusResponse extends ApiBasicResponse {
   started?: boolean;
 }
 
+export type OnboardingStatus = "" | "done" | "skipped";
+export type OnboardingFinishStatus = "done" | "skipped";
+export type OnboardingStepId = "welcome" | "catalog" | "lc" | "import" | "extension" | "done";
+
+export interface OnboardingStateResponse extends ApiBasicResponse {
+  status?: OnboardingStatus;
+  step?: OnboardingStepId | "";
+  catalog_held?: boolean;
+}
+
+export interface OnboardingStepResponse extends ApiBasicResponse {
+  step?: OnboardingStepId;
+}
+
+export interface OnboardingFinishResponse extends ApiBasicResponse {
+  status?: OnboardingFinishStatus;
+  catalog_started?: boolean;
+}
+
+export interface OnboardingReleaseHoldResponse extends ApiBasicResponse {
+  released?: boolean;
+  started?: boolean;
+}
+
 export type DiscoverSite = "f95" | "lc" | "dlsite" | "vndb" | "ryuugames";
 export type DiscoverSort = "updated" | "rating" | "released" | "title";
 export type DiscoverStatus = "ongoing" | "completed" | "onhold" | "abandoned";
@@ -2738,6 +2762,22 @@ class ApiService {
 
   async checkCatalogNow(): Promise<CatalogStatusResponse> {
     return this.invoke<CatalogStatusResponse>("check_catalog_now");
+  }
+
+  async getOnboardingState(): Promise<OnboardingStateResponse> {
+    return this.invoke<OnboardingStateResponse>("get_onboarding_state");
+  }
+
+  async setOnboardingStep(step: OnboardingStepId): Promise<OnboardingStepResponse> {
+    return this.invoke<OnboardingStepResponse>("set_onboarding_step", step);
+  }
+
+  async finishOnboarding(status: OnboardingFinishStatus): Promise<OnboardingFinishResponse> {
+    return this.invoke<OnboardingFinishResponse>("finish_onboarding", status);
+  }
+
+  async releaseCatalogHold(): Promise<OnboardingReleaseHoldResponse> {
+    return this.invoke<OnboardingReleaseHoldResponse>("release_catalog_hold");
   }
 
   async getDiscoverStatus(): Promise<DiscoverStatusResponse> {

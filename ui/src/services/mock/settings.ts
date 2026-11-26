@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { GamescopeSettings, LcPlusMode, LcPlusTier, RpgmakerLinuxRunnerStatus, SaveBackupKeep, SettingsResponse } from "../api";
+import type { GamescopeSettings, LcPlusMode, LcPlusTier, OnboardingStatus, OnboardingStepId, RpgmakerLinuxRunnerStatus, SaveBackupKeep, SettingsResponse } from "../api";
 import { FILTER_OPTIONS, SCALER_OPTIONS, WINDOW_MODE_OPTIONS, argsError, fpsLimitError, normalizeResolution } from "../../utils/gamescope";
 import type { LibraryFilterPreset } from "../../utils/libraryViewState";
 import { FILTER_MIN_RATING_VALUES, VALID_SORT_FIELDS, type FilterMinRating } from "../../utils/libraryViewState";
@@ -300,6 +300,60 @@ export const writeMockSettings = (settings: SettingsResponse): void => {
     localStorage.setItem(MOCK_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
   } catch (_error) {
     // Ignore browser mock persistence failures and fall back to defaults.
+  }
+};
+
+const MOCK_ONBOARDING_STORAGE_KEY = "wlib-mock-onboarding";
+const MOCK_ONBOARDING_STEPS = new Set<OnboardingStepId>([
+  "welcome",
+  "catalog",
+  "lc",
+  "import",
+  "extension",
+  "done",
+]);
+
+export interface MockOnboardingStore {
+  status: OnboardingStatus;
+  step: OnboardingStepId | "";
+  catalog_held: boolean;
+  release_calls: number;
+}
+
+export const isMockOnboardingStep = (value: unknown): value is OnboardingStepId =>
+  typeof value === "string" && MOCK_ONBOARDING_STEPS.has(value as OnboardingStepId);
+
+export const readMockOnboarding = (): MockOnboardingStore => {
+  try {
+    const raw = localStorage.getItem(MOCK_ONBOARDING_STORAGE_KEY);
+    // Absent key: default to finished so existing UI checks and plain browser
+    // previews stay unobstructed. Tests set "{}" or "" to run first-run onboarding.
+    if (raw === null) {
+      return { status: "done", step: "", catalog_held: false, release_calls: 0 };
+    }
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return { status: "", step: "", catalog_held: readMockSettings().catalog_enabled, release_calls: 0 };
+    }
+    const parsed = JSON.parse(trimmed) as unknown;
+    const source = isRecord(parsed) ? parsed : {};
+    const status: OnboardingStatus =
+      source.status === "done" || source.status === "skipped" ? source.status : "";
+    const step: OnboardingStepId | "" = isMockOnboardingStep(source.step) ? source.step : "";
+    const defaultHeld = status === "" && readMockSettings().catalog_enabled;
+    const catalog_held = typeof source.catalog_held === "boolean" ? source.catalog_held : defaultHeld;
+    const release_calls = typeof source.release_calls === "number" ? source.release_calls : 0;
+    return { status, step, catalog_held, release_calls };
+  } catch (_error) {
+    return { status: "done", step: "", catalog_held: false, release_calls: 0 };
+  }
+};
+
+export const writeMockOnboarding = (state: MockOnboardingStore): void => {
+  try {
+    localStorage.setItem(MOCK_ONBOARDING_STORAGE_KEY, JSON.stringify(state));
+  } catch (_error) {
+    // Ignore browser mock persistence failures.
   }
 };
 

@@ -2288,3 +2288,41 @@ def test_sync_keeps_the_detected_tier_on_this_device():
     assert database.get_setting("lc_plus_detected") == ""
     assert database.get_setting("lc_plus_mode") == "auto"
     assert database.lc_plus_effective() is False
+
+
+def test_sync_onboarding_one_way_and_device_local_step(tmp_path, monkeypatch):
+    from core.library_backup import apply_library_backup, build_sync_backup
+
+    # Device A finishes onboarding; device B pulls and becomes finished while
+    # keeping onboarding_step out of the sync file.
+    database.update_setting("onboarding", "done")
+    database.update_setting("onboarding_step", "catalog")
+    payload_done = build_sync_backup("2026-11-26T10:00:00Z", "device-a")
+    assert payload_done["settings"]["general"]["onboarding"] == "done"
+    assert "onboarding_step" not in json.dumps(payload_done)
+
+    db_b = tmp_path / "device-b.db"
+    monkeypatch.setattr(database, "DB_PATH", str(db_b))
+    database.init_db()
+    database.update_setting("onboarding_step", "import")
+    apply_library_backup(
+        payload_done, {"sections": ["settings_general"]}, mirror=True, sync=True
+    )
+    assert database.get_setting("onboarding") == "done"
+    assert database.get_setting("onboarding_step") == "import"
+
+    # A mirror sync from an unfinished device or a different finished state
+    # never resets or alters device B's finished state.
+    payload_unfinished = build_sync_backup("2026-11-26T11:00:00Z", "device-c")
+    payload_unfinished["settings"]["general"]["onboarding"] = ""
+    apply_library_backup(
+        payload_unfinished, {"sections": ["settings_general"]}, mirror=True, sync=True
+    )
+    assert database.get_setting("onboarding") == "done"
+
+    payload_skipped = build_sync_backup("2026-11-26T12:00:00Z", "device-d")
+    payload_skipped["settings"]["general"]["onboarding"] = "skipped"
+    apply_library_backup(
+        payload_skipped, {"sections": ["settings_general"]}, mirror=True, sync=True
+    )
+    assert database.get_setting("onboarding") == "done"

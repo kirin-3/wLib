@@ -59,7 +59,7 @@ class SettingsMixin(ApiBase):
     def check_catalog_now(self) -> dict[str, object]:
         if not self._catalog_enabled():
             return {"success": False, "error": "The game catalog is turned off"}
-        started = self.catalog.start_background(force=True)
+        started = self._start_catalog(force=True)
         return {**self.get_catalog_status(), "started": started}
 
     def get_settings(self) -> dict[str, object]:
@@ -649,7 +649,7 @@ class SettingsMixin(ApiBase):
                 self.catalog.remove()
                 self.discover_index.remove()
             elif catalog_change is True:
-                _ = self.catalog.start_background(force=True)
+                _ = self._start_catalog(force=True)
             if any(key in torrent_values for key in torrent_settings.HELPER_KEYS):
                 from core.downloads.torrents import supervisor as torrent_supervisor
 

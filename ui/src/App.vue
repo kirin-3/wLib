@@ -57,9 +57,12 @@ import {
 } from "./utils/installArchive";
 import InstallArchiveModal from "./components/modals/InstallArchiveModal.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
+import OnboardingOverlay from "./components/onboarding/OnboardingOverlay.vue";
 import UpdateDownloadModal from "./components/modals/UpdateDownloadModal.vue";
+import { useOnboarding } from "./composables/useOnboarding";
 import {useUpdateDownloads} from "./composables/useUpdateDownloads";
 const updateDownloads = useUpdateDownloads();
+const onboarding = useOnboarding();
 
 import { extensionAddQuery, extensionOpenQuery, type ExtensionGameDetail } from "./utils/storeLinks";
 import { convertSteamCovers } from "./utils/steamCovers";
@@ -218,8 +221,7 @@ const installSeed = ref<InstallArchiveSeed | undefined>();
 
 let installRequestId = 0;
 
-const handleInstallArchiveRequest = async (event: Event) => {
-  const detail = (event as CustomEvent<InstallArchiveRequest>).detail || {};
+const runInstallArchiveRequest = async (detail: InstallArchiveRequest) => {
   const requestId = ++installRequestId;
   let game: GameRecord | null = null;
   if (detail.gameId != null) {
@@ -239,6 +241,20 @@ const handleInstallArchiveRequest = async (event: Event) => {
   installVersion.value = detail.version || "";
   installSeed.value = detail.seed;
   showInstallModal.value = true;
+};
+
+const handleInstallArchiveRequest = async (event: Event) => {
+  const detail = (event as CustomEvent<InstallArchiveRequest>).detail || {};
+  if (onboarding.open.value) {
+    const label =
+      detail.seed?.title?.trim() ||
+      detail.archivePath?.split(/[\\/]/).pop()?.trim() ||
+      "Archive";
+    notify(`${label} from the browser extension opens when setup ends.`, "info");
+    onboarding.enqueueExtensionRequest(() => runInstallArchiveRequest(detail));
+    return;
+  }
+  await runInstallArchiveRequest(detail);
 };
 
 // Downloads-folder scan (throttled, no background watcher).
@@ -430,18 +446,40 @@ const toggleNavCollapse = () => {
   }
 };
 
-const handleExtensionAdd = (event: Event) => {
-  const data = (event as CustomEvent<ExtensionGameDetail>).detail;
+const runExtensionAdd = (data: ExtensionGameDetail | undefined) => {
   if (data && (data.url || data.lc_url || data.links?.length)) {
     router.push({ path: "/", query: extensionAddQuery(data) }).catch((err) => console.error("Router error:", err));
   }
 };
 
-const handleExtensionOpen = (event: Event) => {
+const handleExtensionAdd = (event: Event) => {
   const data = (event as CustomEvent<ExtensionGameDetail>).detail;
+  if (!data || !(data.url || data.lc_url || data.links?.length)) return;
+  if (onboarding.open.value) {
+    const title = data.title?.trim() || "A game";
+    notify(`${title} from the browser extension opens when setup ends.`, "info");
+    onboarding.enqueueExtensionRequest(() => runExtensionAdd(data));
+    return;
+  }
+  runExtensionAdd(data);
+};
+
+const runExtensionOpen = (data: ExtensionGameDetail | undefined) => {
   if (data && (data.url || data.gameId)) {
     router.push({ path: "/", query: extensionOpenQuery(data) }).catch((err) => console.error("Router error:", err));
   }
+};
+
+const handleExtensionOpen = (event: Event) => {
+  const data = (event as CustomEvent<ExtensionGameDetail>).detail;
+  if (!data || !(data.url || data.gameId)) return;
+  if (onboarding.open.value) {
+    const title = data.title?.trim() || "A game";
+    notify(`${title} from the browser extension opens when setup ends.`, "info");
+    onboarding.enqueueExtensionRequest(() => runExtensionOpen(data));
+    return;
+  }
+  runExtensionOpen(data);
 };
 
 const handleSteamCovers = () => { void convertSteamCovers(api); };
@@ -466,6 +504,7 @@ onMounted(() => {
       }
     }).catch((error) => console.error("Controller presence check failed", error));
     void refreshUpdateCount();
+    void onboarding.start();
     handleSteamCovers();
     // Requests that arrived before the window could show a question.
     handleExtensionPairing();
@@ -542,6 +581,7 @@ onUnmounted(() => {
   <div class="app-shell flex h-[var(--app-vh)] w-[var(--app-vw)] overflow-hidden">
     <!-- Sidebar -->
     <aside
+      :inert="onboarding.open.value"
       :class="[
         navCollapsed ? 'w-16' : 'w-64',
         'flex flex-col justify-between shrink-0 overflow-y-auto overflow-x-hidden collapse-width-transition',
@@ -925,17 +965,21 @@ onUnmounted(() => {
         </div>
       </transition-group>
 
-      <router-view v-slot="{ Component }">
-        <transition
-          :name="fadeTransitionName"
-          mode="out-in"
-          @before-enter="mainRef?.scrollTo(0, 0)"
-        >
-          <component :is="Component" />
-        </transition>
-      </router-view>
+      <!-- display: contents keeps the views laid out as direct children of <main>; only inert is added. -->
+      <div class="contents" :inert="onboarding.open.value">
+        <router-view v-slot="{ Component }">
+          <transition
+            :name="fadeTransitionName"
+            mode="out-in"
+            @before-enter="mainRef?.scrollTo(0, 0)"
+          >
+            <component :is="Component" />
+          </transition>
+        </router-view>
+      </div>
 
       <UpdateDownloadModal />
+      <OnboardingOverlay />
       <ConfirmDialog />
       <InstallArchiveModal
         v-model="showInstallModal"

@@ -188,6 +188,9 @@
     "custom_prefix",
     "proton_version"
   ],
+  "finish_onboarding": [
+    "status"
+  ],
   "get_app_version": [],
   "get_archive_install_status": [],
   "get_auto_check_setting": [],
@@ -261,6 +264,7 @@
   ],
   "get_locale_emulator_status": [],
   "get_move_status": [],
+  "get_onboarding_state": [],
   "get_performance_tools": [
     "refresh"
   ],
@@ -463,6 +467,7 @@
   "purge_cover_cache": [],
   "recheck_locale_emulator_status": [],
   "recheck_sandbox_status": [],
+  "release_catalog_hold": [],
   "release_download_archive": [
     "path"
   ],
@@ -573,6 +578,9 @@
   "set_game_steam_shortcut": [
     "game_id",
     "enabled"
+  ],
+  "set_onboarding_step": [
+    "step"
   ],
   "set_renpy_console": [
     "game_id",

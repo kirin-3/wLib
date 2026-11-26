@@ -22,15 +22,12 @@ import {
   IconX,
 } from "@tabler/icons-vue";
 import { api } from "../services/api";
+import ExternalImportPanel from "../components/ExternalImportPanel.vue";
 import PathStatus from "../components/PathStatus.vue";
 import {
   F95AccountImport, createF95AccountPolling, f95AccountPreviewNote, f95AccountProgressText, f95AccountResultText,
 } from "../utils/f95AccountImport";
 import type {
-  ExternalLibraryImportResponse,
-  ExternalLibraryInspectResponse,
-  ExternalLibraryMergeMode,
-  ExternalLibrarySource,
   LibraryBackupInspectResponse,
   LibraryBackupSection,
   LibraryBackupWarning,
@@ -105,20 +102,6 @@ const defaultExportSections: LibraryBackupSection[] = [
 ];
 
 const activeTab = ref<BackupTab>("export");
-const externalSources: { id: ExternalLibrarySource; label: string }[] = [
-  { id: "f95checker", label: "F95Checker" },
-  { id: "atlas", label: "Atlas" },
-  { id: "xlibrary", label: "XLibrary" },
-  { id: "f69", label: "f69" },
-  { id: "playnite", label: "Playnite" },
-  { id: "gamelist", label: "Game-List" },
-];
-const externalImportSectionIds: LibraryBackupSection[] = [
-  "covers",
-  "user_state",
-  "executable_paths",
-  "launch_targets",
-];
 const exportPath = ref("");
 const importPath = ref("");
 const exportSections = ref<LibraryBackupSection[]>([...defaultExportSections]);
@@ -136,25 +119,9 @@ const exportPassphrase = ref("");
 const exportConfirmation = ref("");
 const importPassphrase = ref("");
 const importNeedsPassphrase = ref(false);
-const externalSource = ref<ExternalLibrarySource>("f95checker");
-const externalPath = ref("");
-const externalDetectedPath = ref("");
-const externalCheckedPaths = ref<string[]>([]);
-const externalDetecting = ref(false);
-const externalDetectedSources = new Set<ExternalLibrarySource>();
-const externalPreview = ref<ExternalLibraryInspectResponse | null>(null);
-const externalSections = ref<LibraryBackupSection[]>([]);
-const externalMergeMode = ref<ExternalLibraryMergeMode>("fill_missing");
-const externalMessage = ref("");
-const externalError = ref("");
-const externalInspecting = ref(false);
-const externalImporting = ref(false);
-const externalResult = ref<ExternalLibraryImportResponse | null>(null);
-// Bumped when the path or source changes so a late answer for the previous
-// file/source cannot populate the new preview.
+// Bumped when the path changes so a late answer for the previous
+// file cannot populate the new preview.
 let importInspectRequest = 0;
-let externalDetectRequest = 0;
-let externalInspectRequest = 0;
 watch(importPath, () => {
   importInspectRequest++;
   inspecting.value = false;
@@ -182,31 +149,6 @@ const availableImportOptions = computed(() => {
 const canImportSelected = computed(() => {
   return Boolean(inspectResult.value) && importSections.value.length > 0;
 });
-const externalCounts = computed(() => externalPreview.value?.counts || null);
-const externalCoversToCopy = computed(() => {
-  const counts = externalCounts.value;
-  if (externalMergeMode.value === "fill_missing") {
-    return counts?.covers_to_fill ?? counts?.covers_to_copy ?? 0;
-  }
-  return counts?.covers_to_copy ?? 0;
-});
-const externalAvailableSections = computed<LibraryBackupSection[]>(
-  () => externalPreview.value?.available_sections || [],
-);
-const externalWarnings = computed<LibraryBackupWarning[]>(
-  () => externalPreview.value?.warnings || [],
-);
-const externalAvailableOptions = computed(() => {
-  return importSectionOptions.filter(
-    (item) =>
-      externalImportSectionIds.includes(item.id) &&
-      externalAvailableSections.value.includes(item.id),
-  );
-});
-const canImportExternal = computed(() => {
-  // Identity and versions always import, so an empty section list is valid.
-  return Boolean(externalPreview.value);
-});
 
 const isSelected = (sections: LibraryBackupSection[], id: LibraryBackupSection) => {
   return sections.includes(id);
@@ -229,10 +171,6 @@ const toggleExportSection = (id: LibraryBackupSection) => {
 
 const toggleImportSection = (id: LibraryBackupSection) => {
   toggleSectionValue(importSections, id);
-};
-
-const toggleExternalSection = (id: LibraryBackupSection) => {
-  toggleSectionValue(externalSections, id);
 };
 
 const browsing = ref(false);
@@ -328,36 +266,8 @@ const inspectImport = async () => {
   }
 };
 
-const detectExternal = async () => {
-  if (externalDetecting.value) return;
-  const source = externalSource.value;
-  const requestId = ++externalDetectRequest;
-  const initialPath = externalPath.value;
-  externalError.value = "";
-  externalDetecting.value = true;
-  try {
-    const result = await api.detectExternalLibrary(source);
-    if (requestId !== externalDetectRequest || externalSource.value !== source) return;
-    if (!result || result.success === false) {
-      externalError.value = result?.error || "Could not locate the source library.";
-      return;
-    }
-    externalDetectedPath.value = result.path || "";
-    externalCheckedPaths.value = result.checked || [];
-    externalDetectedSources.add(source);
-    // Never overwrite a path the user typed while detection was running.
-    if (result.path && externalPath.value === initialPath) externalPath.value = result.path;
-  } catch (error) {
-    if (requestId !== externalDetectRequest || externalSource.value !== source) return;
-    externalError.value = `Could not locate the source library: ${String(error)}`;
-  } finally {
-    if (requestId === externalDetectRequest) externalDetecting.value = false;
-  }
-};
-
 const openExternalTab = () => {
   activeTab.value = "external";
-  if (!externalDetectedSources.has(externalSource.value)) void detectExternal();
 };
 
 // A link such as /import-export#external opens that tab (the Library's
@@ -369,127 +279,6 @@ const followTabHash = () => {
   else if (tab === "export" || tab === "import" || tab === "f95") activeTab.value = tab;
 };
 watch(() => route.hash, followTabHash, { immediate: true });
-
-const browseExternalFile = async () => {
-  if (browsing.value) return;
-  const source = externalSource.value;
-  browsing.value = true;
-  try {
-    const selected = await api.browseExternalLibraryFile(
-      source,
-      externalPath.value || "",
-    );
-    if (selected && externalSource.value === source) {
-      externalPath.value = selected;
-      externalPreview.value = null;
-      externalResult.value = null;
-      externalMessage.value = "";
-      externalError.value = "";
-    }
-  } catch (error) {
-    externalError.value = `Could not open library picker: ${String(error)}`;
-  } finally {
-    browsing.value = false;
-  }
-};
-
-const inspectExternal = async () => {
-  if (externalInspecting.value) return;
-  const source = externalSource.value;
-  const path = externalPath.value;
-  const requestId = ++externalInspectRequest;
-  externalMessage.value = "";
-  externalError.value = "";
-  externalPreview.value = null;
-  externalResult.value = null;
-  externalInspecting.value = true;
-
-  try {
-    const result = await api.inspectExternalLibrary(source, path);
-    if (
-      requestId !== externalInspectRequest ||
-      externalSource.value !== source ||
-      externalPath.value !== path
-    ) {
-      return;
-    }
-    if (!result || result.success === false) {
-      externalError.value = result?.error_code === "source_locked"
-        ? "Close Playnite and try again."
-        : result?.error || "Could not inspect library.";
-      return;
-    }
-    externalPreview.value = result;
-    externalSections.value = (result.available_sections || []).filter(
-      (section): section is LibraryBackupSection =>
-        externalImportSectionIds.includes(section),
-    );
-  } catch (error) {
-    if (
-      requestId !== externalInspectRequest ||
-      externalSource.value !== source ||
-      externalPath.value !== path
-    ) {
-      return;
-    }
-    externalError.value = `Could not inspect library: ${String(error)}`;
-  } finally {
-    if (requestId === externalInspectRequest) externalInspecting.value = false;
-  }
-};
-
-const runExternalImport = async () => {
-  if (externalImporting.value || !externalPreview.value) return;
-  externalMessage.value = "";
-  externalError.value = "";
-  externalResult.value = null;
-  externalImporting.value = true;
-
-  try {
-    const result = await api.importExternalLibrary(externalSource.value, externalPath.value, {
-      sections: externalSections.value,
-      merge_mode: externalMergeMode.value,
-    });
-    if (!result || result.success === false) {
-      externalError.value = result?.error || "Import failed.";
-      return;
-    }
-    externalResult.value = result;
-    externalMessage.value =
-      `Imported library. Created ${result.created ?? 0}, ` +
-      `updated ${result.updated ?? 0}, skipped ${result.skipped ?? 0}.`;
-    window.dispatchEvent(new Event("wlib-refresh-library"));
-    externalPreview.value = null;
-  } catch (error) {
-    externalError.value = `Import failed: ${String(error)}`;
-  } finally {
-    externalImporting.value = false;
-  }
-};
-
-watch(externalSource, () => {
-  externalDetectRequest++;
-  externalDetecting.value = false;
-  externalInspectRequest++;
-  externalInspecting.value = false;
-  externalPath.value = "";
-  externalDetectedPath.value = "";
-  externalCheckedPaths.value = [];
-  externalPreview.value = null;
-  externalResult.value = null;
-  externalSections.value = [];
-  externalMessage.value = "";
-  externalError.value = "";
-  void detectExternal();
-});
-watch(externalPath, () => {
-  externalInspectRequest++;
-  externalInspecting.value = false;
-  externalPreview.value = null;
-  externalResult.value = null;
-  externalMessage.value = "";
-  externalError.value = "";
-});
 
 const f95Account = reactive(new F95AccountImport(api));
 const F95_POLL_MS = 500;
@@ -759,143 +548,7 @@ const runImport = async () => {
         </div>
       </section>
 
-      <section v-else-if="activeTab === 'external'" class="backup-body">
-        <div class="backup-segmented" role="group" aria-label="Source app">
-          <button
-            v-for="item in externalSources"
-            :key="item.id"
-            type="button"
-            :class="['backup-tab', externalSource === item.id ? 'backup-tab-active' : '']"
-            @click="externalSource = item.id"
-          >
-            {{ item.label }}
-          </button>
-        </div>
-
-        <div v-if="externalDetecting" class="backup-note">
-          <IconLoader2 class="backup-spinner" />
-          <span>Looking for the source library...</span>
-        </div>
-        <div v-else-if="externalDetectedPath" class="backup-note">
-          <IconInfoCircle />
-          <span>Found library: {{ externalDetectedPath }}</span>
-        </div>
-        <div v-else-if="externalCheckedPaths.length" class="backup-note">
-          <IconInfoCircle />
-          <span>
-            No library found. Checked:
-            {{ externalCheckedPaths.join(", ") }}.
-            Pick the file manually.
-          </span>
-        </div>
-
-        <div class="backup-field">
-          <label>Source library file</label>
-          <div class="backup-path-row">
-            <input
-              v-model="externalPath"
-              type="text"
-              :placeholder="externalSource === 'gamelist' ? 'Path to Games.fic' : 'Path to the source library file'"
-              class="backup-input"
-            />
-            <button type="button" class="backup-secondary" @click="browseExternalFile">
-              <IconFolderOpen />
-              Browse
-            </button>
-          </div>
-          <PathStatus :path="externalPath" kind="file" />
-        </div>
-
-        <button
-          type="button"
-          class="backup-secondary backup-inspect"
-          :disabled="externalInspecting || !externalPath"
-          @click="inspectExternal"
-        >
-          <IconLoader2 v-if="externalInspecting" class="backup-spinner" />
-          <IconFileImport v-else />
-          {{ externalInspecting ? "Inspecting..." : "Inspect Library" }}
-        </button>
-
-        <div v-if="externalPreview" class="backup-preview">
-          <div class="backup-counts">
-            <span>New: {{ externalCounts?.new_games ?? 0 }}</span>
-            <span>Matched: {{ externalCounts?.matched_games ?? 0 }}</span>
-            <span>Ambiguous: {{ externalCounts?.ambiguous_games ?? 0 }}</span>
-            <span>Skipped: {{ externalCounts?.skipped_no_identity ?? 0 }}</span>
-            <span v-if="(externalCounts?.skipped_unreadable ?? 0) > 0">Unreadable: {{ externalCounts?.skipped_unreadable }}</span>
-            <span>Paths dropped: {{ externalCounts?.dropped_paths ?? 0 }}</span>
-            <span v-if="externalAvailableSections.includes('covers')">Covers to copy: {{ externalCoversToCopy }}</span>
-          </div>
-
-          <div class="backup-field">
-            <label>For games already in wLib</label>
-            <div class="backup-segmented" role="radiogroup" aria-label="Merge mode">
-              <label class="backup-check-row">
-                <input
-                  v-model="externalMergeMode"
-                  type="radio"
-                  value="fill_missing"
-                />
-                <span class="backup-option-copy">
-                  <strong>Only fill missing</strong>
-                  <em>Keeps your values and fills in blanks.</em>
-                </span>
-              </label>
-              <label class="backup-check-row">
-                <input
-                  v-model="externalMergeMode"
-                  type="radio"
-                  value="overwrite"
-                />
-                <span class="backup-option-copy">
-                  <strong>Overwrite</strong>
-                  <em>Replaces your values with the source's.</em>
-                </span>
-              </label>
-            </div>
-          </div>
-
-          <div class="backup-section-list compact">
-            <label
-              v-for="option in externalAvailableOptions"
-              :key="option.id"
-              class="backup-check-row"
-            >
-              <component :is="option.icon" class="backup-option-icon" />
-              <span class="backup-option-copy">
-                <strong>{{ option.label }}</strong>
-                <em>{{ option.description }}</em>
-              </span>
-              <input
-                type="checkbox"
-                :checked="isSelected(externalSections, option.id)"
-                @change="toggleExternalSection(option.id)"
-              />
-            </label>
-          </div>
-
-          <div class="backup-disclaimer">
-            <IconInfoCircle />
-            <span>
-              Titles, F95 links, and versions are always imported. The
-              sections above choose what else comes along.
-            </span>
-          </div>
-
-          <div v-if="externalWarnings.length" class="backup-warnings">
-            <strong>
-              <IconAlertTriangle />
-              {{ externalWarnings.length }} warning{{ externalWarnings.length === 1 ? '' : 's' }}
-            </strong>
-            <ul>
-              <li v-for="(warning, index) in externalWarnings" :key="index">
-                {{ warning.message }}
-              </li>
-            </ul>
-          </div>
-        </div>
-      </section>
+      <ExternalImportPanel v-else-if="activeTab === 'external'" variant="page" />
 
       <section v-else-if="activeTab === 'f95'" class="backup-body f95-account">
         <div class="backup-note">
@@ -966,7 +619,7 @@ const runImport = async () => {
         </div>
       </section>
 
-      <footer class="backup-footer">
+      <footer v-if="activeTab !== 'external'" class="backup-footer">
         <div class="backup-feedback">
           <p v-if="activeTab === 'export' && exportError" class="backup-error">
             {{ exportError }}
@@ -980,9 +633,6 @@ const runImport = async () => {
           <p v-else-if="activeTab === 'import' && importMessage" class="backup-success">
             {{ importMessage }}
           </p>
-          <p v-else-if="activeTab === 'external' && externalError" class="backup-error">
-            {{ externalError }}
-          </p>
           <p v-else-if="activeTab === 'f95' && f95Account.error" class="backup-error">
             {{ f95Account.error }}
           </p>
@@ -992,19 +642,6 @@ const runImport = async () => {
               View progress
             </router-link>
             <p v-else-if="f95Account.result.metadata_check === 'busy'">
-              An update check is already running; run one later from Updates.
-            </p>
-          </div>
-          <div v-else-if="activeTab === 'external' && externalResult" class="backup-success">
-            <p>{{ externalMessage }}</p>
-            <p v-if="(externalResult.skipped_unreadable ?? 0) > 0">Unreadable: {{ externalResult.skipped_unreadable }}</p>
-            <router-link
-              v-if="externalResult.metadata_check === 'started'"
-              to="/updates"
-            >
-              View progress
-            </router-link>
-            <p v-else-if="externalResult.metadata_check === 'busy'">
               An update check is already running; run one later from Updates.
             </p>
           </div>
@@ -1032,17 +669,6 @@ const runImport = async () => {
             <IconLoader2 v-if="importing" class="backup-spinner" />
             <IconFileImport v-else />
             {{ importing ? "Importing..." : "Import Selected" }}
-          </button>
-          <button
-            v-else-if="activeTab === 'external'"
-            type="button"
-            class="backup-primary"
-            :disabled="externalImporting || !canImportExternal"
-            @click="runExternalImport"
-          >
-            <IconLoader2 v-if="externalImporting" class="backup-spinner" />
-            <IconFileImport v-else />
-            {{ externalImporting ? "Importing..." : "Import Selected" }}
           </button>
           <button
             v-else-if="activeTab === 'f95' && (f95Account.canImport || f95Account.phase === 'importing')"

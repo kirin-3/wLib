@@ -18,6 +18,7 @@ import {
   type PlatformCapabilities,
 } from "../services/api";
 import { confirmAction } from "../utils/confirm";
+import ExtensionInstallSteps from "../components/ExtensionInstallSteps.vue";
 import { EXTENSION_SITE_SWITCHES, SITE_SETTINGS_HASH, SITE_SETTINGS_ID } from "../utils/extensionSiteSettings";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 import { notifyError } from "../utils/toast";
@@ -320,98 +321,10 @@ onUnmounted(() => {
           How to Install
         </h3>
 
-        <!-- Chrome / Chromium -->
-        <div class="mb-6">
-          <h4
-            class="text-sm font-bold mb-3 flex items-center gap-2"
-            style="color: var(--text-primary)"
-          >
-            <span
-              class="bg-blue-600/20 text-blue-400 px-2 py-0.5 rounded text-xs font-bold"
-              >Chrome / Chromium / Edge</span
-            >
-          </h4>
-          <ol
-            class="space-y-2 text-sm list-decimal list-inside"
-            style="color: var(--text-secondary)"
-          >
-            <li>
-              Open
-              <code class="ext-code text-blue-400">chrome://extensions</code> in
-              your browser
-            </li>
-            <li>
-              Enable
-              <span class="font-medium" style="color: var(--text-primary)"
-                >Developer mode</span
-              >
-              (toggle in the top-right corner)
-            </li>
-            <li>
-              Click
-              <span class="font-medium" style="color: var(--text-primary)"
-                >Load unpacked</span
-              >
-            </li>
-            <li>
-              Select the
-              <code class="ext-code text-blue-400">{{
-                chromeExtensionDirectory
-              }}</code>
-              folder
-            </li>
-            <li>The wLib extension icon should appear in your toolbar</li>
-          </ol>
-          <p class="text-xs mt-3 italic" style="color: var(--text-muted)">
-            Note: the extension reloads itself on your next F95Zone page
-            after wLib syncs a new version. If you loaded it before
-            automatic updates existed, restart your Chromium browser once.
-          </p>
-        </div>
-
-        <!-- Firefox -->
-        <div>
-          <h4
-            class="text-sm font-bold mb-3 flex items-center gap-2"
-            style="color: var(--text-primary)"
-          >
-            <span
-              class="bg-orange-600/20 text-orange-400 px-2 py-0.5 rounded text-xs font-bold"
-              >Firefox</span
-            >
-          </h4>
-          <ol
-            class="space-y-2 text-sm list-decimal list-inside"
-            style="color: var(--text-secondary)"
-          >
-            <li>
-              Open Firefox
-              <span class="font-medium" style="color: var(--text-primary)"
-                >Add-ons and themes</span
-              >
-            </li>
-            <li>
-              Click the gear icon and choose
-              <span class="font-medium" style="color: var(--text-primary)"
-                >Install Add-on From File...</span
-              >
-            </li>
-            <li>
-              Select
-              <code class="ext-code text-orange-400">{{
-                firefoxExtensionFile
-              }}</code>
-              directly
-            </li>
-            <li>Confirm the installation when Firefox prompts you</li>
-          </ol>
-          <p class="text-xs mt-3 italic" style="color: var(--text-muted)">
-            Note: Firefox updates the add-on automatically after
-            installation. If you installed it before automatic updates
-            existed, install the XPI once more. Release builds include a
-            signed XPI for normal Firefox installation.
-          </p>
-        </div>
+        <ExtensionInstallSteps
+          :chrome-directory="chromeExtensionDirectory"
+          :firefox-file="firefoxExtensionFile"
+        />
       </section>
 
     </div>

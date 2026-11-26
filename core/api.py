@@ -13,6 +13,7 @@ from core.api_mixins.extension import ExtensionMixin
 from core.api_mixins.game_tools import GameToolsMixin
 from core.api_mixins.launch import LaunchMixin
 from core.api_mixins.library import LibraryMixin
+from core.api_mixins.onboarding import OnboardingMixin
 from core.api_mixins.rpgm_runtime import RpgmRuntimeMixin
 from core.api_mixins.runtimes import RuntimesMixin
 from core.api_mixins.saves import SavesMixin
@@ -39,6 +40,7 @@ class Api(
     DownloadsMixin,
     SavesMixin,
     SettingsMixin,
+    OnboardingMixin,
     StorageMixin,
     WebMediaMixin,
     ApiBase,

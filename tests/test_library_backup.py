@@ -4479,3 +4479,59 @@ def test_restore_maps_engine_other_to_others():
         apply_library_backup(backup, {"sections": [SECTION_METADATA]})["created"] == 1
     )
     assert get_all_games()[0]["engine"] == "Others"
+
+
+def test_onboarding_export_includes_state_and_excludes_step():
+    update_setting("onboarding", "done")
+    update_setting("onboarding_step", "extension")
+    general = build_library_backup({"sections": [SECTION_SETTINGS_GENERAL]})[
+        "settings"
+    ]["general"]
+    assert general["onboarding"] == "done"
+    assert "onboarding_step" not in json.dumps(general)
+    sync = build_sync_backup("2026-11-26T10:00:00Z", "device-a")
+    assert sync["settings"]["general"]["onboarding"] == "done"
+    assert "onboarding_step" not in json.dumps(sync)
+
+
+@pytest.mark.parametrize("merge_mode", ["overwrite", "fill_missing"])
+@pytest.mark.parametrize("mirror", [False, True])
+@pytest.mark.parametrize("incoming", ["done", "skipped"])
+def test_onboarding_import_marks_unfinished_device_finished(
+    merge_mode, mirror, incoming
+):
+    update_setting("onboarding", "")
+    apply_library_backup(
+        _general_backup({"onboarding": incoming}),
+        {"sections": [SECTION_SETTINGS_GENERAL], "merge_mode": merge_mode},
+        mirror=mirror,
+    )
+    assert get_setting("onboarding") == incoming
+
+
+@pytest.mark.parametrize("merge_mode", ["overwrite", "fill_missing"])
+@pytest.mark.parametrize("mirror", [False, True])
+@pytest.mark.parametrize("local", ["done", "skipped"])
+@pytest.mark.parametrize("incoming", ["", "done", "skipped", "invalid", None, True])
+def test_onboarding_import_never_clears_or_changes_finished_state(
+    merge_mode, mirror, local, incoming
+):
+    update_setting("onboarding", local)
+    apply_library_backup(
+        _general_backup({"onboarding": incoming}),
+        {"sections": [SECTION_SETTINGS_GENERAL], "merge_mode": merge_mode},
+        mirror=mirror,
+    )
+    assert get_setting("onboarding") == local
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+@pytest.mark.parametrize("incoming", ["", "   ", "in-progress", 123, True, None])
+def test_onboarding_import_ignores_blank_or_invalid_values(mirror, incoming):
+    update_setting("onboarding", "")
+    apply_library_backup(
+        _general_backup({"onboarding": incoming}),
+        {"sections": [SECTION_SETTINGS_GENERAL]},
+        mirror=mirror,
+    )
+    assert get_setting("onboarding") == ""

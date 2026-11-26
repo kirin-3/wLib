@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { useFieldAutosave } from "../composables/useFieldAutosave";
 import { useGamescopeSettings } from "../composables/useGamescopeSettings";
+import { useOnboarding } from "../composables/useOnboarding";
 import { FILTER_OPTIONS, SCALER_OPTIONS, WINDOW_MODE_OPTIONS } from "../utils/gamescope";
 import type { GamescopeFilter, GamescopeScaler, GamescopeWindowMode } from "../services/api";
 import FieldSaveFeedback from "../components/FieldSaveFeedback.vue";
@@ -44,6 +45,7 @@ import {
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
 import { gamesStore } from "../composables/useGamesStore";
+const onboarding = useOnboarding();
 import { errorReason, notify, notifyError } from "../utils/toast";
 import { motionEnabled, saveMotionPreference } from "../utils/motionPreference";
 import { coverAnimation, saveCoverAnimation } from "../utils/coverAnimation";
@@ -2820,6 +2822,11 @@ const browseUrm = async () => {
         <SettingRow data-settings-row="advanced-diagnostics" data-settings-bound data-keywords="diagnostics bug report logs log folder system details" v-show="settingsRowVisible('advanced-diagnostics')"
           label="Diagnostics" help="App details for a bug report, and the log folder.">
           <RouterLink to="/diagnostics" class="ui-card-btn">Open diagnostics</RouterLink>
+        </SettingRow>
+
+        <SettingRow data-settings-row="onboarding-replay" data-settings-bound data-keywords="onboarding setup welcome tour guide" v-show="settingsRowVisible('onboarding-replay')"
+          label="Setup guide" help="Walk through the catalog, LewdCorner, import, and browser extension choices again.">
+          <button type="button" class="ui-card-btn" @click="onboarding.replay()">Show setup again</button>
         </SettingRow>
 
         <SettingsGroup id="keyboard-shortcuts" title="Keyboard shortcuts" data-keywords="keys hotkeys shortcut">

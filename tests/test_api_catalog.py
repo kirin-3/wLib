@@ -17,6 +17,9 @@ def setup_test_db(tmp_path, monkeypatch):
     monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "wlib.db"))
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
     init_db()
+    # Mark onboarding finished so these catalog tests exercise normal startup
+    # checks; the new-install hold has its own suite in test_onboarding_catalog_hold.py.
+    update_setting("onboarding", "done")
 
 
 @pytest.fixture
@@ -118,6 +121,8 @@ def test_startup_with_unreachable_catalog_does_not_block(monkeypatch, tmp_path):
     monkeypatch.setenv(
         "WLIB_CATALOG_MANIFEST_URL", "http://127.0.0.1:9/v1/manifest.json"
     )
+    init_db()
+    update_setting("onboarding", "done")
     began = time.monotonic()
     api = Api()
     assert time.monotonic() - began < 5

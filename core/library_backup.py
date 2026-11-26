@@ -30,6 +30,7 @@ from core import database, gamescope, lewdcorner
 from core.database import (
     DEFAULT_PLAY_STATUS,
     GENERAL_SETTINGS_KEYS,
+    ONBOARDING_FINISHED_STATES,
     RPGMAKER_LINUX_RUNNER_SETTING,
     get_all_games,
     get_connection,
@@ -2169,6 +2170,30 @@ def _import_setting_groups(
             if key not in group:
                 continue
             raw_value = group.get(key)
+            if key == "onboarding":
+                # One-way merge: an unfinished device adopts done/skipped, and a
+                # finished device keeps its state across overwrite, fill-missing,
+                # sync and mirror.
+                incoming_state = (
+                    raw_value.strip().lower() if isinstance(raw_value, str) else ""
+                )
+                if incoming_state not in ONBOARDING_FINISHED_STATES:
+                    continue
+                row = cast(
+                    tuple[object] | None,
+                    cursor.execute(
+                        "SELECT value FROM settings WHERE key = ?", (key,)
+                    ).fetchone(),
+                )
+                local_state = str(row[0] or "").strip().lower() if row else ""
+                if local_state in ONBOARDING_FINISHED_STATES:
+                    continue
+                _ = cursor.execute(
+                    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
+                    (key, incoming_state, incoming_state),
+                )
+                updated += 1
+                continue
             # Exports write "" for a setting that was never set there, so a
             # blank value means "default", not "off" or "no path". Only a
             # mirror makes this device match; otherwise keep the local value.

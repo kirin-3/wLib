@@ -326,8 +326,14 @@ class ApiBase:
         self.storage.set_action_measurer(
             lambda budget: measure_all_actions(self._storage_cleanup_context(), budget)
         )
+        self._onboarding_lock: threading.Lock = threading.Lock()
+        self._catalog_held: bool = (
+            self._catalog_enabled()
+            and not self._onboarding_finished()
+            and not self.catalog.installed_sha256()
+        )
         if self._catalog_enabled():
-            _ = self.catalog.start_background()
+            _ = self._start_catalog()
 
     def _load_webview_module(self) -> WebviewModule | None:
         import importlib
@@ -3123,6 +3129,36 @@ class ApiBase:
             return get_setting("catalog_enabled") != "0"
         except sqlite3.Error:
             return True
+
+    def _onboarding_finished(self) -> bool:
+        import sqlite3
+
+        from core.database import ONBOARDING_FINISHED_STATES, get_setting
+
+        try:
+            value = str(get_setting("onboarding") or "").strip().lower()
+            return value in ONBOARDING_FINISHED_STATES
+        except sqlite3.Error:
+            return False
+
+    def _start_catalog(self, *, force: bool = False) -> bool:
+        # Gate every catalog download trigger (startup, save_settings off->on,
+        # check_catalog_now) so a new install never contacts the catalog server
+        # until the onboarding catalog step or skip/finish releases the hold.
+        with self._onboarding_lock:
+            if self._catalog_held:
+                return False
+        if not self._catalog_enabled():
+            return False
+        return self.catalog.start_background(force=force)
+
+    def _release_catalog_hold(self) -> tuple[bool, bool]:
+        with self._onboarding_lock:
+            was_held = self._catalog_held
+            self._catalog_held = False
+        if not was_held:
+            return False, False
+        return True, self._start_catalog(force=True)
 
     def _storage_cleanup_context(self) -> CleanupContext:
         from core.database import (

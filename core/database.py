@@ -88,7 +88,10 @@ GENERAL_SETTINGS_KEYS = (
     "torrent_seed_hours",
     # True once the F95 account import gave its two list tags default colors.
     "f95_list_tag_colors_seeded",
+    "onboarding",
 )
+ONBOARDING_FINISHED_STATES = frozenset({"done", "skipped"})
+ONBOARDING_STEPS = ("welcome", "catalog", "lc", "import", "extension", "done")
 SAVE_BACKUP_KEEP_MAX = 99
 TAG_COLOR_SWATCHES = (
     "red",

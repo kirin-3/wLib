@@ -291,6 +291,8 @@ Download queue settings (`core/downloads/queue_settings.py`) are device-local an
 
 `save_backup_keep` stores how many save backups to keep per game: `all` or `1`–`99` (default missing, meaning keep all). `get_save_backup_keep()` returns `None` for `all`, missing or invalid values and an int otherwise. It is in `GENERAL_SETTINGS_KEYS`, so backups and sync carry it and the settings triggers watch it.
 
+`onboarding` stores the first-run setup state (`""` while unfinished, `"done"` or `"skipped"` once finished) and sits in `GENERAL_SETTINGS_KEYS`, so exports and sync carry it and the settings triggers watch it. `_import_setting_groups` applies a one-way rule for `onboarding`: an incoming `"done"` or `"skipped"` marks an unfinished device as finished, while a finished device keeps its local value across overwrite, fill-missing, sync, and mirror imports (blank or invalid values are ignored). `onboarding_step` (`welcome|catalog|lc|import|extension|done`) is device-local and excluded from exports and sync. While `onboarding` is unfinished on a new install with no installed catalog copy, `ApiBase._start_catalog` holds catalog downloads until `release_catalog_hold()` or `finish_onboarding()` clears the hold.
+
 ## JSON Migration Backups
 
 wLib's import/export flow uses a semantic JSON file rather than copying `wlib.db` directly. This avoids WAL sidecar issues, schema drift, and local primary-key coupling when moving a library between machines.

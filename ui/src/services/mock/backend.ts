@@ -22,7 +22,7 @@ import { MockRpgmPlugins } from "./rpgmPlugins";
 import { MockWebMedia } from "./webMedia";
 import { MockF95Account } from "./f95Account";
 import { MockStorage } from "./storage";
-import { DEFAULT_MOCK_SETTINGS, isActionableVersion, isSaveBackupKeep, normalizeMockFilterPresets, normalizeMockSettings, readMockSettings, writeMockSettings } from "./settings";
+import { DEFAULT_MOCK_SETTINGS, isActionableVersion, isMockOnboardingStep, isSaveBackupKeep, normalizeMockFilterPresets, normalizeMockSettings, readMockOnboarding, readMockSettings, writeMockOnboarding, writeMockSettings } from "./settings";
 
 // Browser preview: gamescope reads as missing unless this key is "installed".
 // "wlib-mock-umu" = "ready": umu-launcher is installed and the Steam Linux Runtime is prepared.
@@ -829,7 +829,8 @@ export class MockBackend {
         if (method === "check_catalog_now") {
           localStorage.setItem("wlib-mock-catalog-checked", new Date().toISOString().replace(/\.\d+Z$/, "Z"));
         }
-        const installed = enabled;
+        const installedOverride = localStorage.getItem("wlib-mock-catalog-installed");
+        const installed = installedOverride === "0" ? false : enabled;
         return {
           success: true,
           mock: true,
@@ -842,6 +843,46 @@ export class MockBackend {
           checking: false,
           ...(method === "check_catalog_now" ? { started: true } : {}),
         };
+      }
+      case "get_onboarding_state": {
+        const state = readMockOnboarding();
+        return {
+          success: true,
+          mock: true,
+          status: state.status,
+          step: state.step,
+          catalog_held: state.catalog_held,
+        };
+      }
+      case "set_onboarding_step": {
+        const step = args[0];
+        if (!isMockOnboardingStep(step)) {
+          return { success: false, error: "Invalid onboarding step" };
+        }
+        const state = readMockOnboarding();
+        writeMockOnboarding({ ...state, step });
+        return { success: true, mock: true, step };
+      }
+      case "finish_onboarding": {
+        const status = args[0];
+        if (status !== "done" && status !== "skipped") {
+          return { success: false, error: "Invalid onboarding status" };
+        }
+        const state = readMockOnboarding();
+        const catalogStarted = state.catalog_held && readMockSettings().catalog_enabled;
+        writeMockOnboarding({ ...state, status, step: "", catalog_held: false });
+        return { success: true, mock: true, status, catalog_started: catalogStarted };
+      }
+      case "release_catalog_hold": {
+        const state = readMockOnboarding();
+        const released = state.catalog_held;
+        const started = released && readMockSettings().catalog_enabled;
+        writeMockOnboarding({
+          ...state,
+          catalog_held: false,
+          release_calls: state.release_calls + 1,
+        });
+        return { success: true, mock: true, released, started };
       }
       case "get_diagnostics":
         return { success: true, basic: MOCK_DIAGNOSTICS, report_basic: MOCK_DIAGNOSTICS_REPORT };
