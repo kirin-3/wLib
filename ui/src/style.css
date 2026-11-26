@@ -66,6 +66,8 @@ html { zoom: var(--ui-scale, 1); }
   --brand-deep: #5a3968;
   --brand-glow: color-mix(in srgb, var(--brand) 15%, transparent);
   --brand-glow-strong: color-mix(in srgb, var(--brand) 30%, transparent);
+  /* The accent as text on its own glow (the active app nav link): 4.5:1 or more for every accent preset. */
+  --brand-text: color-mix(in srgb, var(--brand) 85%, #fff);
 
   --bg-base: #0f0f14;
   --bg-surface: #1a1a22;
@@ -80,6 +82,8 @@ html { zoom: var(--ui-scale, 1); }
   --text-primary: #e8ecf0;
   --text-secondary: #9ca3af;
   --text-muted: #8b8b9c;
+  /* Placeholder text: 4.5:1 or more on raised, overlay and inset inputs, and still clearly lighter than typed text. */
+  --text-placeholder: #9a9aab;
   --text-inverse: #0f0f14;
 
   --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
@@ -110,7 +114,23 @@ html { zoom: var(--ui-scale, 1); }
   --danger-border: rgba(239, 68, 68, 0.35);
   --danger-text: #fca5a5;
   --warning-text: #facc15;
-  --toggle-active: #2f6a49;
+  --warning-bg: rgba(234, 179, 8, 0.14);
+  --warning-border: rgba(250, 204, 21, 0.32);
+  /* Chart categories (Storage page). Five hue families plus a neutral, checked
+     as all pairs (any two can sit side by side) on --bg-surface with the dataviz
+     palette validator: protan/deutan ΔE 9.6 or more, normal-vision ΔE 18.5 or more
+     (with the neutral), 3:1 or more on the surface. Games keeps the default magenta whatever the
+     accent preset, so it never takes the colour of another family. */
+  --chart-games: #d152d1;
+  --chart-downloads: #358fff;
+  --chart-wine: #ca5600;
+  --chart-game-data: #05b06d;
+  --chart-app-data: #725a9a;
+  --chart-other: #a8a8b8;
+  /* Switch colors. Each reaches 3:1 on surface, raised and overlay cards (WCAG 1.4.11),
+     and the white knob reaches 3:1 on the on color. Off: 3.99:1 on surface. On: 3.85:1 on surface. */
+  --toggle-active: #3a8559;
+  --toggle-off: #78788a;
   --play: #2f6a49;
   --on-play: #f8fafc;
 
@@ -171,6 +191,7 @@ html { zoom: var(--ui-scale, 1); }
   --brand-deep: #7a4f8a;
   --brand-glow: color-mix(in srgb, var(--brand) 10%, transparent);
   --brand-glow-strong: color-mix(in srgb, var(--brand) 20%, transparent);
+  --brand-text: color-mix(in srgb, var(--brand) 85%, #000);
 
   --bg-base: #f3f4f6;
   --bg-surface: #ffffff;
@@ -185,6 +206,7 @@ html { zoom: var(--ui-scale, 1); }
   --text-primary: #1a1a2e;
   --text-secondary: #4b5563;
   --text-muted: #676776;
+  --text-placeholder: #5c5c6b;
   --text-inverse: #ffffff;
 
   --shadow-card: 0 1px 4px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
@@ -211,7 +233,19 @@ html { zoom: var(--ui-scale, 1); }
   --danger-border: rgba(220, 38, 38, 0.3);
   --danger-text: #b91c1c;
   --warning-text: #854d0e;
+  --warning-bg: rgba(234, 179, 8, 0.14);
+  --warning-border: rgba(161, 98, 7, 0.3);
+  /* Chart categories: the same hues stepped for white (all pairs with the
+     neutral: CVD ΔE 8.2 or more, normal-vision ΔE 15.8 or more, 3:1 or more on surface). */
+  --chart-games: #b93ab9;
+  --chart-downloads: #117aec;
+  --chart-wine: #ab4e17;
+  --chart-game-data: #20a76a;
+  --chart-app-data: #5f3695;
+  --chart-other: #7a7a88;
+  /* Off: 4.22:1 on surface, 3.46:1 on the inset track behind the knob. On: 4.54:1 on surface. */
   --toggle-active: #2f855a;
+  --toggle-off: #7a7a8a;
   --play: #2f855a;
   --on-play: #ffffff;
 
@@ -243,6 +277,17 @@ html { zoom: var(--ui-scale, 1); }
   --status-archived-bg: rgba(239, 68, 68, 0.12);
   --status-archived-border: rgba(220, 38, 38, 0.24);
   --status-archived-text: #b91c1c;
+}
+
+/* Every placeholder uses the placeholder token. The Tailwind default (half the
+   text color) is about 3.2:1 on light inputs. In a layer, so a component rule
+   for one input still wins. */
+@layer base {
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--text-placeholder);
+    opacity: 1;
+  }
 }
 
 /* ========== ACCENT PRESETS ========== */
@@ -391,10 +436,10 @@ html[data-cover-animation="hover"] .update-entry:focus-visible .cover-anim {
   display: inline-block;
   width: 2.75rem;
   height: 1.5rem;
-  border: 1px solid var(--border-hover);
+  border: 1px solid var(--toggle-off);
   border-radius: 9999px;
   background: var(--bg-inset);
-  transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, opacity var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, opacity var(--motion-fast) ease;
 }
 
 .ui-toggle::after {
@@ -404,7 +449,8 @@ html[data-cover-animation="hover"] .update-entry:focus-visible .cover-anim {
   left: 1px;
   width: 1.125rem;
   height: 1.125rem;
-  border: 1px solid rgba(15, 23, 42, 0.16);
+  /* The off knob gets the off color as its edge, so it shows on the light inset track. */
+  border: 1px solid var(--toggle-off);
   border-radius: 9999px;
   background: #ffffff;
   transition: transform var(--motion-fast) ease, border-color var(--motion-fast) ease;
@@ -420,12 +466,19 @@ html[data-cover-animation="hover"] .update-entry:focus-visible .cover-anim {
   border-color: rgba(255, 255, 255, 0.28);
 }
 
+/* The input is visually hidden, so the track carries the keyboard focus ring. */
 .peer:focus-visible + .ui-toggle {
-  box-shadow: 0 0 0 3px var(--brand-glow);
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
 }
 
+/* A disabled switch is faded and not clickable. The row text keeps its own color. */
 .peer:disabled + .ui-toggle {
   opacity: 0.55;
+  cursor: not-allowed;
+}
+label:has(.peer:disabled + .ui-toggle) {
+  cursor: not-allowed;
 }
 
 .allow-text-selection,
@@ -465,6 +518,14 @@ html[data-cover-animation="hover"] .update-entry:focus-visible .cover-anim {
   display: flex;
   align-items: center;
   gap: 0.625rem;
+}
+
+/* A group heading inside a panel: one step above field labels. */
+.detail-group-heading {
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.25rem;
+  color: var(--text-primary);
 }
 
 .ui-section-icon {
@@ -508,6 +569,8 @@ html[data-cover-animation="hover"] .update-entry:focus-visible .cover-anim {
 .space-y-4 > * { --row-gap: 1rem; }
 .space-y-5 > * { --row-gap: 1.25rem; }
 
+/* The Settings button set. Secondary is the default; add one modifier for the other kinds:
+   --primary (the main action of a row), --danger (removes or deletes), --link (a text action). */
 .ui-card-btn {
   display: inline-flex;
   align-items: center;
@@ -520,36 +583,116 @@ html[data-cover-animation="hover"] .update-entry:focus-visible .cover-anim {
   border-radius: 0.5rem;
   font-size: 0.75rem;
   font-weight: 600;
-  transition: background-color var(--motion-fast) ease, filter var(--motion-fast) ease;
+  line-height: 1rem;
+  transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, color var(--motion-fast) ease, filter var(--motion-fast) ease;
 }
 .ui-card-btn:hover:not(:disabled) { background: var(--border-hover); }
-.ui-card-btn:disabled { opacity: 0.5; cursor: default; }
 .ui-card-btn--primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
 .ui-card-btn--primary:hover:not(:disabled) { background: var(--brand); filter: brightness(1.08); }
+.ui-card-btn--danger { background: transparent; border-color: var(--danger-border); color: var(--danger-text); }
+.ui-card-btn--danger:hover:not(:disabled) { background: var(--danger-bg); }
+.ui-card-btn--link {
+  background: transparent;
+  border-color: transparent;
+  color: var(--brand);
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ui-card-btn--link:hover:not(:disabled) { background: transparent; color: var(--text-primary); }
 
-/* A disabled filled (primary or danger) button turns grey. A faded brand
-   color still looks clickable on a dark surface. !important beats the
-   inline background and the per-dialog opacity rules. */
+/* A disabled button of any kind is flat and gets a dashed edge, like a disabled field.
+   The label stays readable (muted text on the raised fill is 4.5:1 or more in both themes);
+   it never fades. The edge is an outline, so it adds no size. A blocked button that stays
+   focusable (aria-disabled, with its reason described) looks the same. */
+.ui-card-btn:disabled,
+.ui-card-btn[aria-disabled="true"],
 .ui-btn-solid:disabled {
-  background: var(--bg-overlay) !important;
+  background: var(--bg-raised) !important;
   color: var(--text-muted) !important;
-  box-shadow: inset 0 0 0 1px var(--border-hover) !important;
   border-color: transparent !important;
+  box-shadow: none !important;
+  outline: 1px dashed var(--border-hover);
+  outline-offset: -1px;
   opacity: 1 !important;
   filter: none !important;
   cursor: not-allowed;
 }
+.ui-card-btn--link:disabled,
+.ui-card-btn--link[aria-disabled="true"] {
+  background: transparent !important;
+  outline: none;
+  text-decoration: none;
+}
 
-.ui-card-select {
+/* The one field style for Settings text fields, number fields and selects. */
+.settings-input {
+  /* A field beside a button in a flex row may shrink in a narrow window instead of pushing the button out. */
+  min-width: 0;
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8125rem;
+  padding: 0.5rem 0.875rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
   color: var(--text-primary);
+  transition: border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, background-color var(--motion-fast) ease, color var(--motion-fast) ease;
 }
-.ui-card-select:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-glow); }
-.ui-card-select:disabled { opacity: 0.5; }
+.settings-input::placeholder { color: var(--text-placeholder); }
+.settings-input:focus {
+  outline: none;
+  border-color: var(--brand);
+  /* With the border: a solid 2px ring in the accent color, 4.2:1 or more on the card. */
+  box-shadow: 0 0 0 1px var(--brand);
+}
+/* A disabled field loses its fill and gets a dashed edge, but keeps readable text (no fade). */
+.settings-input:disabled {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--border-hover);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+/* The label of one field inside a Settings row (for example "Speed limit"). */
+.settings-field-label {
+  display: block;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+fieldset:disabled .settings-field-label { color: var(--text-muted); }
+
+/* "Saving…", "Saved" and save errors. One look for fields that save on blur and switches that save at once. */
+.save-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  min-height: 1rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+/* Keeps the width of "Saving…" even when empty, so the status never pushes the control next to it. */
+.save-status-slot { min-width: 4.25rem; }
+/* In a phone-width window an idle slot keeps no width, so a label beside a switch is not squeezed to a word per line. */
+@media (max-width: 30rem) { .save-status-slot:empty { min-width: 0; } }
+.save-status > * { animation: save-status-in var(--motion-fast) ease-out; }
+.save-status--saved { color: var(--success-text); }
+.save-status-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--danger-text);
+  overflow-wrap: anywhere;
+}
+@keyframes save-status-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .save-status > * { animation: none; } }
+.motion-off .save-status > * { animation: none; }
 
 .ui-callout {
   display: flex;
@@ -701,32 +844,37 @@ html[data-cover-animation="hover"] .update-entry:focus-visible .cover-anim {
   color: var(--text-muted);
 }
 
-/* Shared sandbox switches in Settings and Game Detail. */
+/* Native role="switch" checkboxes in Settings and Game Detail. They look the
+   same as .ui-toggle (track, knob, on color and disabled fade). */
 .sandbox-switch {
   appearance: none;
   flex-shrink: 0;
-  width: 42px;
-  height: 24px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-raised);
+  width: 2.75rem;
+  height: 1.5rem;
+  margin: 0;
+  border: 1px solid var(--toggle-off);
+  border-radius: 9999px;
+  background: var(--bg-inset);
   position: relative;
   cursor: pointer;
+  transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, opacity var(--motion-fast) ease;
 }
 .sandbox-switch::before {
   content: "";
   position: absolute;
-  width: 18px;
-  height: 18px;
-  top: 2px;
-  left: 2px;
-  border-radius: 50%;
-  background: var(--text-secondary);
+  width: 1.125rem;
+  height: 1.125rem;
+  top: 1px;
+  left: 1px;
+  border: 1px solid var(--toggle-off);
+  border-radius: 9999px;
+  background: #ffffff;
+  transition: transform var(--motion-fast) ease, border-color var(--motion-fast) ease;
 }
-.sandbox-switch:checked { background: var(--brand); }
-.sandbox-switch:checked::before { transform: translateX(18px); background: #fff; }
+.sandbox-switch:checked { border-color: var(--toggle-active); background: var(--toggle-active); }
+.sandbox-switch:checked::before { transform: translateX(1.25rem); border-color: rgba(255, 255, 255, 0.28); }
 .sandbox-switch:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
-.sandbox-switch:disabled { opacity: .45; cursor: default; }
+.sandbox-switch:disabled { opacity: .55; cursor: not-allowed; }
 
 /* Controller focus is independent of browser :focus-visible heuristics. */
 html[data-input="controller"] :focus { outline: 3px solid var(--brand) !important; outline-offset: 3px; }

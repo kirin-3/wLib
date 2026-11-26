@@ -6,6 +6,7 @@ import { ref, shallowRef } from "vue";
 import {
   handleModalKeydown,
   modalStack,
+  rovingIndex,
   type ModalStackEntry,
 } from "./modalKeyboard.ts";
 
@@ -166,4 +167,15 @@ test("handleModalKeydown traps Tab key within the top modal", () => {
     globalThis.document = origDocument;
     modalStack.length = 0;
   }
+});
+
+test("rovingIndex wraps arrows and jumps with Home and End", () => {
+  assert.equal(rovingIndex("ArrowRight", 0, 5), 1);
+  assert.equal(rovingIndex("ArrowRight", 4, 5), 0);
+  assert.equal(rovingIndex("ArrowLeft", 0, 5), 4);
+  assert.equal(rovingIndex("ArrowLeft", 3, 5), 2);
+  assert.equal(rovingIndex("Home", 3, 5), 0);
+  assert.equal(rovingIndex("End", 1, 5), 4);
+  assert.equal(rovingIndex("Enter", 1, 5), null);
+  assert.equal(rovingIndex("ArrowRight", 0, 0), null);
 });

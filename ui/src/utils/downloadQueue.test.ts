@@ -9,6 +9,7 @@ import {
   addedNotice,
   chartPoints,
   clampLimitKib,
+  limitInMegabytes,
   downloadPollMs,
   moveOrder,
   runQueueCommand,
@@ -269,6 +270,15 @@ test("the speed limit field accepts whole KiB/s and 0 for none", () => {
   assert.equal(clampLimitKib(-5), 0);
   assert.equal(clampLimitKib("abc"), 0);
   assert.equal(clampLimitKib(1e12), 10_485_760);
+});
+
+test("a KiB/s limit also reads as MB/s", () => {
+  assert.equal(limitInMegabytes(0), "No limit");
+  assert.equal(limitInMegabytes(""), "No limit");
+  assert.equal(limitInMegabytes(1024), "1 MB/s");
+  assert.equal(limitInMegabytes(2560), "2.5 MB/s");
+  assert.equal(limitInMegabytes(64), "0.06 MB/s");
+  assert.equal(limitInMegabytes(20480), "20 MB/s");
 });
 
 test("the added notice says when the download waits for the game", () => {

@@ -36,6 +36,12 @@ const props = withDefaults(defineProps<{
   mainLabel?: string | undefined;
   mainTitle?: string | undefined;
   mainDisabled?: boolean | undefined;
+  /**
+   * Why the main button is disabled. When set, a disabled main button keeps
+   * keyboard focus (`aria-disabled`) and gets this text as its description,
+   * so keyboard and screen reader users can find out why.
+   */
+  mainDisabledReason?: string | undefined;
   /** Items are `menuitemradio` with `aria-checked`. */
   radio?: boolean;
   align?: "start" | "end";
@@ -55,6 +61,11 @@ function setItemRef(el: unknown, index: number) {
   if (el instanceof HTMLButtonElement) itemRefs[index] = el;
 }
 const menuId = useId();
+const mainBlocked = computed(() => !!props.mainDisabled && !!props.mainDisabledReason);
+function onMain() {
+  if (props.mainDisabled) return;
+  emit("main");
+}
 const disabledFlags = computed(() => props.items.map(item => !!item.disabled));
 // Consecutive items with the same group render under one heading.
 const sections = computed(() => {
@@ -179,11 +190,14 @@ defineExpose({ focus: () => toggleButton.value?.focus(), close: closeMenu });
       class="menu-button-trigger menu-button-main"
       :aria-label="mainLabel"
       :title="mainTitle"
-      :disabled="mainDisabled"
-      @click="emit('main')"
+      :disabled="mainDisabled && !mainBlocked"
+      :aria-disabled="mainBlocked || undefined"
+      :aria-describedby="mainBlocked ? `${menuId}-main-reason` : undefined"
+      @click="onMain"
     >
       <slot name="main" />
     </button>
+    <span v-if="split && mainBlocked" :id="`${menuId}-main-reason`" class="sr-only">{{ mainDisabledReason }}</span>
     <button
       ref="toggleButton"
       type="button"
@@ -254,8 +268,8 @@ defineExpose({ focus: () => toggleButton.value?.focus(), close: closeMenu });
   font-size: .75rem; font-weight: 500;
   transition: background-color .15s ease, border-color .15s ease, color .15s ease;
 }
-.menu-button-trigger:hover:not(:disabled) { background: var(--bg-overlay); border-color: var(--border-hover); }
-.menu-button-trigger:disabled { opacity: .6; cursor: not-allowed; }
+.menu-button-trigger:hover:not(:disabled, [aria-disabled="true"]) { background: var(--bg-overlay); border-color: var(--border-hover); }
+.menu-button-trigger:disabled, .menu-button-trigger[aria-disabled="true"] { opacity: .6; cursor: not-allowed; }
 .menu-button--split .menu-button-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .menu-button--split .menu-button-toggle { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; padding-inline: .5rem; }
 .menu-button-chevron { width: 1rem; height: 1rem; flex-shrink: 0; transition: transform .15s ease; }

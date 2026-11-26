@@ -95,3 +95,14 @@ export const notify = (
 };
 
 export const notifyError = (message: string, title = ""): number => notify(message, "error", title);
+
+const GENERIC_FAILURE = "Something went wrong. Try again.";
+
+/** The readable reason in a thrown value: no "Error:" prefix, no "[object Object]", never empty. */
+export const errorReason = (error: unknown, fallback = GENERIC_FAILURE): string => {
+  const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const text = raw.replace(/^(?:[A-Za-z]*Error:\s*)+/, "").trim();
+  if (!text || /^unknown error\.?$/i.test(text) || text === "[object Object]" || text === "undefined") return fallback;
+  const sentence = text.charAt(0).toUpperCase() + text.slice(1);
+  return /[.!?…]$/.test(sentence) ? sentence : `${sentence}.`;
+};

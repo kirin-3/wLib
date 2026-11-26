@@ -883,10 +883,11 @@ onUnmounted(() => {
 
     <!-- Main Content Area -->
     <main ref="mainRef" class="flex-1 overflow-y-auto relative">
+      <!-- Above every modal layer (z-50 to z-[200]) so a modal's backdrop never hides a toast. -->
       <transition-group
         :name="fadeTransitionName"
         tag="div"
-        class="allow-text-selection fixed bottom-5 right-5 z-[60] flex w-full max-w-sm flex-col gap-2"
+        class="allow-text-selection fixed bottom-5 right-5 z-[300] flex w-full max-w-sm flex-col gap-2"
       >
         <div
           v-for="toast in toasts"
@@ -1003,7 +1004,7 @@ onUnmounted(() => {
 }
 .nav-active {
   background: var(--brand-glow) !important;
-  color: var(--brand) !important;
+  color: var(--brand-text) !important;
   font-weight: 600;
 }
 

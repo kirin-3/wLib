@@ -481,6 +481,15 @@ export function clampLimitKib(value: unknown): number {
   return Math.min(MAX_LIMIT_KIB, Math.round(number));
 }
 
+/** A KiB/s limit in the MB/s that people know (1024 KiB/s = 1 MB/s). 0 or less is no limit. */
+export function limitInMegabytes(kib: unknown): string {
+  const value = typeof kib === "number" ? kib : Number(kib);
+  if (!Number.isFinite(value) || value <= 0) return "No limit";
+  const mb = value / 1024;
+  const text = mb >= 10 ? String(Math.round(mb)) : mb >= 0.1 ? mb.toFixed(1).replace(/\.0$/, "") : mb.toFixed(2);
+  return `${text} MB/s`;
+}
+
 /**
  * The queue order after moving one waiting download: `waiting` holds the
  * "Up next" rows in page order, `all` every job id in queue order.

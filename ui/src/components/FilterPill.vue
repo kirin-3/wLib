@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 // One filter pill. A click emits `activate`; the parent decides what it does
-// (the library toggles include, Discover cycles neutral -> include -> exclude).
+// (the Library and Discover toggle include).
 // With `excludable`, a "−" button shows on hover and keyboard focus, and
 // Alt+click or the minus key on the pill emit `exclude` too.
 // Other listeners and attributes, such as `data-tag` and the tag pill's
@@ -152,9 +152,20 @@ function onKeydown(event: KeyboardEvent): void {
   border-radius: 9999px;
   background: var(--tag-border);
 }
+/* The count is quieter than the label through a color token, not opacity,
+   so it keeps 4.5:1 on the pill in both themes. A colored pill (included
+   tag, excluded value) keeps its own text color. */
 .filter-pill-count {
-  opacity: 0.7;
+  color: var(--text-muted);
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
+}
+.filter-pill--include .filter-pill-count {
+  color: var(--text-secondary);
+}
+.filter-pill--include[data-tag-color] .filter-pill-count,
+.filter-pill--exclude .filter-pill-count {
+  color: inherit;
 }
 /* The exclude button sits on the pill's corner so showing it never moves the
    pills around it. Hidden (not only transparent) keeps it out of Tab and

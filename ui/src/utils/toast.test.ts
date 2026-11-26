@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { dismissToast, notify, toasts } from "./toast.ts";
+import { dismissToast, errorReason, notify, toasts } from "./toast.ts";
 
 test("action toasts keep their action until dismissed", () => {
   const before = toasts.length;
@@ -113,4 +113,14 @@ test("two Undo toasts with the same text both stay", async (context) => {
   notify("Removed", "success");
   assert.equal(toasts.length, before + 3);
   for (const toast of toasts.slice(before)) dismissToast(toast.id);
+});
+
+test("errorReason gives a readable sentence for any thrown value", () => {
+  assert.equal(errorReason(new Error("Error: disk is full")), "Disk is full.");
+  assert.equal(errorReason(new TypeError("network down")), "Network down.");
+  assert.equal(errorReason("TypeError: Failed to fetch"), "Failed to fetch.");
+  assert.equal(errorReason(new Error("Unknown error")), "Something went wrong. Try again.");
+  assert.equal(errorReason({}), "Something went wrong. Try again.");
+  assert.equal(errorReason(undefined, "Try again."), "Try again.");
+  assert.equal(errorReason(new Error("Saved nothing!")), "Saved nothing!");
 });
