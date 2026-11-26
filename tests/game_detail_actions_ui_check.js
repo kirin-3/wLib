@@ -7,7 +7,7 @@ async page => {
     localStorage.removeItem('wlib-library-view-state');
   });
   await page.reload();
-  await page.getByRole('checkbox', {name:'Action fixture. Press Enter for details.'}).press('Enter');
+  await page.getByRole('row', { name: 'Action fixture'}).press('Enter');
   const dialog = page.getByRole('dialog');
   const more = dialog.getByRole('button', {name:'More actions'});
   check(await dialog.locator('.footer-action').count() === 0, 'Footer must not contain Remove');
@@ -28,6 +28,6 @@ async page => {
   await more.click(); await dialog.getByRole('menuitem', {name:'Remove from library'}).click();
   await dialog.waitFor({state:'hidden'});
   await page.getByRole('button',{name:'Undo',exact:true}).click();
-  await page.getByRole('checkbox',{name:'Action fixture. Press Enter for details.'}).waitFor();
+  await page.getByRole('row', { name: 'Action fixture'}).waitFor();
   return 'PASS: actions menu, Escape, Back, removal and Undo';
 }

@@ -467,6 +467,33 @@ const useExtractedChecked = computed({
 
 <template>
   <div class="tools-tab space-y-4" :aria-busy="isBusy || loading">
+    <!-- The save editor sits first, right under the Saves section of the same tab. -->
+    <template v-if="hasSaveEditor">
+      <section class="tools-card space-y-3" aria-labelledby="tools-saveeditor-title">
+        <span id="tools-saveeditor-title" class="text-sm font-medium block" style="color: var(--text-primary)">Save editor</span>
+        <p v-if="saveSlotsError" role="alert" class="text-xs" style="color: var(--danger-text)">{{ saveSlotsError }}</p>
+        <p v-else-if="saveSlotsLoaded && saveSlots.length === 0" class="text-xs" style="color: var(--text-muted)">No save files were found. Save in the game first.</p>
+        <ul v-else class="space-y-1">
+          <li v-for="slot in saveSlots" :key="slot.file" class="flex items-center gap-3">
+            <div class="flex-1 min-w-0">
+              <p class="text-sm" style="color: var(--text-primary)">
+                Slot {{ slot.slot }}<span v-if="slot.format" class="text-xs" style="color: var(--text-muted)"> · {{ formatLabel(slot.format) }}</span><span v-if="slot.title" class="text-xs" style="color: var(--text-muted)"> · {{ slot.title }}</span>
+              </p>
+              <p class="text-xs" style="color: var(--text-muted)">
+                {{ formatSlotTime(slot.modified) }}<span v-if="slot.playtime"> · {{ slot.playtime }}</span>
+              </p>
+            </div>
+            <button type="button" class="tools-btn ui-action-btn" :disabled="isBusy" @click="openEditor(slot.file)">Open</button>
+          </li>
+        </ul>
+        <p class="text-xs" style="color: var(--text-muted)">
+          Edit gold, items, actors, switches and variables. Saving needs the game closed, and the saves are backed up first.
+        </p>
+      </section>
+      <RpgmSaveEditor v-model="editorOpen" :game-id="gameId" :file="editorFile" @saved="loadSaveSlots" />
+    </template>
+
+    <h3 class="detail-group-heading tools-group-heading">Game tools</h3>
     <div v-if="longRun" class="tools-card space-y-2" role="status">
       <div class="flex items-center justify-between gap-3">
         <p class="text-xs flex items-center gap-2 min-w-0" style="color: var(--text-secondary)">
@@ -557,7 +584,7 @@ const useExtractedChecked = computed({
               <input v-model="extractMode" type="radio" value="in_place" name="extract-mode" />
               Extract into the game folder
             </label>
-            <p v-if="extractMode === 'in_place'" class="text-[0.625rem] pl-5" style="color: var(--text-muted)">
+            <p v-if="extractMode === 'in_place'" class="text-xs pl-5" style="color: var(--text-muted)">
               Script files are left out and existing files are kept. Edited assets then override the archive.
             </p>
           </fieldset>
@@ -611,7 +638,7 @@ const useExtractedChecked = computed({
             {{ rpgm.encrypted }} encrypted files ({{ rpgm.images }} images, {{ rpgm.audio }} audio).
             {{ rpgm.missing === 0 ? "All have a decrypted copy." : `${rpgm.missing} still need a decrypted copy.` }}
           </p>
-          <p class="text-[0.625rem]" style="color: var(--text-muted)">
+          <p class="text-xs" style="color: var(--text-muted)">
             {{ keySourceLabel(rpgm.key_source) }}. Decrypted copies are written next to the originals, which are kept.
           </p>
           <div class="flex items-center gap-3">
@@ -695,7 +722,7 @@ const useExtractedChecked = computed({
               <input v-model="extractMode" type="radio" value="in_place" name="rgss-extract-mode" />
               Extract into the game folder
             </label>
-            <p v-if="extractMode === 'in_place'" class="text-[0.625rem] pl-5" style="color: var(--text-muted)">
+            <p v-if="extractMode === 'in_place'" class="text-xs pl-5" style="color: var(--text-muted)">
               Writes every file (including scripts and data) into the game folder without overwriting existing loose files. Archives are kept.
             </p>
           </fieldset>
@@ -782,36 +809,18 @@ const useExtractedChecked = computed({
       @busy="setPluginsBusy"
     />
 
-    <template v-if="hasSaveEditor">
-      <section class="tools-card space-y-3" aria-labelledby="tools-saveeditor-title">
-        <span id="tools-saveeditor-title" class="text-sm font-medium block" style="color: var(--text-primary)">Save editor</span>
-        <p v-if="saveSlotsError" role="alert" class="text-xs" style="color: var(--danger-text)">{{ saveSlotsError }}</p>
-        <p v-else-if="saveSlotsLoaded && saveSlots.length === 0" class="text-xs" style="color: var(--text-muted)">No save files were found. Save in the game first.</p>
-        <ul v-else class="space-y-1">
-          <li v-for="slot in saveSlots" :key="slot.file" class="flex items-center gap-3">
-            <div class="flex-1 min-w-0">
-              <p class="text-sm" style="color: var(--text-primary)">
-                Slot {{ slot.slot }}<span v-if="slot.format" class="text-xs" style="color: var(--text-muted)"> · {{ formatLabel(slot.format) }}</span><span v-if="slot.title" class="text-xs" style="color: var(--text-muted)"> · {{ slot.title }}</span>
-              </p>
-              <p class="text-xs" style="color: var(--text-muted)">
-                {{ formatSlotTime(slot.modified) }}<span v-if="slot.playtime"> · {{ slot.playtime }}</span>
-              </p>
-            </div>
-            <button type="button" class="tools-btn ui-action-btn" :disabled="isBusy" @click="openEditor(slot.file)">Open</button>
-          </li>
-        </ul>
-        <p class="text-[0.625rem]" style="color: var(--text-muted)">
-          Edit gold, items, actors, switches and variables. Saving needs the game closed, and the saves are backed up first.
-        </p>
-      </section>
-      <RpgmSaveEditor v-model="editorOpen" :game-id="gameId" :file="editorFile" @saved="loadSaveSlots" />
-    </template>
 
     <p v-if="lastResult && !longRun" role="status" class="text-xs" style="color: var(--text-secondary)">{{ lastResult }}</p>
   </div>
 </template>
 
 <style scoped>
+/* Splits the engine tools from the saves above them in the same tab. */
+.tools-group-heading {
+  border-top: 1px solid var(--border);
+  padding-top: 1.25rem;
+}
+
 .tools-card {
   background: var(--bg-raised);
   border: 1px solid var(--border);

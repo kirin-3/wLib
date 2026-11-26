@@ -38,8 +38,8 @@ const setOverride = async (tool: GameCompanionTool, visible: boolean | null, inp
 watch(() => props.gameId, () => { tools.value = []; void load(); }, { immediate: true });
 </script>
 <template>
-  <div class="space-y-2" aria-labelledby="game-custom-tools-heading">
-    <h3 id="game-custom-tools-heading" class="text-sm font-medium">Custom tools</h3>
+  <!-- The parent draws the "Custom tools" heading (id game-custom-tools-heading). -->
+  <div class="space-y-2" role="group" aria-labelledby="game-custom-tools-heading">
     <p v-if="loading" class="help text-xs">Loading tools…</p>
     <p v-else-if="!tools.length && !error" class="help text-sm">No custom tools yet. <button type="button" class="underline" @click="emit('settings')">Open Settings &gt; Custom tools</button></p>
     <fieldset :disabled="saving || loading" class="space-y-2">

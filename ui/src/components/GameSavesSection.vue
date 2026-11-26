@@ -196,7 +196,7 @@ const busyText = computed(() => {
 <template>
   <div class="saves-section" :aria-busy="busy !== '' || loading">
     <div class="flex items-center justify-between mb-3">
-      <h3 class="saves-label !mb-0">Saves</h3>
+      <h3 class="detail-group-heading">Saves</h3>
       <button
         type="button"
         class="saves-btn ui-action-btn !py-1 !text-xs disabled:opacity-50"
@@ -242,17 +242,17 @@ const busyText = computed(() => {
                 {{ entry.description }}
                 <span
                   v-if="entry.path === saves.effective"
-                  class="ml-1 text-[0.625rem]"
+                  class="ml-1 text-[0.6875rem]"
                   style="color: var(--brand)"
                   >In use</span
                 >
               </p>
-              <p class="truncate text-[0.625rem] font-mono" style="color: var(--text-muted)" :title="entry.path">
+              <p class="truncate text-[0.6875rem] font-mono" style="color: var(--text-muted)" :title="entry.path">
                 {{ entry.path }}
               </p>
             </div>
             <span
-              class="text-[0.625rem] px-1.5 py-0.5 rounded shrink-0"
+              class="text-[0.6875rem] px-1.5 py-0.5 rounded shrink-0"
               style="background: var(--bg-surface); color: var(--text-muted); border: 1px solid var(--border)"
               >{{ entry.type }}</span
             >
@@ -274,7 +274,7 @@ const busyText = computed(() => {
             </button>
           </li>
         </ul>
-        <p v-if="saves.detected.some((entry) => !entry.eligible)" class="text-[0.625rem] italic" style="color: var(--text-muted)">
+        <p v-if="saves.detected.some((entry) => !entry.eligible)" class="text-xs italic" style="color: var(--text-muted)">
           The game's own folder is only listed as a lead: choose "Use this" to treat it as the saves folder.
         </p>
       </template>
@@ -364,7 +364,7 @@ const busyText = computed(() => {
             </button>
           </li>
         </ul>
-        <p class="text-[0.625rem] mt-2" style="color: var(--text-muted)">
+        <p class="text-xs mt-2" style="color: var(--text-muted)">
           {{ keepLabel }} Change this in Settings. Restore and Import add to your current saves and back them up first.
         </p>
       </div>

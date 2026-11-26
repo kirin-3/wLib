@@ -32,7 +32,7 @@ async (page) => {
     await page.goto(url.toString());
     await page.reload();
 
-    const card = () => page.getByRole("checkbox", { name: /^Aurora(?: .*)?\. Press Enter for details\.$/ });
+    const card = () => page.getByRole("row", { name: /^Aurora(?: .*)?$/ });
     const openAurora = async () => {
       const locator = card();
       await locator.waitFor({ timeout: 5000 }).catch(async () => {
@@ -157,7 +157,7 @@ async (page) => {
       await dialog.getByRole("button", { name: "Save changes", exact: true }).isVisible(),
       "A failed collection save must leave Save available for a retry",
     );
-    check(await dialog.getByText("Unsaved changes", { exact: true }).isVisible(), "The failed collection change must stay unsaved");
+    check(await dialog.getByText("Unsaved changes in collections", { exact: true }).isVisible(), "The failed collection change must stay unsaved");
     await page.evaluate(() => { delete window.pywebview; });
     await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
     await dialog.waitFor({ state: "hidden" });

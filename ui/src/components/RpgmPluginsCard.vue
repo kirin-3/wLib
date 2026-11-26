@@ -258,7 +258,7 @@ const switchLabel = (entry: RpgmPluginEntry): string =>
         </template>
       </template>
 
-      <p class="text-[0.625rem]" style="color: var(--text-muted)">
+      <p class="text-xs" style="color: var(--text-muted)">
         A backup, <code>js/plugins.js.wlib-backup</code>, is made before the first change. Checks cover missing files and
         declared dependencies (MZ only); a plugin can still need another without saying so. A game update replaces the
         list and does not keep plugin changes.

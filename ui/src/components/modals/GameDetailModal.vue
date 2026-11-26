@@ -17,6 +17,7 @@ import type { LocaleEmulatorStatus, SandboxStatus } from "../../services/api";
 import GameCompanionTools from "../GameCompanionTools.vue";
 import TagColorPicker from "../TagColorPicker.vue";
 import { colorForTag, loadTagColors } from "../../utils/tagColors";
+import { pendingAreas, unsavedSummary, type PendingArea, type PendingField } from "../../utils/gameDetailPending";
 import {
   IconBookFilled,
   IconCheck,
@@ -33,6 +34,7 @@ import {
   IconRefresh,
   IconStarFilled,
   IconHeartFilled,
+  IconHistory,
   IconDots,
   IconX,
   IconDeviceGamepad2Filled,
@@ -49,7 +51,7 @@ import MenuButton, { type MenuButtonItem } from "../MenuButton.vue";
 import {useUpdateDownloads} from "../../composables/useUpdateDownloads";
 import { gameDownloadStatus, isUnfinished } from "../../utils/downloadQueue";
 const updateDownloads = useUpdateDownloads();
-import { useModalKeyboard } from "../../utils/modalKeyboard";
+import { rovingIndex, useModalKeyboard } from "../../utils/modalKeyboard";
 import ScreenshotLightbox from "../ScreenshotLightbox.vue";
 import { displayScreenshots, screenshotUrls, type ScreenshotUrls } from "../../utils/screenshots";
 import { defaultTargetLabel, hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion, weightedRating } from "../../utils/libraryGames";
@@ -258,9 +260,15 @@ const savingSkip = ref(false);
 const engineMenuOpen = ref(false);
 const baseTabs = ["Overview", "Journal", "Launch", "Info", "Notes"] as const;
 type DetailTab = (typeof baseTabs)[number] | "Tools";
-// "Tools" exists only for games whose folder is a supported engine.
+// The "Tools" tab holds save backups for every library game, so it is shown
+// as "Saves". A game whose folder is a supported engine also gets the save
+// editor and the engine tools there, and the tab is "Saves & tools".
 const toolEngine = ref<GameToolEngine>("");
-const detailTabs = computed<DetailTab[]>(() => (toolEngine.value ? [...baseTabs, "Tools"] : [...baseTabs]));
+const detailTabs = computed<DetailTab[]>(() =>
+  typeof props.game?.id === "number" ? [...baseTabs, "Tools"] : [...baseTabs],
+);
+const tabLabel = (tab: DetailTab): string =>
+  tab === "Tools" ? (toolEngine.value ? "Saves & tools" : "Saves") : tab;
 const activeTab = ref<DetailTab>("Overview");
 const notes = ref("");
 const noteLinks = ref<NoteLink[]>([]);
@@ -459,6 +467,61 @@ const showWineProtonControls = computed(
 const hideWineControlsForAuto = computed(
   () => !wineControlsVisibility.value.showWineControls,
 );
+const showCheatEngineRow = computed(
+  () => platformCapabilities.value.cheat_engine_injection && !isNativeLaunchMode.value && !hideWineControlsForAuto.value,
+);
+// Help for the selected runtime mode only; the warnings below the select stay as they are.
+const runtimeModeHint = computed(() => {
+  if (platformCapabilities.value.platform === "windows")
+    return launchMode.value === "auto" ? "Auto Detect launches Windows games directly without Wine or Proton." : "";
+  if (launchMode.value === "native") return "Linux Native runs the selected file directly.";
+  if (launchMode.value === "rpgmaker_linux") return "RPGMaker Linux uses the external native-port runner when installed.";
+  return "";
+});
+// Launch > Advanced is collapsed by default. It lists the options in it that
+// are not at their default, and it opens when there is one, so no active
+// option is hidden.
+const advancedActive = computed<string[]>(() => {
+  const caps = platformCapabilities.value;
+  const items: string[] = [];
+  if (caps.platform === "linux") {
+    for (const tool of ["gamemode", "mangohud", "gamescope"] as const) {
+      const value = toolOverrides[tool].value;
+      if (value !== "default") items.push(`${performanceToolName(tool)} ${value}`);
+    }
+    if (gamescopeOn.value && (gamescopeResolution.value.trim() || gamescopeScaler.value || gamescopeFilter.value || gamescopeArgs.value.trim()))
+      items.push("Gamescope options");
+  }
+  if (caps.japanese_locale && runJapaneseLocale.value) items.push("Japanese locale");
+  if (caps.wayland && runWayland.value) items.push("Wayland mode");
+  if (showCheatEngineRow.value && autoInjectCe.value) items.push("Cheat Engine");
+  return items;
+});
+const hasAdvancedLaunchOptions = computed(() => {
+  const caps = platformCapabilities.value;
+  return caps.platform === "linux" || caps.japanese_locale || caps.wayland || showCheatEngineRow.value;
+});
+const advancedOpen = ref(false);
+// Until the user opens, closes or edits Advanced, it follows the loaded
+// values: open when one is not at default. Values load after the window opens,
+// so this also corrects the state that the previous game left.
+const advancedTouched = ref(false);
+watch(
+  () => [isOpen.value, props.game?.id, advancedActive.value.length] as const,
+  ([open, id, count], previous) => {
+    const [wasOpen, previousId, previousCount] = previous ?? [false, undefined, 0];
+    if (open && (!wasOpen || id !== previousId)) advancedTouched.value = false;
+    if (!advancedTouched.value) advancedOpen.value = count > 0;
+    else if (count > 0 && previousCount === 0) advancedOpen.value = true;
+  },
+  { immediate: true },
+);
+const onAdvancedToggle = (event: Event) => {
+  const open = (event.target as HTMLDetailsElement).open;
+  // A toggle that Vue caused already matches advancedOpen; any other is the user's.
+  if (open !== advancedOpen.value) advancedTouched.value = true;
+  advancedOpen.value = open;
+};
 const launchModeOptions = computed(() =>
   getLaunchModeOptions(
     platformCapabilities.value,
@@ -477,15 +540,6 @@ const launchModeUnavailableOnPlatform = computed(
   () => !platformCapabilities.value.launch_modes.includes(launchMode.value),
 );
 
-const averagePersonalRating = computed(() => {
-  const sum =
-    ratingGraphics.value +
-    ratingStory.value +
-    ratingFappability.value +
-    ratingGameplay.value;
-  const avg = sum / 4;
-  return avg > 0 ? avg.toFixed(1) : "—";
-});
 
 // The footer Play launches the primary executable, so it needs a path to launch.
 const isCurrentlyWishlisted = computed(() => !exePath.value.trim());
@@ -660,13 +714,6 @@ const summaryItems = computed(() => [
     showStar: !!pageRating.value,
   },
   {
-    label: "Your rating",
-    value: averagePersonalRating.value === "—" ? "Not rated" : `${averagePersonalRating.value}/5`,
-    subtext: "",
-    accent: averagePersonalRating.value === "—" ? "" : "color: var(--rating-accent)",
-    showStar: averagePersonalRating.value !== "—",
-  },
-  {
     label: "Playtime",
     value: formatPlaytime(props.game?.playtime_seconds),
     subtext: "",
@@ -691,9 +738,9 @@ const ratingCategories = [
 
 // Launch and info fields save explicitly; Overview fields save on click.
 // Object keys keep the dirty-check string stable and let one field's baseline
-// be patched without wiping the dirty state of the others.
-const formSnapshot = (): string =>
-  JSON.stringify({
+// be patched without wiping the dirty state of the others. The typed keys keep
+// this list and the tab map in gameDetailPending.ts the same.
+const formFields = (): Record<PendingField, unknown> => ({
     gamemode: gamemode.value,
     mangohud: mangohud.value,
     gamescope: gamescope.value,
@@ -731,6 +778,7 @@ const formSnapshot = (): string =>
     progress: notes.value,
     note_links: noteLinks.value,
   });
+const formSnapshot = (): string => JSON.stringify(formFields());
 const savedSnapshot = ref("");
 const quickFields = (): Record<string, unknown> => ({
   play_status: playStatus.value,
@@ -746,6 +794,29 @@ const hasUnsavedChanges = computed(() =>
   formSnapshot() !== savedSnapshot.value ||
   JSON.stringify(quickFields()) !== JSON.stringify(savedQuickFields.value),
 );
+// The tabs (and header collections) whose edits wait for Save changes.
+const unsavedAreas = computed<PendingArea[]>(() => {
+  let saved: Partial<Record<PendingField, unknown>> = {};
+  try {
+    saved = JSON.parse(savedSnapshot.value || "{}") as Partial<Record<PendingField, unknown>>;
+  } catch { /* An unreadable baseline marks every area. */ }
+  return pendingAreas(formFields(), saved);
+});
+const tabHasUnsaved = (tab: DetailTab): boolean => (unsavedAreas.value as string[]).includes(tab);
+const unsavedText = computed(() => unsavedSummary(unsavedAreas.value));
+
+// Ratings and tags save as they change. A short "Saved" replaces the hint
+// next to their heading, so the user sees that nothing waits for Save changes.
+type QuickArea = "ratings" | "tags";
+const quickSaved = ref<QuickArea | null>(null);
+let quickSavedTimer: ReturnType<typeof setTimeout> | undefined;
+const showQuickSaved = (area: QuickArea, gameId: number | undefined, res: UpdateGameResponse | undefined) => {
+  if (!res || res.success === false || typeof gameId !== "number" || !isCurrentGame(gameId)) return;
+  clearTimeout(quickSavedTimer);
+  quickSaved.value = area;
+  quickSavedTimer = setTimeout(() => { quickSaved.value = null; }, 2000);
+};
+onBeforeUnmount(() => clearTimeout(quickSavedTimer));
 
 watch(displayedCover, () => { coverImageFailed.value = false; });
 
@@ -1289,6 +1360,8 @@ const openWebPlayerExportsFolder = async () => {
 
 const close = () => {
   engineMenuOpen.value = false;
+  clearTimeout(quickSavedTimer);
+  quickSaved.value = null;
   newTag.value = "";
   activeTab.value = "Overview";
   notesEditing.value = false;
@@ -1303,12 +1376,16 @@ const close = () => {
   isOpen.value = false;
 };
 
-// User-initiated close (X, backdrop, Esc): don't drop unsaved form edits silently.
+// True when nothing waits for Save changes, or the user chose to discard it.
+const confirmDiscard = async (): Promise<boolean> =>
+  !hasUnsavedChanges.value ||
+  (await confirmAction({ title: "Discard changes", message: "Discard unsaved changes to this game?", confirmLabel: "Discard", danger: true }));
+
+// Every close that the user starts (X, backdrop, Esc, controller Back, the
+// More actions menu, another game): don't drop unsaved form edits silently.
 const requestClose = async (): Promise<boolean> => {
   if (saving.value || deleting.value) return false;
-  if (hasUnsavedChanges.value && !(await confirmAction({ title: "Discard changes", message: "Discard unsaved changes to this game?", confirmLabel: "Discard", danger: true }))) {
-    return false;
-  }
+  if (!(await confirmDiscard())) return false;
   close();
   return true;
 };
@@ -1324,7 +1401,7 @@ watch(
   (open) => {
     removeLeaveGuard?.();
     removeLeaveGuard = open
-      ? addLeaveGuard(async () => !hasUnsavedChanges.value || (await confirmAction({ title: "Discard changes", message: "Discard unsaved changes to this game?", confirmLabel: "Discard", danger: true })))
+      ? addLeaveGuard(confirmDiscard)
       : null;
   },
   { immediate: true },
@@ -1362,9 +1439,9 @@ function openTagColorPicker(event: MouseEvent | KeyboardEvent, tag: string) {
   const target = event.currentTarget as HTMLElement;
   tagColorPicker.value = { tag, anchor: target.querySelector<HTMLButtonElement>(".tag-name-button") || target };
 }
-// A game without tools (or no game) has no Tools tab: show Overview instead of an empty panel.
-watch(toolEngine, (engine) => {
-  if (!engine && activeTab.value === "Tools") activeTab.value = "Overview";
+// A record without a library id has no Saves tab: show Overview instead of an empty panel.
+watch(detailTabs, (tabs) => {
+  if (!tabs.includes(activeTab.value)) activeTab.value = "Overview";
 });
 
 const selectTab = (tab: DetailTab) => {
@@ -1374,12 +1451,8 @@ const selectTab = (tab: DetailTab) => {
 };
 
 const onTabKeydown = (event: KeyboardEvent, index: number) => {
-  let nextIndex: number;
-  if (event.key === "ArrowRight") nextIndex = (index + 1) % detailTabs.value.length;
-  else if (event.key === "ArrowLeft") nextIndex = (index + detailTabs.value.length - 1) % detailTabs.value.length;
-  else if (event.key === "Home") nextIndex = 0;
-  else if (event.key === "End") nextIndex = detailTabs.value.length - 1;
-  else return;
+  const nextIndex = rovingIndex(event.key, index, detailTabs.value.length);
+  if (nextIndex === null) return;
   event.preventDefault();
   selectTab(detailTabs.value[nextIndex]!);
   (event.currentTarget as HTMLElement).parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex]?.focus();
@@ -1494,7 +1567,23 @@ const toggleFavorite = () => {
 
 const setRating = (category: (typeof ratingCategories)[number], star: number) => {
   category.rating.value = star;
-  void saveQuickFields({ [category.field]: star });
+  const gameId = props.game?.id;
+  void saveQuickFields({ [category.field]: star }).then((res) => showQuickSaved("ratings", gameId, res));
+};
+
+// Each category is a radio group: screen readers hear the current value,
+// and arrow keys, Home and End change it (no wrap past 1 or 5 stars).
+const ratingGroupLabel = (category: (typeof ratingCategories)[number]) =>
+  `${category.label} rating, ${category.rating.value ? `${category.rating.value} of 5` : "not rated"}`;
+const onRatingKeydown = (event: KeyboardEvent, category: (typeof ratingCategories)[number]) => {
+  const current = category.rating.value;
+  const steps: Record<string, number> = { ArrowRight: current + 1, ArrowUp: current + 1, ArrowLeft: current - 1, ArrowDown: current - 1, Home: 1, End: 5 };
+  const next = steps[event.key];
+  if (next === undefined) return;
+  event.preventDefault();
+  const clamped = Math.min(5, Math.max(1, next));
+  if (clamped !== category.rating.value) setRating(category, clamped);
+  (event.currentTarget as HTMLElement).parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[clamped - 1]?.focus();
 };
 
 const browseExe = async () => {
@@ -2007,19 +2096,23 @@ const save = async () => {
   }
 };
 
-const deleteGame = () => {
-  if (!props.game || deleting.value) return;
-  emit("remove", props.game);
-  close();
-};
-
-const fileAction = (kind: "uninstall" | "move") => {
+// Remove, Uninstall and Move close the window, so they ask first about
+// unsaved edits, as the close button does.
+const deleteGame = async () => {
   if (!props.game || deleting.value) return;
   const game = props.game;
   actionsOpen.value = false;
+  if (!(await requestClose())) return;
+  emit("remove", game);
+};
+
+const fileAction = async (kind: "uninstall" | "move") => {
+  if (!props.game || deleting.value) return;
+  const game = props.game;
+  actionsOpen.value = false;
+  if (!(await requestClose())) return;
   if (kind === "uninstall") emit("uninstall", game);
   else emit("move", game);
-  close();
 };
 
 const buildLaunchPayload = (targetPath: string): GameRecord | null => {
@@ -2085,13 +2178,15 @@ const addTag = () => {
   newTag.value = "";
   if (t && !tags.value.includes(t)) {
     tags.value.push(t);
-    void saveQuickFields({ tags: tags.value.join(", "), tags_user_edited: true });
+    const gameId = props.game?.id;
+    void saveQuickFields({ tags: tags.value.join(", "), tags_user_edited: true }).then((res) => showQuickSaved("tags", gameId, res));
   }
 };
 
 const removeTag = (tag: string) => {
   tags.value = tags.value.filter((t) => t !== tag);
-  void saveQuickFields({ tags: tags.value.join(", "), tags_user_edited: true });
+  const gameId = props.game?.id;
+  void saveQuickFields({ tags: tags.value.join(", "), tags_user_edited: true }).then((res) => showQuickSaved("tags", gameId, res));
 };
 
 const formatPlaytime = (seconds: number | null | undefined): string => {
@@ -2179,6 +2274,18 @@ const threadMainPostEditedDisplay = computed(() => {
   if (lastEditAt) return formatTimestamp(lastEditAt);
   if (checkedAt) return "Not edited";
   return "Unknown";
+});
+
+// The Overview footnote shows only the times that are known.
+const overviewTimestamps = computed(() => {
+  const parts: string[] = [];
+  if (!loadingExecutableModifiedAt.value && executableModifiedKnown.value && executableModifiedAt.value) {
+    parts.push(`Exe modified: ${executableModifiedDisplay.value}`);
+  }
+  if (threadMainPostEditedDisplay.value !== "Unknown") {
+    parts.push(`Thread updated: ${threadMainPostEditedDisplay.value}`);
+  }
+  return parts;
 });
 
 const openInBrowser = async (url: string) => {
@@ -2570,19 +2677,22 @@ const removeAttachment = async (name: string) => {
           :aria-selected="activeTab === tab"
           :aria-controls="`game-detail-panel-${tab}`"
           :tabindex="activeTab === tab ? 0 : -1"
+          :aria-describedby="tabHasUnsaved(tab) ? 'game-detail-tab-unsaved' : undefined"
           class="detail-tab"
           @click="selectTab(tab)"
           @keydown="onTabKeydown($event, index)"
-        >{{ tab }}</button>
+        >{{ tabLabel(tab) }}<span v-if="tabHasUnsaved(tab)" class="detail-tab-dot" aria-hidden="true"></span></button>
+        <span id="game-detail-tab-unsaved" class="sr-only">Unsaved changes</span>
       </div>
 
       <div class="modal-scroll-body min-h-0 overflow-y-auto p-6 flex-1">
         <section v-show="activeTab === 'Overview'" id="game-detail-panel-Overview" role="tabpanel" aria-labelledby="game-detail-tab-Overview" tabindex="0" class="space-y-6">
-          <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <div
-              v-for="item in summaryItems"
+              v-for="(item, index) in summaryItems"
               :key="item.label"
               class="summary-card"
+              :class="{ 'col-span-2 sm:col-span-1': index === summaryItems.length - 1 && summaryItems.length % 2 === 1 }"
             >
               <p class="summary-label">{{ item.label }}</p>
               <p class="summary-value" :style="item.accent">
@@ -2641,13 +2751,19 @@ const removeAttachment = async (name: string) => {
           </div>
 
           <div>
-            <h3
-              class="ui-section-heading text-sm font-bold mb-3"
-              style="color: var(--text-secondary)"
-            >
-              <IconStarFilled class="ui-section-icon" />
-              Your ratings
-            </h3>
+            <div class="instant-save-heading mb-3">
+              <h3
+                class="ui-section-heading text-sm font-bold"
+                style="color: var(--text-secondary)"
+              >
+                <IconStarFilled class="ui-section-icon" />
+                Your ratings
+              </h3>
+              <span class="instant-save-note">
+                <span role="status"><template v-if="quickSaved === 'ratings'"><IconCheck class="instant-save-icon" aria-hidden="true" />Saved</template></span>
+                <span v-if="quickSaved !== 'ratings'">Saved as you change it</span>
+              </span>
+            </div>
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div
                 v-for="cat in ratingCategories"
@@ -2659,11 +2775,16 @@ const removeAttachment = async (name: string) => {
                   <component :is="cat.icon" class="w-4 h-4 shrink-0" style="color: var(--brand)" />
                   {{ cat.label }}
                 </span>
-                <div class="flex gap-1">
+                <div class="flex gap-1" role="radiogroup" :aria-label="ratingGroupLabel(cat)">
                   <button
                     v-for="star in 5"
                     :key="star"
+                    type="button"
+                    role="radio"
+                    :aria-checked="cat.rating.value === star"
+                    :tabindex="star === (cat.rating.value || 1) ? 0 : -1"
                     @click="setRating(cat, star)"
+                    @keydown="onRatingKeydown($event, cat)"
                     :aria-label="`Rate ${cat.label} ${star} of 5`"
                     class="transition-transform hover:scale-110"
                   >
@@ -2680,6 +2801,7 @@ const removeAttachment = async (name: string) => {
                 <span
                   class="text-xs font-mono ml-auto"
                   style="color: var(--text-muted)"
+                  aria-hidden="true"
                   >{{ cat.rating.value }}/5</span
                 >
               </div>
@@ -2687,7 +2809,13 @@ const removeAttachment = async (name: string) => {
           </div>
 
           <div>
-            <h3 class="modal-label mb-3">Tags ({{ tags.length }})</h3>
+            <div class="instant-save-heading mb-3">
+              <h3 class="modal-label !mb-0">Tags ({{ tags.length }})</h3>
+              <span class="instant-save-note">
+                <span role="status"><template v-if="quickSaved === 'tags'"><IconCheck class="instant-save-icon" aria-hidden="true" />Saved</template></span>
+                <span v-if="quickSaved !== 'tags'">Saved as you change it</span>
+              </span>
+            </div>
             <div>
               <p v-if="!tags.length" class="text-xs mb-2" style="color: var(--text-muted)">No tags yet.</p>
               <div class="flex flex-wrap gap-1.5 mb-2">
@@ -2703,7 +2831,7 @@ const removeAttachment = async (name: string) => {
                   <button
                     @click="removeTag(tag)"
                     :aria-label="`Remove tag ${tag}`"
-                    class="hover:text-red-400 transition-colors ml-0.5"
+                    class="hover:text-[var(--danger-text)] transition-colors ml-0.5"
                     style="color: inherit"
                   >
                     &times;
@@ -2719,92 +2847,19 @@ const removeAttachment = async (name: string) => {
                   @keydown.enter.prevent="addTag"
                   class="modal-input flex-1 !py-1.5 !text-xs"
                 />
-                <button @click="addTag" class="modal-btn">Add</button>
+                <button @click="addTag" class="modal-btn">Add tag</button>
               </div>
             </div>
           </div>
-          <p class="detail-timestamps">
-            <span>Exe modified: {{ executableModifiedDisplay }}</span>
-            <span>Thread updated: {{ threadMainPostEditedDisplay }}</span>
+          <p v-if="overviewTimestamps.length" class="detail-timestamps">
+            <span v-for="part in overviewTimestamps" :key="part">{{ part }}</span>
           </p>
         </section>
 
-        <section v-show="activeTab === 'Launch'" id="game-detail-panel-Launch" role="tabpanel" aria-labelledby="game-detail-tab-Launch" tabindex="0" class="space-y-6">
-          <div v-if="showSteamGameControl(platformCapabilities.platform, steamState)" class="space-y-2">
-            <label class="flex items-center justify-between text-sm"><span>Show in Steam</span>
-              <input :checked="steamState.marked" :disabled="!steamState.eligible" type="checkbox" role="switch" class="sandbox-switch" @change="setSteamMark" />
-            </label>
-            <p v-if="!steamState.eligible" class="text-xs" style="color:var(--text-secondary)">{{ steamIneligibleNote(steamState.reason) }}</p>
-            <p v-else class="text-xs" style="color:var(--text-secondary)">{{ steamStateLabel(steamState.state) }}</p>
-            <p v-if="steamState.eligible && steamState.mode === 'all-installed'" class="text-xs" style="color:var(--text-secondary)">All installed games are included; this mark is saved for marked mode.</p>
-          </div>
-          <GameCompanionTools v-if="isOpen && game && platformCapabilities.companion_tools" :key="game.id" :game-id="game.id" @settings="closeAndNavigate('/settings#custom-tools')" />
-          <div v-if="htmlTargetPath" class="space-y-2">
-            <label for="detail-html-player" class="modal-label">Opens in</label>
-            <select id="detail-html-player" v-model="htmlPlayer" class="modal-input w-full">
-              <option v-for="option in HTML_PLAYER_OPTIONS" :key="option.value" :value="option.value">{{ option.value === '' ? `Use Settings default (${htmlBuiltinDefault ? 'Built-in player' : 'System browser'})` : option.label }}</option>
-            </select>
-            <p class="text-xs" style="color:var(--text-secondary)">{{ resolvedHtmlPlayer === 'builtin' ? "The built-in player runs the game in a wLib window with playtime, Stop, sandbox and No internet. Its saves are kept by wLib." : resolvedHtmlPlayer === 'browser' ? "Opens your default browser. Playtime, Stop, sandbox and No internet do not apply, and saves stay in that browser." : "This launch mode runs the file as a program, not in a player." }}</p>
-          </div>
-          <div v-if="webPlayerExportCount > 0" class="flex flex-wrap gap-2">
-            <button class="modal-btn" @click="openWebPlayerExportsFolder">Open exports folder</button>
-          </div>
-          <div class="space-y-2">
-            <label class="flex items-center justify-between text-sm">
-              <span>Run in sandbox</span>
-              <input v-model="sandboxEnabled" type="checkbox" role="switch" class="sandbox-switch" :disabled="sandboxSwitchState(resolvedPlayer, sandboxStatus).disabled" />
-            </label>
-            <p class="text-xs" style="color:var(--text-secondary)">{{ sandboxSwitchState(resolvedPlayer, sandboxStatus).note }} <button v-if="sandboxSwitchState(resolvedPlayer, sandboxStatus).needsSettings" class="underline" style="color:var(--brand)" @click="closeAndNavigate('/settings#sandbox')">Set up</button></p>
-            <p class="text-xs" style="color:var(--text-secondary)">Sandboxed Wine/Proton games use their own Wine prefix unless a custom prefix is set. Sandboxed Proton games create a temporary runtime copy on each launch and cannot use Cheat Engine auto-injection.</p>
-            <div class="flex flex-wrap gap-2">
-              <button class="modal-btn" @click="openSandboxFolder">Open sandbox folder</button>
-            </div>
-          </div>
-          <div class="space-y-2">
-            <label class="flex items-center justify-between text-sm">
-              <span>No internet</span>
-              <input v-model="blockNetwork" type="checkbox" role="switch" class="sandbox-switch" :disabled="networkSwitchState(resolvedPlayer, platformCapabilities.platform, sandboxEnabled).disabled" />
-            </label>
-            <p class="text-xs" style="color:var(--text-secondary)">{{ networkSwitchState(resolvedPlayer, platformCapabilities.platform, sandboxEnabled).note }}</p>
-          </div>
-          <div v-if="platformCapabilities.platform === 'linux'" class="grid grid-cols-2 gap-4">
-            <div v-for="tool in (['gamemode', 'mangohud', 'gamescope'] as const)" :key="tool">
-              <label :for="`detail-${tool}`" class="modal-label">{{ performanceToolName(tool) }}</label>
-              <select :id="`detail-${tool}`" :value="toolOverrides[tool].value" @change="toolOverrides[tool].value = ($event.target as HTMLSelectElement).value as 'default' | 'on' | 'off'" class="modal-input w-full" :disabled="performanceToolState(tool, performanceTools[tool], sandboxEnabled, launchMode).disabled">
-                <option value="default">Default ({{ performanceDefaults[tool] ? 'On' : 'Off' }})</option><option value="on">On</option><option value="off">Off</option>
-              </select>
-              <p class="text-xs" style="color:var(--text-secondary)">{{ performanceToolState(tool, performanceTools[tool], sandboxEnabled, launchMode).note }}</p>
-            </div>
-          </div>
-          <div v-if="platformCapabilities.platform === 'linux' && gamescopeOn" class="grid grid-cols-2 gap-4" data-testid="gamescope-overrides">
-            <p class="col-span-2 text-xs" style="color:var(--text-secondary)">Gamescope options for this game. Empty fields use the Settings values.</p>
+        <section v-show="activeTab === 'Launch'" id="game-detail-panel-Launch" role="tabpanel" aria-labelledby="game-detail-tab-Launch" tabindex="0" class="launch-panel">
+          <section class="launch-group space-y-4" aria-labelledby="launch-group-exe">
+            <h3 id="launch-group-exe" class="detail-group-heading">Executable and launch targets</h3>
             <div>
-              <label for="detail-gamescope-resolution" class="modal-label">Game resolution</label>
-              <input id="detail-gamescope-resolution" v-model="gamescopeResolution" type="text" class="modal-input w-full" placeholder="Settings value (for example 816x624)" :aria-invalid="!!gamescopeResolutionError" />
-              <p v-if="gamescopeResolutionError" class="text-xs" role="alert" style="color:var(--danger-text)">{{ gamescopeResolutionError }}</p>
-            </div>
-            <div>
-              <label for="detail-gamescope-scaler" class="modal-label">Scaler</label>
-              <select id="detail-gamescope-scaler" v-model="gamescopeScaler" class="modal-input w-full">
-                <option value="">Settings value</option>
-                <option v-for="option in SCALER_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
-              </select>
-            </div>
-            <div>
-              <label for="detail-gamescope-filter" class="modal-label">Filter</label>
-              <select id="detail-gamescope-filter" v-model="gamescopeFilter" class="modal-input w-full">
-                <option value="">Settings value</option>
-                <option v-for="option in FILTER_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
-              </select>
-            </div>
-            <div>
-              <label for="detail-gamescope-args" class="modal-label">Extra arguments</label>
-              <input id="detail-gamescope-args" v-model="gamescopeArgs" type="text" class="modal-input w-full font-mono" placeholder="Added after the Settings arguments" :aria-invalid="!!gamescopeArgsError" />
-              <p v-if="gamescopeArgsError" class="text-xs" role="alert" style="color:var(--danger-text)">{{ gamescopeArgsError }}</p>
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div class="col-span-2">
               <label for="detail-exe" class="modal-label">Executable path</label>
               <div class="flex gap-2">
                 <input
@@ -2824,8 +2879,11 @@ const removeAttachment = async (name: string) => {
               <p v-if="moving" id="detail-moving-note" class="text-xs mt-1" style="color: var(--text-muted)">This game is being moved. Its file paths change when the move ends.</p>
             </div>
 
-            <div class="col-span-2">
-              <label class="modal-label">Launch targets</label>
+            <div>
+              <div class="instant-save-heading mb-1">
+                <h4 class="modal-label !mb-0">Launch targets</h4>
+                <span class="instant-save-note">Saved as you change it</span>
+              </div>
               <div class="launch-target-panel">
                 <div class="launch-target-row launch-target-card">
                   <div class="launch-target-main">
@@ -2953,7 +3011,8 @@ const removeAttachment = async (name: string) => {
                       <button
                         @click="deleteLaunchTarget(target)"
                         :disabled="deletingTargetId === target.id"
-                        class="launch-target-action text-red-400 disabled:opacity-50"
+                        class="launch-target-action disabled:opacity-50"
+                        style="color: var(--danger-text)"
                       >
                         {{ deletingTargetId === target.id ? "Removing..." : "Remove" }}
                       </button>
@@ -3012,7 +3071,7 @@ const removeAttachment = async (name: string) => {
               </div>
             </div>
 
-            <div class="col-span-2">
+            <div>
               <label for="detail-command" class="modal-label">{{ launchMode === 'custom' ? 'Command' : 'Command-line arguments' }}</label>
               <input
                 v-model="commandLineArgs"
@@ -3023,255 +3082,307 @@ const removeAttachment = async (name: string) => {
               />
               <p v-if="launchMode === 'custom'" class="text-xs mt-2" style="color: var(--text-muted)">Use %command% for the target path, or run a command as written in the game folder.</p>
             </div>
+          </section>
 
-            <div class="col-span-2">
-              <label class="modal-label">Launch options</label>
-              <div
-                class="rounded-lg p-3 space-y-2"
-                style="background: var(--bg-raised); border: 1px solid var(--border)"
+          <section class="launch-group space-y-4" aria-labelledby="launch-group-runtime">
+            <h3 id="launch-group-runtime" class="detail-group-heading">Runtime</h3>
+            <div>
+              <label for="detail-runtime" class="modal-label">Runtime mode</label>
+              <select v-model="launchMode" id="detail-runtime" class="modal-input w-full">
+                <option
+                  v-for="option in launchModeOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+              <p
+                v-if="launchMode === 'auto' && autoResolvedToRpgmakerLinux"
+                data-testid="auto-launch-runtime-note"
+                class="text-xs mt-2 font-medium"
+                style="color: var(--success-text)"
               >
-                <div class="rounded-md px-2 py-2" style="background: var(--bg-surface)">
-                  <label for="detail-runtime" class="modal-label">Runtime mode</label>
-                  <select v-model="launchMode" id="detail-runtime" class="modal-input w-full">
-                    <option
-                      v-for="option in launchModeOptions"
-                      :key="option.value"
-                      :value="option.value"
-                    >
-                      {{ option.label }}
-                    </option>
-                  </select>
-                  <p
-                    v-if="launchMode === 'auto' && autoResolvedToRpgmakerLinux"
-                    data-testid="auto-launch-runtime-note"
-                    class="text-xs mt-2 font-medium"
-                    style="color: var(--success-text)"
-                  >
-                    Auto Detect → RPGMaker Linux
-                  </p>
-                  <p
-                    v-else-if="launchMode === 'auto' && autoLaunchRuntime?.reason === 'wine_settings'"
-                    data-testid="auto-launch-runtime-note"
-                    class="text-xs mt-2"
-                    style="color: var(--text-secondary)"
-                  >
-                    Auto Detect → Wine / Proton (Wine/Proton settings are active on this game).
-                  </p>
-                  <p class="text-xs mt-2" style="color: var(--text-muted)">
-                    {{
-                      platformCapabilities.platform === "windows"
-                        ? "Auto Detect launches Windows games directly without Wine or Proton."
-                        : "Linux Native runs the selected file directly. Custom Command runs your command in the game folder. RPGMaker Linux uses the external native-port runner when installed."
-                    }}
-                  </p>
-                  <p
-                    v-if="launchModeUnavailableOnPlatform"
-                    class="text-xs mt-2 text-yellow-400"
-                  >
-                    This stored launch mode is unavailable on
-                    {{ platformCapabilities.platform }}. Choose Auto Detect to
-                    launch on this platform; the value is preserved until you save.
-                  </p>
-                  <p
-                    v-if="rpgmakerLinuxModeUnavailable"
-                    class="text-xs mt-2 text-yellow-400"
-                  >
-                    This game is set to RPGMaker Linux, but the runner is not detected.
-                    Install it or set the runner path in Settings before launching.
-                    {{ rpgmakerLinuxRunnerError }}
-                  </p>
-                </div>
-
-                <div
-                  v-if="platformCapabilities.japanese_locale"
-                  class="rounded-md px-2 py-1"
-                  style="background: var(--bg-surface)"
-                  data-testid="japanese-locale-row"
-                >
-                  <div class="flex items-center gap-2">
-                    <span class="text-sm font-medium" style="color: var(--text-primary)">
-                      {{ japaneseLocale.label }}
-                    </span>
-                    <label class="relative inline-flex items-center ml-auto" :class="japaneseLocale.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'">
-                      <input
-                        type="checkbox"
-                        v-model="runJapaneseLocale"
-                        :aria-label="japaneseLocale.label"
-                        :disabled="japaneseLocale.disabled"
-                        class="sr-only peer"
-                      />
-                      <div class="ui-toggle"></div>
-                    </label>
-                  </div>
-                  <p
-                    class="text-xs mt-1 pr-12"
-                    style="color: var(--text-muted)"
-                  >
-                    Enable this if the game has unreadable text (Mojibake) or crashes due to missing Japanese fonts.
-                  </p>
-                  <p
-                    v-if="japaneseLocale.note"
-                    class="text-xs mt-1 pr-12"
-                    style="color: var(--text-muted)"
-                    data-testid="japanese-locale-note"
-                  >
-                    {{ japaneseLocale.note }}
-                    <button v-if="japaneseLocale.needsSettings" type="button" aria-label="Set up Locale Emulator" class="underline" style="color:var(--brand)" @click="closeAndNavigate(WINDOWS_TOOLS_ROUTE)">Set up</button>
-                  </p>
-                </div>
-
-                <div
-                  v-if="platformCapabilities.wayland"
-                  class="rounded-md px-2 py-1"
-                  style="background: var(--bg-surface)"
-                >
-                  <div class="flex items-center gap-2">
-                    <span class="text-sm font-medium" style="color: var(--text-primary)">
-                      Run in Wayland compatibility mode
-                    </span>
-                    <label class="relative inline-flex items-center cursor-pointer ml-auto">
-                      <input
-                        type="checkbox"
-                        v-model="runWayland"
-                        aria-label="Run in Wayland compatibility mode"
-                        class="sr-only peer"
-                      />
-                      <div class="ui-toggle"></div>
-                    </label>
-                  </div>
-                  <p
-                    class="text-xs mt-1 pr-12"
-                    style="color: var(--text-muted)"
-                  >
-                    Enable this if your system uses Wayland and the game crashes or freezes on launch.
-                  </p>
-                </div>
-
-                <div
-                  v-if="
-                    platformCapabilities.cheat_engine_injection &&
-                    !isNativeLaunchMode &&
-                    !hideWineControlsForAuto
-                  "
-                  class="rounded-md px-2 py-1 transition-colors"
-                  :style="
-                    ceInstalled
-                      ? 'background: var(--bg-surface)'
-                      : 'background: var(--bg-inset); opacity: 0.7'
-                  "
-                >
-                  <div class="flex items-center gap-2">
-                    <span class="text-sm font-medium" style="color: var(--text-primary)">
-                      Auto-Launch & Inject Cheat Engine
-                    </span>
-                    <span
-                      v-if="!ceInstalled"
-                      class="text-[0.625rem] uppercase px-1.5 py-0.5 rounded font-bold"
-                      style="background: var(--bg-overlay); color: var(--text-muted); border: 1px solid var(--border)"
-                    >
-                      Not installed
-                    </span>
-                    <label
-                      class="relative inline-flex items-center ml-auto"
-                      :class="ceInstalled ? 'cursor-pointer' : 'cursor-not-allowed'"
-                    >
-                      <input
-                        type="checkbox"
-                        v-model="autoInjectCe"
-                        aria-label="Auto-Launch & Inject Cheat Engine"
-                        :disabled="!ceInstalled"
-                        class="sr-only peer"
-                      />
-                      <div class="ui-toggle"></div>
-                    </label>
-                  </div>
-                  <p
-                    class="text-xs mt-1 pr-12"
-                    style="color: var(--text-muted)"
-                  >
-                    Spawns Cheat Engine inside the same virtual Wine sandbox immediately after the game starts.
-                  </p>
-                </div>
-              </div>
+                Auto Detect → RPGMaker Linux
+              </p>
+              <p
+                v-else-if="launchMode === 'auto' && autoLaunchRuntime?.reason === 'wine_settings'"
+                data-testid="auto-launch-runtime-note"
+                class="text-xs mt-2"
+                style="color: var(--text-secondary)"
+              >
+                Auto Detect → Wine / Proton (Wine/Proton settings are active on this game).
+              </p>
+              <p v-if="runtimeModeHint" class="text-xs mt-2" style="color: var(--text-muted)">{{ runtimeModeHint }}</p>
+              <p
+                v-if="launchModeUnavailableOnPlatform"
+                class="text-xs mt-2"
+                style="color: var(--warning-text)"
+              >
+                This stored launch mode is unavailable on
+                {{ platformCapabilities.platform }}. Choose Auto Detect to
+                launch on this platform; the value is preserved until you save.
+              </p>
+              <p
+                v-if="rpgmakerLinuxModeUnavailable"
+                class="text-xs mt-2"
+                style="color: var(--warning-text)"
+              >
+                This game is set to RPGMaker Linux, but the runner is not detected.
+                Install it or set the runner path in Settings before launching.
+                {{ rpgmakerLinuxRunnerError }}
+              </p>
             </div>
 
-            <!-- Advanced Launch Options -->
-            <div
-              v-if="showWineProtonControls && !hideWineControlsForAuto"
-              class="col-span-2 mt-2"
-            >
-              <div
-                class="flex items-center justify-between p-3 rounded-lg"
-                style="
-                  background: var(--bg-raised);
-                  border: 1px solid var(--border);
-                "
-              >
-                <div>
-                  <p class="text-sm font-medium" style="color: var(--text-primary)">
-                    Use custom Wine prefix
-                  </p>
-                  <p class="text-xs" style="color: var(--text-muted)">
-                    Isolate this game's save files and dependencies from the global prefix.
-                  </p>
-                </div>
-                <label class="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    v-model="useCustomPrefix"
-                    aria-label="Use custom Wine prefix"
-                    class="sr-only peer"
-                    @change="onCustomPrefixToggle"
-                  />
-                  <div class="ui-toggle"></div>
-                </label>
+            <div v-if="htmlTargetPath">
+              <label for="detail-html-player" class="modal-label">Opens in</label>
+              <select id="detail-html-player" v-model="htmlPlayer" class="modal-input w-full">
+                <option v-for="option in HTML_PLAYER_OPTIONS" :key="option.value" :value="option.value">{{ option.value === '' ? `Use Settings default (${htmlBuiltinDefault ? 'Built-in player' : 'System browser'})` : option.label }}</option>
+              </select>
+              <p class="text-xs mt-2" style="color:var(--text-secondary)">{{ resolvedHtmlPlayer === 'builtin' ? "The built-in player runs the game in a wLib window with playtime, Stop, sandbox and No internet. Its saves are kept by wLib." : resolvedHtmlPlayer === 'browser' ? "Opens your default browser. Playtime, Stop, sandbox and No internet do not apply, and saves stay in that browser." : "This launch mode runs the file as a program, not in a player." }}</p>
+              <div v-if="webPlayerExportCount > 0" class="flex flex-wrap gap-2 mt-2">
+                <button class="modal-btn" @click="openWebPlayerExportsFolder">Open exports folder</button>
               </div>
+            </div>
+            <div v-else-if="webPlayerExportCount > 0" class="flex flex-wrap gap-2">
+              <button class="modal-btn" @click="openWebPlayerExportsFolder">Open exports folder</button>
+            </div>
 
-              <div class="mt-3">
+            <template v-if="showWineProtonControls && !hideWineControlsForAuto">
+              <div>
                 <label for="game-runner" class="modal-label">Runner (Wine / Proton)</label>
                 <select id="game-runner" v-model="protonVersion" class="modal-input w-full" @focus="loadAvailableRunners">
                   <option value="">{{ loadingRunners ? 'Loading runners...' : '(Use Global Default)' }}</option>
                   <option v-for="runner in runnerOptions" :key="runner.path" :value="runner.path">{{ runner.name }}</option>
                 </select>
               </div>
-              <div v-if="useCustomPrefix" class="mt-3 p-4 rounded-lg space-y-4" style="background: var(--bg-inset); border: 1px dashed var(--border);">
-                <div>
-                  <label for="detail-prefix" class="modal-label">Custom prefix path</label>
-                  <div class="flex gap-2">
+
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium" style="color: var(--text-primary)">Use custom Wine prefix</span>
+                  <label class="relative inline-flex items-center cursor-pointer ml-auto">
                     <input
-                      v-model="customPrefix" id="detail-prefix"
-                      type="text"
-                      placeholder="/home/user/games/my_game_prefix"
-                      class="modal-input flex-1 font-mono text-xs"
-                      :readonly="moving"
+                      type="checkbox"
+                      v-model="useCustomPrefix"
+                      aria-label="Use custom Wine prefix"
+                      class="sr-only peer"
+                      @change="onCustomPrefixToggle"
                     />
-                    <button @click="browseCustomPrefix" class="modal-btn ui-action-btn" :disabled="moving">
-                      <IconFolderOpenFilled class="ui-action-icon" />
-                      Browse
+                    <div class="ui-toggle"></div>
+                  </label>
+                </div>
+                <p class="text-xs mt-1 pr-12" style="color: var(--text-muted)">
+                  Isolate this game's save files and dependencies from the global prefix.
+                </p>
+                <div v-if="useCustomPrefix" class="mt-3 p-4 rounded-lg space-y-4" style="background: var(--bg-inset); border: 1px dashed var(--border);">
+                  <div>
+                    <label for="detail-prefix" class="modal-label">Custom prefix path</label>
+                    <div class="flex gap-2">
+                      <input
+                        v-model="customPrefix" id="detail-prefix"
+                        type="text"
+                        placeholder="/home/user/games/my_game_prefix"
+                        class="modal-input flex-1 font-mono text-xs"
+                        :readonly="moving"
+                      />
+                      <button @click="browseCustomPrefix" class="modal-btn ui-action-btn" :disabled="moving">
+                        <IconFolderOpenFilled class="ui-action-icon" />
+                        Browse
+                      </button>
+                    </div>
+                    <PathStatus :path="customPrefix" kind="dir" />
+                  </div>
+
+                  <div class="flex gap-2"><button class="modal-btn" @click="openPrefixTool('winecfg')">Winecfg</button><button class="modal-btn" @click="openPrefixTool('winetricks')">Winetricks</button></div>
+                  <div v-if="wineControlsVisibility.showRtpInstaller" class="pt-2 border-t border-[var(--border)]">
+                    <button
+                      @click="installRtpsToPrefix"
+                      class="w-full text-xs font-medium px-4 py-2 rounded-lg transition-colors"
+                      style="background: var(--brand-glow); color: var(--brand); border: 1px solid var(--brand-deep);"
+                    >
+                      Install RTPs to this prefix
                     </button>
                   </div>
-                  <PathStatus :path="customPrefix" kind="dir" />
-                </div>
-
-                <div class="flex gap-2"><button class="modal-btn" @click="openPrefixTool('winecfg')">Winecfg</button><button class="modal-btn" @click="openPrefixTool('winetricks')">Winetricks</button></div>
-                <div v-if="wineControlsVisibility.showRtpInstaller" class="pt-2 border-t border-gray-700/50">
-                  <button
-                    @click="installRtpsToPrefix"
-                    class="w-full text-xs font-medium px-4 py-2 rounded-lg transition-colors"
-                    style="background: var(--brand-glow); color: var(--brand); border: 1px solid var(--brand-deep);"
-                  >
-                    Install RTPs to this prefix
-                  </button>
                 </div>
               </div>
-            </div>
-          </div>
+            </template>
+          </section>
 
-          <GameSavesSection
-            v-if="game && typeof game.id === 'number'"
-            :game-id="game.id"
-            :active="isOpen && activeTab === 'Launch'"
-          />
+          <section class="launch-group space-y-4" aria-labelledby="launch-group-isolation">
+            <h3 id="launch-group-isolation" class="detail-group-heading">Isolation</h3>
+            <div class="space-y-2">
+              <label class="flex items-center justify-between text-sm">
+                <span>Run in sandbox</span>
+                <input v-model="sandboxEnabled" type="checkbox" role="switch" class="sandbox-switch" :disabled="sandboxSwitchState(resolvedPlayer, sandboxStatus).disabled" />
+              </label>
+              <p class="text-xs" style="color:var(--text-secondary)">{{ sandboxSwitchState(resolvedPlayer, sandboxStatus).note }} <button v-if="sandboxSwitchState(resolvedPlayer, sandboxStatus).needsSettings" class="underline" style="color:var(--brand)" @click="closeAndNavigate('/settings#sandbox')">Set up</button></p>
+              <p v-if="sandboxEnabled && showWineProtonControls" class="text-xs" style="color:var(--text-secondary)">Sandboxed Wine/Proton games use their own Wine prefix unless a custom prefix is set. Sandboxed Proton games create a temporary runtime copy on each launch and cannot use Cheat Engine auto-injection.</p>
+              <div class="flex flex-wrap gap-2">
+                <button class="modal-btn" @click="openSandboxFolder">Open sandbox folder</button>
+              </div>
+            </div>
+            <div class="space-y-2">
+              <label class="flex items-center justify-between text-sm">
+                <span>No internet</span>
+                <input v-model="blockNetwork" type="checkbox" role="switch" class="sandbox-switch" :disabled="networkSwitchState(resolvedPlayer, platformCapabilities.platform, sandboxEnabled).disabled" />
+              </label>
+              <p class="text-xs" style="color:var(--text-secondary)">{{ networkSwitchState(resolvedPlayer, platformCapabilities.platform, sandboxEnabled).note }}</p>
+            </div>
+          </section>
+
+          <section v-if="showSteamGameControl(platformCapabilities.platform, steamState)" class="launch-group space-y-2" aria-labelledby="launch-group-steam">
+            <div class="instant-save-heading">
+              <h3 id="launch-group-steam" class="detail-group-heading">Steam</h3>
+              <span class="instant-save-note">Saved as you change it</span>
+            </div>
+            <label class="flex items-center justify-between text-sm"><span>Show in Steam</span>
+              <input :checked="steamState.marked" :disabled="!steamState.eligible" type="checkbox" role="switch" class="sandbox-switch" @change="setSteamMark" />
+            </label>
+            <p v-if="!steamState.eligible" class="text-xs" style="color:var(--text-secondary)">{{ steamIneligibleNote(steamState.reason) }}</p>
+            <p v-else class="text-xs" style="color:var(--text-secondary)">{{ steamStateLabel(steamState.state) }}</p>
+            <p v-if="steamState.eligible && steamState.mode === 'all-installed'" class="text-xs" style="color:var(--text-secondary)">All installed games are included; this mark is saved for marked mode.</p>
+          </section>
+
+          <section v-if="isOpen && game && platformCapabilities.companion_tools" class="launch-group space-y-2">
+            <div class="instant-save-heading">
+              <h3 id="game-custom-tools-heading" class="detail-group-heading">Custom tools</h3>
+              <span class="instant-save-note">Saved as you change it</span>
+            </div>
+            <GameCompanionTools :key="game.id" :game-id="game.id" @settings="closeAndNavigate('/settings#custom-tools')" />
+          </section>
+
+          <details
+            v-if="hasAdvancedLaunchOptions"
+            class="launch-group launch-advanced"
+            data-testid="launch-advanced"
+            :open="advancedOpen"
+            @toggle="onAdvancedToggle"
+          >
+            <summary class="launch-advanced-summary">
+              <IconChevronDown class="launch-advanced-chevron" aria-hidden="true" />
+              <span class="detail-group-heading">Advanced</span>
+              <span class="launch-advanced-state" data-testid="launch-advanced-state">{{ advancedActive.length ? `${advancedActive.length} changed: ${advancedActive.join(", ")}` : "All at default" }}</span>
+            </summary>
+            <div class="space-y-4 pt-4" @change="advancedTouched = true" @input="advancedTouched = true">
+              <div v-if="platformCapabilities.platform === 'linux'" class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div v-for="tool in (['gamemode', 'mangohud', 'gamescope'] as const)" :key="tool">
+                  <label :for="`detail-${tool}`" class="modal-label">{{ performanceToolName(tool) }}</label>
+                  <select :id="`detail-${tool}`" :value="toolOverrides[tool].value" @change="toolOverrides[tool].value = ($event.target as HTMLSelectElement).value as 'default' | 'on' | 'off'" class="modal-input w-full" :disabled="performanceToolState(tool, performanceTools[tool], sandboxEnabled, launchMode).disabled">
+                    <option value="default">Default ({{ performanceDefaults[tool] ? 'On' : 'Off' }})</option><option value="on">On</option><option value="off">Off</option>
+                  </select>
+                  <p class="text-xs" style="color:var(--text-secondary)">{{ performanceToolState(tool, performanceTools[tool], sandboxEnabled, launchMode).note }}</p>
+                </div>
+              </div>
+              <div v-if="platformCapabilities.platform === 'linux' && gamescopeOn" class="grid grid-cols-2 gap-4" data-testid="gamescope-overrides">
+                <p class="col-span-2 text-xs" style="color:var(--text-secondary)">Gamescope options for this game. Empty fields use the Settings values.</p>
+                <div>
+                  <label for="detail-gamescope-resolution" class="modal-label">Game resolution</label>
+                  <input id="detail-gamescope-resolution" v-model="gamescopeResolution" type="text" class="modal-input w-full" placeholder="Settings value (for example 816x624)" :aria-invalid="!!gamescopeResolutionError" />
+                  <p v-if="gamescopeResolutionError" class="text-xs" role="alert" style="color:var(--danger-text)">{{ gamescopeResolutionError }}</p>
+                </div>
+                <div>
+                  <label for="detail-gamescope-scaler" class="modal-label">Scaler</label>
+                  <select id="detail-gamescope-scaler" v-model="gamescopeScaler" class="modal-input w-full">
+                    <option value="">Settings value</option>
+                    <option v-for="option in SCALER_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="detail-gamescope-filter" class="modal-label">Filter</label>
+                  <select id="detail-gamescope-filter" v-model="gamescopeFilter" class="modal-input w-full">
+                    <option value="">Settings value</option>
+                    <option v-for="option in FILTER_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="detail-gamescope-args" class="modal-label">Extra arguments</label>
+                  <input id="detail-gamescope-args" v-model="gamescopeArgs" type="text" class="modal-input w-full font-mono" placeholder="Added after the Settings arguments" :aria-invalid="!!gamescopeArgsError" />
+                  <p v-if="gamescopeArgsError" class="text-xs" role="alert" style="color:var(--danger-text)">{{ gamescopeArgsError }}</p>
+                </div>
+              </div>
+
+              <div v-if="platformCapabilities.japanese_locale" data-testid="japanese-locale-row">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium" style="color: var(--text-primary)">
+                    {{ japaneseLocale.label }}
+                  </span>
+                  <label class="relative inline-flex items-center ml-auto" :class="japaneseLocale.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'">
+                    <input
+                      type="checkbox"
+                      v-model="runJapaneseLocale"
+                      :aria-label="japaneseLocale.label"
+                      :disabled="japaneseLocale.disabled"
+                      class="sr-only peer"
+                    />
+                    <div class="ui-toggle"></div>
+                  </label>
+                </div>
+                <p class="text-xs mt-1 pr-12" style="color: var(--text-muted)">
+                  Enable this if the game has unreadable text (Mojibake) or crashes due to missing Japanese fonts.
+                </p>
+                <p
+                  v-if="japaneseLocale.note"
+                  class="text-xs mt-1 pr-12"
+                  style="color: var(--text-muted)"
+                  data-testid="japanese-locale-note"
+                >
+                  {{ japaneseLocale.note }}
+                  <button v-if="japaneseLocale.needsSettings" type="button" aria-label="Set up Locale Emulator" class="underline" style="color:var(--brand)" @click="closeAndNavigate(WINDOWS_TOOLS_ROUTE)">Set up</button>
+                </p>
+              </div>
+
+              <div v-if="platformCapabilities.wayland">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium" style="color: var(--text-primary)">
+                    Run in Wayland compatibility mode
+                  </span>
+                  <label class="relative inline-flex items-center cursor-pointer ml-auto">
+                    <input
+                      type="checkbox"
+                      v-model="runWayland"
+                      aria-label="Run in Wayland compatibility mode"
+                      class="sr-only peer"
+                    />
+                    <div class="ui-toggle"></div>
+                  </label>
+                </div>
+                <p class="text-xs mt-1 pr-12" style="color: var(--text-muted)">
+                  Enable this if your system uses Wayland and the game crashes or freezes on launch.
+                </p>
+              </div>
+
+              <div v-if="showCheatEngineRow" :style="ceInstalled ? '' : 'opacity: 0.7'">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium" style="color: var(--text-primary)">
+                    Auto-Launch & Inject Cheat Engine
+                  </span>
+                  <span
+                    v-if="!ceInstalled"
+                    class="text-[0.6875rem] uppercase px-1.5 py-0.5 rounded font-bold"
+                    style="background: var(--bg-overlay); color: var(--text-muted); border: 1px solid var(--border)"
+                  >
+                    Not installed
+                  </span>
+                  <label
+                    class="relative inline-flex items-center ml-auto"
+                    :class="ceInstalled ? 'cursor-pointer' : 'cursor-not-allowed'"
+                  >
+                    <input
+                      type="checkbox"
+                      v-model="autoInjectCe"
+                      aria-label="Auto-Launch & Inject Cheat Engine"
+                      :disabled="!ceInstalled"
+                      class="sr-only peer"
+                    />
+                    <div class="ui-toggle"></div>
+                  </label>
+                </div>
+                <p class="text-xs mt-1 pr-12" style="color: var(--text-muted)">
+                  Spawns Cheat Engine inside the same virtual Wine sandbox immediately after the game starts.
+                </p>
+              </div>
+            </div>
+          </details>
         </section>
 
         <section v-show="activeTab === 'Journal'" id="game-detail-panel-Journal" role="tabpanel" aria-labelledby="game-detail-tab-Journal" tabindex="0" class="journal-panel space-y-6">
@@ -3281,7 +3392,21 @@ const removeAttachment = async (name: string) => {
             <button class="modal-btn mt-3 min-h-11" @click="loadJournal">Retry</button>
           </div>
           <template v-else>
-            <p v-if="!sessions.length" style="color: var(--text-secondary)">No sessions have been recorded yet. Launch this game from wLib to start its journal.</p>
+            <div v-if="!sessions.length" class="journal-empty">
+              <IconHistory class="journal-empty-icon" aria-hidden="true" />
+              <p class="font-semibold">No sessions have been recorded yet.</p>
+              <p class="journal-empty-text">
+                Each time you play this game from wLib, the journal records when you started, how long you played and which version it was. Sessions are grouped by version.
+              </p>
+              <button
+                v-if="!isRunning && !isCurrentlyWishlisted"
+                type="button"
+                class="modal-btn ui-action-btn mt-1"
+                @click="launchGame"
+              >
+                <IconPlayerPlayFilled class="ui-action-icon" aria-hidden="true" />Play now
+              </button>
+            </div>
             <div v-if="beforeJournal > 0" class="journal-before">
               <span>Before journal</span><span>{{ journalDuration(beforeJournal) }}</span>
             </div>
@@ -3521,7 +3646,7 @@ const removeAttachment = async (name: string) => {
             <form class="flex flex-wrap gap-2 mb-2" @submit.prevent="addNoteLink">
               <input v-model="newNoteLinkUrl" aria-label="Link URL" @input="noteLinkError = ''" placeholder="https://example.com/guide" class="modal-input flex-1 min-w-0" />
               <input v-model="newNoteLinkLabel" aria-label="Link label" placeholder="Label (optional)" maxlength="200" class="modal-input flex-1 min-w-0" />
-              <button type="submit" class="modal-btn">Add</button>
+              <button type="submit" class="modal-btn">Add link</button>
             </form>
             <p v-if="noteLinkError" class="text-xs mb-2" role="alert" style="color: var(--danger-text)">{{ noteLinkError }}</p>
             <p v-if="!noteLinks.length" class="text-xs" style="color: var(--text-muted)">No links added.</p>
@@ -3592,7 +3717,7 @@ const removeAttachment = async (name: string) => {
         </section>
 
         <section
-          v-if="toolEngine && game && typeof game.id === 'number'"
+          v-if="game && typeof game.id === 'number'"
           v-show="activeTab === 'Tools'"
           id="game-detail-panel-Tools"
           role="tabpanel"
@@ -3600,7 +3725,9 @@ const removeAttachment = async (name: string) => {
           tabindex="0"
           class="space-y-6"
         >
-          <GameToolsTab :game-id="game.id" :engine="toolEngine" :active="isOpen && activeTab === 'Tools'" />
+          <p class="text-xs" style="color: var(--text-muted)">Changes here apply at once. They do not wait for Save changes.</p>
+          <GameSavesSection :game-id="game.id" :active="isOpen && activeTab === 'Tools'" />
+          <GameToolsTab v-if="toolEngine" :game-id="game.id" :engine="toolEngine" :active="isOpen && activeTab === 'Tools'" />
         </section>
       </div>
 
@@ -3622,7 +3749,7 @@ const removeAttachment = async (name: string) => {
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="ml-auto flex flex-wrap items-center justify-end gap-3">
             <template v-if="hasUnsavedChanges">
-              <span class="text-xs" style="color: var(--text-muted)">Unsaved changes</span>
+              <span class="text-xs" style="color: var(--text-muted)">{{ unsavedText }}</span>
               <button
                 @click="save"
                 :disabled="saving || !title.trim()"
@@ -3671,6 +3798,23 @@ const removeAttachment = async (name: string) => {
 
 .journal-panel {
   color: var(--text-primary);
+}
+.journal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  max-width: 34rem;
+  padding: 1.5rem 0;
+}
+.journal-empty-icon {
+  width: 1.5rem;
+  height: 1.5rem;
+  color: var(--text-muted);
+}
+.journal-empty-text {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
 }
 .journal-before,
 .journal-session {
@@ -3836,6 +3980,101 @@ const removeAttachment = async (name: string) => {
   color: var(--text-primary);
 }
 
+/* Unsaved edits wait in this tab. Amber reads apart from the brand-coloured active tab. */
+.detail-tab-dot {
+  display: inline-block;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  margin-left: 0.375rem;
+  border-radius: 9999px;
+  background: var(--warning-text);
+  vertical-align: 0.125rem;
+}
+
+/* Launch tab: groups in one column, split by a thin rule. */
+.launch-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.launch-group + .launch-group {
+  border-top: 1px solid var(--border);
+  padding-top: 1.25rem;
+}
+
+.launch-advanced-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  cursor: pointer;
+  list-style: none;
+  border-radius: 0.375rem;
+}
+
+.launch-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.launch-advanced-summary:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.launch-advanced-chevron {
+  width: 1rem;
+  height: 1rem;
+  align-self: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+
+.launch-advanced[open] .launch-advanced-chevron {
+  transform: none;
+}
+
+.launch-advanced-state {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .launch-advanced-chevron {
+    transition: none;
+  }
+}
+
+/* A section heading with the quiet "saves at once" note on the right. */
+.instant-save-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+}
+
+.instant-save-note {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.instant-save-note [role="status"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--success-text);
+}
+
+.instant-save-icon {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
 .detail-tab[aria-selected="true"] {
   border-bottom-color: var(--brand);
   color: var(--brand);
@@ -3851,7 +4090,7 @@ const removeAttachment = async (name: string) => {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem 1rem;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
 }
 

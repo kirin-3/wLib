@@ -46,7 +46,7 @@ async (page) => {
     });
     await page.goto(new URL("/#/", previousUrl).toString());
     await page.reload();
-    const open = title => page.getByRole("checkbox", { name: `${title}. Press Enter for details.`, exact: true }).press("Enter");
+    const open = title => page.getByRole("row", { name: title, exact: true }).press("Enter");
     await open("Aurora");
     const dialog = page.getByRole("dialog");
     const save = dialog.getByRole("button", { name: "Save changes", exact: true });
@@ -61,12 +61,12 @@ async (page) => {
     check(await dialog.getByText("by Example Studio").isVisible(), "The header must show the developer");
     check(await dialog.getByText("Update: 2.0").isVisible(), "The header must show available updates");
     check(await tab("Overview").getAttribute("aria-selected") === "true", "Overview must open by default");
-    check(await dialog.locator(".summary-card").count() === 4, "Timestamps must not occupy stat tiles");
+    check(await dialog.locator(".summary-card").count() === 3, "Timestamps and the rating average must not occupy stat tiles");
     check(await dialog.getByRole("button", { name: "Remove tag Fantasy" }).isVisible(), "Tags must be expanded by default");
     check(await save.count() === 0, "Save must be hidden without edits");
     check(!await dialog.getByLabel("Executable path", { exact: true }).isVisible(), "Overview must hide launch settings");
 
-    await dialog.getByRole("button", { name: "Rate Graphics 4 of 5" }).click();
+    await dialog.getByRole("radio", { name: "Rate Graphics 4 of 5" }).click();
     await dialog.getByLabel("New tag").fill("Test tag");
     await dialog.getByLabel("New tag").press("Enter");
     await page.waitForFunction(() => JSON.parse(localStorage.getItem("wlib-mock-games"))[0].tags.includes("Test tag"));
@@ -75,7 +75,7 @@ async (page) => {
     await page.evaluate(() => {
       window.pywebview = { api: { update_game: () => ({ success: false, error: "Simulated failure" }) } };
     });
-    await dialog.getByRole("button", { name: "Rate Graphics 5 of 5" }).click();
+    await dialog.getByRole("radio", { name: "Rate Graphics 5 of 5" }).click();
     await page.getByText("Failed to save: Simulated failure", { exact: true }).waitFor();
     check(await save.count() === 1, "Failed immediate saves must reveal Save for retry");
     await dismissError("Failed to save: Simulated failure");
@@ -134,7 +134,14 @@ async (page) => {
     check((await dialog.boundingBox()).height === stableTabHeight, "Modal height must remain stable across tabs");
     await tab("Launch").click();
     await dialog.getByLabel("Runtime mode").waitFor();
+    const advanced = dialog.getByTestId("launch-advanced");
+    check(!await advanced.evaluate(el => el.open), "Advanced must start collapsed when all its options are at default");
+    check(await advanced.getByTestId("launch-advanced-state").textContent() === "All at default", "Collapsed Advanced must say that nothing in it is changed");
+    await advanced.locator("summary").click();
     await dialog.getByText("Enable this if the game has unreadable text", { exact: false }).waitFor();
+    await dialog.getByLabel("Run in Wayland compatibility mode").evaluate(el => el.click());
+    check((await advanced.getByTestId("launch-advanced-state").textContent()).includes("Wayland mode"), "The Advanced summary must name a changed option");
+    await dialog.getByLabel("Run in Wayland compatibility mode").evaluate(el => el.click());
     check(await dialog.getByRole("button", { name: "Move Part 2 up" }).isDisabled(), "The first target cannot move up");
     await dialog.getByRole("button", { name: "Move Extras up" }).click();
     await page.waitForFunction(() => JSON.parse(localStorage.getItem("wlib-mock-launch-targets")).find(target => target.label === "Extras").sort_order === 0);
