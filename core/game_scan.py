@@ -19,7 +19,15 @@ class GameGuess(TypedDict):
 
 
 _PLATFORM_SUFFIX_RE = re.compile(
-    r"[-_ .]+(pc|win(dows)?(64|32)?|linux|mac|market|android|x64|x86|64bit|32bit)$",
+    r"[-_ .]+(pc|win(dows)?(64|32)?|linux|mac|market|android|x64|x86|64bit|32bit"
+    + r"|compressed)$",
+    re.I,
+)
+# Upload part markers: "Game-0.9(part2)", "Game [Part 1 of 2]", "Game-0.9-part2".
+# Without brackets the marker must follow a digit, so "Some_Part2" keeps its name.
+_PART_SUFFIX_RE = re.compile(
+    r"(?:[-_ .]*[(\[]\s*part[-_ .]?\d+(?:\s*of\s*\d+)?\s*[)\]]"
+    + r"|(?<=\d)[-_.]part\d+)$",
     re.I,
 )
 _VERSION_SUFFIX_RE = re.compile(
@@ -84,8 +92,9 @@ def guess_title_and_version(folder_name: str) -> tuple[str, str]:
     """'SummertimeSaga-0.20.16-pc' -> ('Summertime Saga', '0.20.16')."""
     name = folder_name.strip()
     version = ""
-    for _ in range(3):
+    for _ in range(4):
         stripped = _PLATFORM_SUFFIX_RE.sub("", name)
+        stripped = _PART_SUFFIX_RE.sub("", stripped)
         match = _VERSION_SUFFIX_RE.search(stripped)
         if match and match.start() > 0:
             version = version or match.group(1).replace("_", ".")

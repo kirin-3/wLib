@@ -21,6 +21,24 @@ def test_guess_title_and_version_from_folder_names():
     assert guess_title_and_version("Game 2") == ("Game 2", "")
 
 
+@pytest.mark.parametrize(
+    "folder, expected",
+    [
+        ("Game-0.9(part2)-pc", ("Game", "0.9")),
+        ("Game-0.9-part2", ("Game", "0.9")),
+        ("Game [Part 1 of 2] v1.0", ("Game", "1.0")),
+        ("Game_v0.5_compressed", ("Game", "0.5")),
+        ("Game_v0.5_part1_compressed", ("Game", "0.5")),
+        ("Game-0.3-win-linux", ("Game", "0.3")),
+        # A part word that belongs to the name stays.
+        ("Lust Academy - Part 2", ("Lust Academy - Part 2", "")),
+        ("Some_Part2", ("Some Part2", "")),
+    ],
+)
+def test_guess_title_and_version_drops_part_and_compressed_markers(folder, expected):
+    assert guess_title_and_version(folder) == expected
+
+
 @pytest.mark.parametrize("default", ["false", "true"])
 def test_scanned_game_add_uses_sandbox_default(tmp_path, default):
     update_setting("sandbox_new_games", default)
