@@ -1757,6 +1757,13 @@ export type StorageCleanupActionId =
   | "cover_cache"
   | "bepinex_cache";
 
+/**
+ * How much a cleanup action can lose: `safe` caches and leftovers come back by
+ * themselves, `review` files come back only with a new download, and `risky`
+ * files can hold game saves.
+ */
+export type StorageCleanupTier = "safe" | "review" | "risky";
+
 export interface StorageCategoryReport {
   id: string;
   label: string;
@@ -1812,6 +1819,7 @@ export interface StorageReport {
 export interface StorageCleanupAction {
   id: StorageCleanupActionId;
   label: string;
+  tier: StorageCleanupTier;
   bytes: number;
   count: number;
   blocked_reason: string;
@@ -1839,11 +1847,21 @@ export interface StorageCleanupPreviewResponse extends ApiBasicResponse {
   preview_id?: string;
   action?: StorageCleanupActionId;
   label?: string;
+  tier?: StorageCleanupTier;
   count?: number;
   bytes?: number;
   what_stays?: string;
   warning?: string;
+  /** The largest targets by name, for the confirmation (none for the cover cache). */
+  items?: StorageCleanupPreviewItem[];
+  /** How many targets the `items` list leaves out. */
+  more_items?: number;
   code?: string;
+}
+
+export interface StorageCleanupPreviewItem {
+  label: string;
+  bytes: number;
 }
 
 export interface StorageCleanupRunResponse extends ApiBasicResponse {

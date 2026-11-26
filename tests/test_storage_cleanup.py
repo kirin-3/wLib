@@ -10,6 +10,8 @@ from typing import cast
 
 from core import storage_usage
 from core.storage_cleanup import (
+    ACTION_ORDER,
+    ACTION_TIERS,
     PREVIEW_TTL_SECONDS,
     CleanupContext,
     StorageCleanupService,
@@ -414,3 +416,118 @@ def test_cover_cache_targets_skip_local_cover_cards(tmp_path: Path):
     ctx = CleanupContext(data_dir=lambda: str(data_dir))
     names = sorted(Path(t.path).name for t in list_action_targets("cover_cache", ctx))
     assert names == ["orphan1.anim.webp", "remote1.jpg", "remote1.still.webp"]
+
+
+def test_every_action_has_a_risk_tier_in_statuses_and_preview(tmp_path: Path):
+    data_dir = tmp_path / "data"
+    cache_dir = data_dir / "covers" / "cache"
+    cache_dir.mkdir(parents=True)
+    _ = (cache_dir / "1.jpg").write_bytes(b"c" * 4096)
+    ctx = CleanupContext(data_dir=lambda: str(data_dir))
+    _scan, cleanup = _make_services(tmp_path, lambda: ctx)
+
+    assert set(ACTION_TIERS) == set(ACTION_ORDER)
+    # Caches and leftovers that come back by themselves are safe; files that
+    # can hold saves are risky; files that need a new download need a review.
+    assert ACTION_TIERS == {
+        "download_archives": "review",
+        "unpack_leftovers": "safe",
+        "removed_game_data": "risky",
+        "save_backups": "risky",
+        "proton_builds": "review",
+        "cover_cache": "safe",
+        "bepinex_cache": "safe",
+    }
+
+    statuses = cleanup.action_statuses(None)
+    assert {str(s["id"]): s["tier"] for s in statuses} == ACTION_TIERS
+
+    prev = cleanup.preview("cover_cache")
+    assert prev["success"] is True
+    assert prev["tier"] == "safe"
+
+
+def test_save_backup_copy_uses_real_plurals(tmp_path: Path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    def statuses_for(keep: int | None) -> dict[str, dict[str, object]]:
+        ctx = CleanupContext(
+            data_dir=lambda: str(data_dir), save_backup_keep=lambda: keep
+        )
+        _scan, cleanup = _make_services(tmp_path, lambda: ctx)
+        return {str(s["id"]): s for s in cleanup.action_statuses(None)}
+
+    assert statuses_for(1)["save_backups"]["what_stays"] == (
+        "The newest backup for each game stays."
+    )
+    assert statuses_for(3)["save_backups"]["what_stays"] == (
+        "The newest 3 backups for each game stay."
+    )
+    assert statuses_for(None)["save_backups"]["what_stays"] == "All save backups stay."
+    assert statuses_for(3)["unpack_leftovers"]["label"] == "Temporary install files"
+
+
+def test_preview_names_the_largest_items_for_the_confirmation(tmp_path: Path):
+    data_dir = tmp_path / "data"
+    sandbox = data_dir / "sandbox" / "removed" / "12_2026-11-20_10-30-00"
+    player = data_dir / "web-player" / "removed" / "12_2026-11-20_10-30-00"
+    odd = data_dir / "sandbox" / "removed" / "leftover"
+    for folder, size in ((sandbox, 16384), (player, 8192), (odd, 4096)):
+        folder.mkdir(parents=True)
+        _ = (folder / "data.bin").write_bytes(b"x" * size)
+    backups = data_dir / "save-backups" / "7"
+    for name in (
+        "2026-11-01_09-00-00",
+        "2026-11-02_09-00-00",
+        "2026-11-03_09-00-00-1",
+    ):
+        (backups / name).mkdir(parents=True)
+        _ = (backups / name / "save.dat").write_bytes(b"s" * 4096)
+    downloads = data_dir / "downloads"
+    downloads.mkdir()
+    for index in range(10):
+        _ = (downloads / f"game-{index}.zip").write_bytes(b"z" * (4096 * (index + 1)))
+    cache = data_dir / "covers" / "cache"
+    cache.mkdir(parents=True)
+    _ = (cache / "3f2a9c.jpg").write_bytes(b"c" * 4096)
+
+    ctx = CleanupContext(
+        data_dir=lambda: str(data_dir),
+        save_backup_keep=lambda: 1,
+        game_title=lambda gid: "Midnight Harbor" if gid == 7 else "",
+    )
+    _scan, cleanup = _make_services(tmp_path, lambda: ctx)
+
+    removed = cleanup.preview("removed_game_data")
+    assert [
+        item["label"] for item in cast(list[dict[str, object]], removed["items"])
+    ] == [
+        "Sandbox of a game removed 2026-11-20 10:30",
+        "Built-in player data of a game removed 2026-11-20 10:30",
+        "Sandbox: leftover",
+    ]
+    assert removed["more_items"] == 0
+
+    saves = cleanup.preview("save_backups")
+    labels = sorted(
+        str(item["label"]) for item in cast(list[dict[str, object]], saves["items"])
+    )
+    assert labels == [
+        "Midnight Harbor: backup from 2026-11-01 09:00",
+        "Midnight Harbor: backup from 2026-11-02 09:00",
+    ]
+
+    archives = cleanup.preview("download_archives")
+    items = cast(list[dict[str, object]], archives["items"])
+    assert len(items) == 8
+    assert items[0]["label"] == "game-9.zip"
+    assert [int(cast(int, item["bytes"])) for item in items] == sorted(
+        (int(cast(int, item["bytes"])) for item in items), reverse=True
+    )
+    assert archives["more_items"] == 2
+
+    # Hashed cache names mean nothing to the user: counts only.
+    covers = cleanup.preview("cover_cache")
+    assert covers["items"] == []
+    assert covers["more_items"] == 0

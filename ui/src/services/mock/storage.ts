@@ -5,6 +5,7 @@ import type {
   StorageCleanupActionId,
   StorageCleanupPreviewResponse,
   StorageCleanupRunResponse,
+  StorageCleanupTier,
   StorageGameRow,
   StorageReport,
   StorageStateResponse,
@@ -15,40 +16,47 @@ const MB = 1024 * 1024;
 
 const MOCK_ACTION_META: Record<
   StorageCleanupActionId,
-  { label: string; what_stays: string; warning: string }
+  { label: string; tier: StorageCleanupTier; what_stays: string; warning: string }
 > = {
   download_archives: {
     label: "Finished download archives",
+    tier: "review",
     what_stays: "Partial downloads, downloads waiting to be installed, open archives, and torrent data stay.",
     warning: "",
   },
   unpack_leftovers: {
-    label: "Unpack leftovers",
+    label: "Temporary install files",
+    tier: "safe",
     what_stays: "Installed games and downloads stay.",
     warning: "",
   },
   removed_game_data: {
     label: "Data of removed games",
+    tier: "risky",
     what_stays: "Active games, their sandboxes, and save backups stay.",
     warning: "Removed game sandboxes and built-in player storage can hold game saves.",
   },
   save_backups: {
     label: "Old save backups",
-    what_stays: "The newest 3 backup(s) for each game stay.",
+    tier: "risky",
+    what_stays: "The newest 3 backups for each game stay.",
     warning: "",
   },
   proton_builds: {
     label: "Unused Proton builds",
+    tier: "review",
     what_stays: "Proton builds used by any game, the default runner, and Steam, Lutris or umu builds stay.",
     warning: "",
   },
   cover_cache: {
     label: "Cover cache",
+    tier: "safe",
     what_stays: "User-chosen local covers stay.",
     warning: "",
   },
   bepinex_cache: {
     label: "BepInEx download cache",
+    tier: "safe",
     what_stays: "Installed BepInEx files inside game folders stay.",
     warning: "",
   },
@@ -183,6 +191,56 @@ export function buildMockStorageReport(): StorageReport {
   return report;
 }
 
+/** Item names a preview lists, like the backend's 8 largest targets. */
+const MOCK_ITEM_NAMES: Partial<Record<StorageCleanupActionId, string[]>> = {
+  download_archives: ["MidnightHarbor-0.9-pc.zip", "LanternDistrict-v6.1.zip", "rpgm-runner.tar.gz"],
+  removed_game_data: [
+    "Sandbox of a game removed 2026-11-02 21:14",
+    "Built-in player data of a game removed 2026-10-18 09:40",
+  ],
+  save_backups: [
+    "Midnight Harbor: backup from 2026-11-01 20:12",
+    "Midnight Harbor: backup from 2026-10-28 19:03",
+    "Lantern District: backup from 2026-10-30 22:47",
+    "Lantern District: backup from 2026-10-21 18:30",
+  ],
+  proton_builds: ["GE-Proton9-20"],
+  bepinex_cache: ["BepInEx_win_x64_5.4.23.2", "BepInEx-Unity.IL2CPP-6.0.0-be.733"],
+};
+
+function mockPreviewItems(
+  action: StorageCleanupActionId,
+  count: number,
+  bytes: number,
+): Pick<StorageCleanupPreviewResponse, "items" | "more_items"> {
+  const names = (MOCK_ITEM_NAMES[action] ?? []).slice(0, Math.min(count, 8));
+  if (names.length === 0) return { items: [], more_items: 0 };
+  // Largest first, splitting the total so the sizes add up.
+  const weights = names.map((_, index) => names.length - index);
+  const sum = weights.reduce((a, b) => a + b, 0);
+  return {
+    items: names.map((label, index) => ({
+      label,
+      bytes: Math.round((bytes * (weights[index] ?? 0)) / sum),
+    })),
+    more_items: Math.max(0, count - names.length),
+  };
+}
+
+/**
+ * Previews expire after 15 minutes, like the backend. A browser preview can
+ * set `wlib-mock-storage-preview-ttl-ms` to try the expired path quickly.
+ */
+function mockPreviewTtlMs(): number {
+  try {
+    const raw = Number(localStorage.getItem("wlib-mock-storage-preview-ttl-ms"));
+    if (Number.isFinite(raw) && raw > 0) return raw;
+  } catch {
+    // Ignore storage access errors in headless contexts.
+  }
+  return 15 * 60 * 1000;
+}
+
 interface MockPreview {
   id: string;
   action: StorageCleanupActionId;
@@ -230,6 +288,7 @@ export class MockStorage {
       return {
         id,
         label: meta.label,
+        tier: meta.tier,
         bytes: summary.bytes,
         count: summary.count,
         blocked_reason: blocked,
@@ -322,17 +381,19 @@ export class MockStorage {
       preview_id: id,
       action,
       label: meta.label,
+      tier: meta.tier,
       count: summary.count,
       bytes: summary.bytes,
       what_stays: meta.what_stays,
       warning: meta.warning,
+      ...mockPreviewItems(action, summary.count, summary.bytes),
     };
   }
 
   runCleanup(previewId: string): StorageCleanupRunResponse {
     const entry = this.previews.get(previewId);
     this.previews.delete(previewId);
-    if (!entry) {
+    if (!entry || Date.now() - entry.createdAt > mockPreviewTtlMs()) {
       return {
         success: false,
         code: "preview_expired",

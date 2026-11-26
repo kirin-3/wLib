@@ -3125,7 +3125,12 @@ class ApiBase:
             return True
 
     def _storage_cleanup_context(self) -> CleanupContext:
-        from core.database import get_all_games, get_save_backup_keep, get_setting
+        from core.database import (
+            get_all_games,
+            get_game,
+            get_save_backup_keep,
+            get_setting,
+        )
         from core.downloads.queue import READY
         from core.downloads.transfer import staging_dir
         from core.host_platform import get_data_dir
@@ -3177,6 +3182,10 @@ class ApiBase:
                 if game.get("proton_version")
             ]
 
+        def game_title(game_id: int) -> str:
+            game = get_game(game_id)
+            return str(game.get("title") or "") if game else ""
+
         def purge_covers() -> dict[str, object]:
             purge_fn = getattr(self, "purge_cover_cache", None)
             if callable(purge_fn):
@@ -3198,6 +3207,7 @@ class ApiBase:
             default_proton_path=default_proton_path,
             game_proton_versions=game_proton_versions,
             purge_cover_cache=purge_covers,
+            game_title=game_title,
         )
 
     @staticmethod

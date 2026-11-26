@@ -24,10 +24,11 @@ import threading
 import time
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal, final
 
 from core.archive_install import is_within_real, real_path
-from core.game_saves import list_backups
+from core.game_saves import BACKUP_NAME_PATTERN, BACKUP_TIMESTAMP_FORMAT, list_backups
 from core.host_platform import get_data_dir
 from core.storage_usage import (
     ActionSummary,
@@ -41,6 +42,8 @@ from core.storage_usage import (
 _log = logging.getLogger(__name__)
 
 PREVIEW_TTL_SECONDS = 15 * 60
+# How many of the largest targets a preview names for the confirmation.
+PREVIEW_ITEM_LIMIT = 8
 # Name prefix of the temporary archives that `core.rpgmaker_runner` downloads.
 RUNNER_DOWNLOAD_PREFIX = "rpgm-"
 
@@ -66,12 +69,28 @@ ACTION_ORDER: tuple[CleanupActionId, ...] = (
 
 ACTION_LABELS: dict[CleanupActionId, str] = {
     "download_archives": "Finished download archives",
-    "unpack_leftovers": "Unpack leftovers",
+    "unpack_leftovers": "Temporary install files",
     "removed_game_data": "Data of removed games",
     "save_backups": "Old save backups",
     "proton_builds": "Unused Proton builds",
     "cover_cache": "Cover cache",
     "bepinex_cache": "BepInEx download cache",
+}
+
+CleanupTier = Literal["safe", "review", "risky"]
+
+# How much the user can lose with each action:
+# - safe: caches and leftovers that wLib downloads or makes again when needed;
+# - review: no saves, but the files come back only with a new download;
+# - risky: the files can hold game saves or are save backups.
+ACTION_TIERS: dict[CleanupActionId, CleanupTier] = {
+    "download_archives": "review",
+    "unpack_leftovers": "safe",
+    "removed_game_data": "risky",
+    "save_backups": "risky",
+    "proton_builds": "review",
+    "cover_cache": "safe",
+    "bepinex_cache": "safe",
 }
 
 
@@ -111,6 +130,7 @@ class CleanupContext:
     default_proton_path: Callable[[], str] = lambda: ""
     game_proton_versions: Callable[[], Sequence[str]] = lambda: ()
     purge_cover_cache: Callable[[], dict[str, object]] | None = None
+    game_title: Callable[[int], str] = lambda _gid: ""
 
 
 def _norm_key(path: str) -> str:
@@ -184,7 +204,7 @@ def action_blocked_reason(action: CleanupActionId, ctx: CleanupContext) -> str |
         if ctx.archive_install_running():
             return "An archive install is running."
         if ctx.rpgm_runner_preparing():
-            return "RPG Maker runner preparation is running."
+            return "The RPG Maker runner is being set up."
     elif action == "save_backups":
         if ctx.save_backup_keep() is None:
             return '"Save backups to keep per game" is set to Keep all.'
@@ -215,7 +235,9 @@ def _action_copy(action: CleanupActionId, ctx: CleanupContext) -> tuple[str, str
         keep = ctx.save_backup_keep()
         if keep is None:
             return ("All save backups stay.", "")
-        return (f"The newest {keep} backup(s) for each game stay.", "")
+        if keep == 1:
+            return ("The newest backup for each game stays.", "")
+        return (f"The newest {keep} backups for each game stay.", "")
     if action == "proton_builds":
         return (
             "Proton builds used by any game, the default runner, and Steam, Lutris or umu builds stay.",
@@ -224,6 +246,58 @@ def _action_copy(action: CleanupActionId, ctx: CleanupContext) -> tuple[str, str
     if action == "cover_cache":
         return ("User-chosen local covers stay.", "")
     return ("Installed BepInEx files inside game folders stay.", "")
+
+
+def _stamp_text(stamp: str) -> str:
+    """`2026-11-20_10-30-00` as `2026-11-20 10:30`, or "" for another text."""
+    try:
+        when = datetime.strptime(stamp, BACKUP_TIMESTAMP_FORMAT)
+    except ValueError:
+        return ""
+    return when.strftime("%Y-%m-%d %H:%M")
+
+
+def _target_item_label(
+    action: CleanupActionId, target: CleanupTarget, ctx: CleanupContext
+) -> str:
+    """The name of one target as the confirmation lists it."""
+    name = target.label or os.path.basename(target.path)
+    if action == "removed_game_data":
+        # `<game id>_<removal time>`, made by `game_sandbox._retire_folder`.
+        kind = (
+            "Built-in player data"
+            if os.path.basename(os.path.dirname(os.path.dirname(target.path)))
+            == "web-player"
+            else "Sandbox"
+        )
+        _gid, _sep, stamp = name.partition("_")
+        when = _stamp_text(stamp)
+        return f"{kind} of a game removed {when}" if when else f"{kind}: {name}"
+    if action == "save_backups":
+        title = ctx.game_title(target.game_id) if target.game_id is not None else ""
+        match = BACKUP_NAME_PATTERN.match(name)
+        when = _stamp_text(match.group(1)) if match else ""
+        backup = f"backup from {when}" if when else f"backup {name}"
+        return f"{title}: {backup}" if title else backup.capitalize()
+    return name
+
+
+def preview_items(
+    action: CleanupActionId, targets: Sequence[CleanupTarget], ctx: CleanupContext
+) -> tuple[list[dict[str, object]], int]:
+    """The largest targets by name and size, and how many more there are.
+
+    Cover cache files have hashed names that mean nothing to the user, so
+    that action names no items.
+    """
+    if action == "cover_cache" or not targets:
+        return [], 0
+    largest = sorted(targets, key=lambda t: t.bytes, reverse=True)
+    items: list[dict[str, object]] = [
+        {"label": _target_item_label(action, t, ctx), "bytes": t.bytes}
+        for t in largest[:PREVIEW_ITEM_LIMIT]
+    ]
+    return items, max(0, len(targets) - PREVIEW_ITEM_LIMIT)
 
 
 def _list_download_archive_targets(
@@ -533,6 +607,7 @@ class StorageCleanupService:
                 {
                     "id": action,
                     "label": ACTION_LABELS[action],
+                    "tier": ACTION_TIERS[action],
                     "bytes": int(summary.get("bytes", 0)),
                     "count": int(summary.get("count", 0)),
                     "blocked_reason": blocked or "",
@@ -560,6 +635,7 @@ class StorageCleanupService:
         targets = list_action_targets(action_id, ctx)
         total_bytes = sum(t.bytes for t in targets)
         what_stays, warning = _action_copy(action_id, ctx)
+        items, more_items = preview_items(action_id, targets, ctx)
         preview_id = secrets.token_urlsafe(16)
         now = self._clock()
         entry = PreviewEntry(
@@ -580,10 +656,13 @@ class StorageCleanupService:
             "preview_id": preview_id,
             "action": action_id,
             "label": ACTION_LABELS[action_id],
+            "tier": ACTION_TIERS[action_id],
             "count": len(targets),
             "bytes": total_bytes,
             "what_stays": what_stays,
             "warning": warning,
+            "items": items,
+            "more_items": more_items,
         }
 
     def run(self, preview_id: str) -> dict[str, object]:
