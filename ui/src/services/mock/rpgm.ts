@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { RgssRawNodeData, RpgmNames, RpgmSaveFormat, RpgmSaveSlot, RpgmSaveView } from "../api";
+import { mockGameSaves } from "./gameSaves";
 import { readMockGames } from "./games";
 
 let mockRpgmSaveMtime = 1;
@@ -13,6 +14,14 @@ const mockRpgmWriteRefusal = (args: unknown[], size: number): Record<string, unk
     return { success: false, mock: true, error: "The save changed since it was opened. Reopen the slot.", error_code: "changed" };
   }
   return null;
+};
+
+// The write's backup goes into the mock Saves list, so Undo save and the
+// Saves section can find it.
+const mockRpgmWriteBackup = (gameId: number): string => {
+  const result = mockGameSaves("backup_game_saves", [gameId]);
+  const name = typeof result === "object" && result !== null && "backup" in result ? result.backup : "";
+  return typeof name === "string" && name ? name : "2026-01-06_12-00-00";
 };
 
 const mockRpgmNames = (): RpgmNames => ({
@@ -417,7 +426,7 @@ export const mockRpgmSaves = (method: string, args: unknown[]): unknown => {
     const target = globalThis as { __wlibMockRpgmWrites?: unknown[] };
     (target.__wlibMockRpgmWrites ??= []).push({ file: args[1], patches: args[2] });
     mockRpgmSaveMtime += 1;
-    const name = "2026-01-06_12-00-00";
+    const name = mockRpgmWriteBackup(gameId);
     return { success: true, mock: true, backup: name, message: `Saved. Previous saves backed up as ${name}`, backups: [{ name }] };
   }
 
@@ -450,6 +459,6 @@ export const mockRpgmSaves = (method: string, args: unknown[]): unknown => {
   const target = globalThis as { __wlibMockRpgmWrites?: unknown[] };
   (target.__wlibMockRpgmWrites ??= []).push({ file: args[1], patches: args[2] });
   mockRpgmSaveMtime += 1;
-  const name = "2026-01-06_12-00-00";
+  const name = mockRpgmWriteBackup(gameId);
   return { success: true, mock: true, backup: name, message: `Saved. Previous saves backed up as ${name}`, backups: [{ name }] };
 };

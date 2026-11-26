@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { RpgmDatabaseEntry, RpgmPatch, RpgmSaveFormat, RpgmValueRow } from "../services/api";
+import type { RgssRawNodeData, RpgmDatabaseEntry, RpgmPatch, RpgmSaveFormat, RpgmValueRow } from "../services/api";
 
 export const MAX_GOLD = 9_999_999;
 export const MAX_COUNT = 9_999;
@@ -203,3 +203,183 @@ export const parseRgssRawInput = (type: RgssScalarType, text: string): Validated
 
 // The value a patch writes, for showing pending edits in the Raw tree.
 export const patchValue = (patch: RpgmPatch): unknown => (patch.op === "set_count" ? patch.count : patch.value);
+
+// ---- Change review ----
+
+// What the review list shows for one pending edit. `before` is the value the
+// save held when it was opened; the new value comes from the patch itself.
+export interface ChangeMeta {
+  label: string;
+  before: unknown;
+  // Switches read as ON/OFF; every other true/false value as true/false.
+  kind?: "switch";
+}
+export type ChangeMetaMap = Map<string, ChangeMeta>;
+
+export interface PendingChange {
+  key: string;
+  label: string;
+  before: string;
+  after: string;
+}
+
+export const formatChangeValue = (value: unknown, kind?: ChangeMeta["kind"]): string => {
+  if (typeof value === "boolean") return kind === "switch" ? (value ? "ON" : "OFF") : String(value);
+  if (typeof value === "number") return Number.isInteger(value) ? value.toLocaleString("en-US") : String(value);
+  if (typeof value === "string") return JSON.stringify(value);
+  if (value === null || value === undefined) return "(none)";
+  return String(value);
+};
+
+// Pending edits in the order they were first made. A patch without a label
+// still shows, so the list always matches the count on the Save button.
+export const summarizeChanges = (patches: PatchMap, meta: ChangeMetaMap): PendingChange[] =>
+  [...patches.entries()].map(([key, patch]) => {
+    const info = meta.get(key);
+    return {
+      key,
+      label: info?.label ?? key,
+      before: formatChangeValue(info?.before, info?.kind),
+      after: formatChangeValue(patchValue(patch), info?.kind),
+    };
+  });
+
+export const countChanges = (count: number): string => `${count.toLocaleString("en-US")} ${count === 1 ? "change" : "changes"}`;
+
+export const saveButtonLabel = (count: number): string => (count > 0 ? `Save ${countChanges(count)}` : "Save");
+
+// ---- Field drafts ----
+
+// The editor's sub-tabs, in the order they show.
+export type EditorTab = "party" | "actors" | "switches" | "variables" | "raw";
+
+// What the user typed in one field. A field shows its draft text, even when the
+// text is not valid, so a bad entry does not snap back to the old value. A valid
+// draft has `error: null`; its value is already a pending change (or matches
+// the save). An invalid draft is never a pending change.
+export interface FieldDraft {
+  text: string;
+  error: string | null;
+  tab: EditorTab;
+}
+export type DraftMap = Map<string, FieldDraft>;
+
+export const setDraft = (map: DraftMap, id: string, text: string, tab: EditorTab, result: Validated<unknown>): DraftMap => {
+  const next = new Map(map);
+  next.set(id, { text, error: result.ok ? null : result.error, tab });
+  return next;
+};
+
+// When the field loses focus, a valid draft is dropped so the field shows the
+// value as the save will hold it ("007" becomes "7"). An invalid one stays.
+export const settleDraft = (map: DraftMap, id: string): DraftMap => {
+  const draft = map.get(id);
+  if (!draft || draft.error !== null) return map;
+  const next = new Map(map);
+  next.delete(id);
+  return next;
+};
+
+export const draftText = (map: DraftMap, id: string, fallback: unknown): string => {
+  const draft = map.get(id);
+  if (draft) return draft.text;
+  return fallback === null || fallback === undefined ? "" : String(fallback);
+};
+
+export const draftError = (map: DraftMap, id: string): string => map.get(id)?.error ?? "";
+
+export const countInvalid = (map: DraftMap): number => [...map.values()].filter((draft) => draft.error !== null).length;
+
+export const invalidByTab = (map: DraftMap): Partial<Record<EditorTab, number>> => {
+  const counts: Partial<Record<EditorTab, number>> = {};
+  for (const draft of map.values()) {
+    if (draft.error !== null) counts[draft.tab] = (counts[draft.tab] ?? 0) + 1;
+  }
+  return counts;
+};
+
+export const firstInvalidTab = (map: DraftMap, order: EditorTab[]): EditorTab | null => {
+  const counts = invalidByTab(map);
+  return order.find((tab) => (counts[tab] ?? 0) > 0) ?? null;
+};
+
+const countFields = (count: number): string => `${count.toLocaleString("en-US")} ${count === 1 ? "field" : "fields"}`;
+
+// Accessible text for the error marker on a sub-tab.
+export const tabErrorText = (count: number): string => `${countFields(count)} to fix`;
+
+// "Fix 1 field on Party", "Fix 3 fields on Party and Raw".
+export const fixFieldsLabel = (map: DraftMap, order: { id: EditorTab; label: string }[]): string => {
+  const counts = invalidByTab(map);
+  const tabs = order.filter((entry) => (counts[entry.id] ?? 0) > 0).map((entry) => entry.label);
+  if (tabs.length === 0) return "";
+  const where = tabs.length === 1 ? tabs[0] : `${tabs.slice(0, -1).join(", ")} and ${tabs[tabs.length - 1]}`;
+  return `Fix ${countFields(countInvalid(map))} on ${where}`;
+};
+
+// Field ids hold path text (quotes, brackets); DOM ids must stay plain.
+const domSafe = (id: string): string => id.replace(/[^A-Za-z0-9_-]/g, (char) => `_${char.codePointAt(0)?.toString(16) ?? ""}_`);
+export const fieldDomId = (id: string): string => `rpgm-field-${domSafe(id)}`;
+export const fieldErrorId = (id: string): string => `rpgm-error-${domSafe(id)}`;
+
+// Draft ids of Raw tree fields (MV/MZ path, RGSS node).
+export const rawFieldId = (path: RpgmPath): string => `raw:${pathKey(path)}`;
+export const rgssFieldId = (nodeId: number): string => `rgss:${nodeId}`;
+
+// "party › _questLog › points" for a Raw edit of an MV/MZ save.
+export const rawPathLabel = (path: RpgmPath): string => path.map(String).join(" › ");
+
+const rgssKeyLabel = (node: RgssRawNodeData): string => {
+  switch (node.t) {
+    case "sym":
+      return `:${node.v}`;
+    case "str":
+      return JSON.stringify(node.v);
+    case "int":
+    case "float":
+    case "bool":
+      return String(node.v);
+    default:
+      return `#${node.id}`;
+  }
+};
+
+const rgssChildren = (node: RgssRawNodeData): [string, RgssRawNodeData][] => {
+  switch (node.t) {
+    case "object":
+    case "struct":
+      return node.ivars;
+    case "array":
+      return node.items.map((item, index) => [`[${index}]`, item]);
+    case "hash": {
+      const rows: [string, RgssRawNodeData][] = node.pairs.map(([key, value]) => [rgssKeyLabel(key), value]);
+      if (node.default) rows.push(["default", node.default]);
+      return rows;
+    }
+    case "usermarshal":
+      return [["value", node.value]];
+    case "extended":
+    case "userclass":
+      return [["inner", node.inner]];
+    default:
+      return [];
+  }
+};
+
+// Where an RGSS Raw node sits, as "Contents › @party › @gold". The tree has
+// no cycles: shared objects appear once and are linked by id elsewhere.
+export const rgssNodeLabel = (entries: { label: string; node: RgssRawNodeData }[], nodeId: number): string => {
+  const walk = (node: RgssRawNodeData, trail: string[]): string[] | null => {
+    if (node.id === nodeId) return trail;
+    for (const [label, child] of rgssChildren(node)) {
+      const found = walk(child, [...trail, label]);
+      if (found) return found;
+    }
+    return null;
+  };
+  for (const entry of entries) {
+    const found = walk(entry.node, [entry.label]);
+    if (found) return found.join(" › ");
+  }
+  return `Node #${nodeId}`;
+};

@@ -3,9 +3,13 @@
 import { ref } from "vue";
 import type { RgssRawNodeData, RpgmPatch } from "../services/api";
 import {
-  parseRgssRawInput,
+  draftError,
+  draftText,
+  fieldErrorId,
   patchValue,
   refKey,
+  rgssFieldId,
+  type DraftMap,
   type PatchMap,
   type RawScalar,
   type RgssScalarType,
@@ -22,13 +26,15 @@ export interface RgssRawEntry {
 const props = defineProps<{
   entries: RgssRawEntry[];
   patches: PatchMap;
+  // Typed text and errors, owned by the editor so an error blocks Save
+  drafts: DraftMap;
 }>();
-const emit = defineEmits<{ edit: [nodeId: number, original: RawScalar, value: RawScalar] }>();
+// The editor checks the text against the node's Marshal type.
+const emit = defineEmits<{ draft: [nodeId: number, type: RgssScalarType, original: RawScalar, text: string]; settle: [id: string] }>();
 
 const MAX_ROWS = 200;
 const open = ref<Set<string>>(new Set());
 const shown = ref(MAX_ROWS);
-const errors = ref<Record<string, string>>({});
 
 const toggle = (id: string): void => {
   const next = new Set(open.value);
@@ -171,17 +177,13 @@ const current = (nodeId: number, original: RawScalar): RawScalar => {
   return patch ? (patchValue(patch) as RawScalar) : original;
 };
 
-const commit = (nodeId: number, type: RgssScalarType, original: RawScalar, event: Event): void => {
-  const input = event.target as HTMLInputElement;
-  const key = String(nodeId);
-  const result = parseRgssRawInput(type, input.value);
-  if (!result.ok) {
-    errors.value = { ...errors.value, [key]: result.error };
-    return;
-  }
-  const { [key]: _removed, ...rest } = errors.value;
-  errors.value = rest;
-  emit("edit", nodeId, original, result.value);
+const shownText = (nodeId: number, original: RawScalar): string => draftText(props.drafts, rgssFieldId(nodeId), current(nodeId, original));
+const errorOf = (nodeId: number): string => draftError(props.drafts, rgssFieldId(nodeId));
+const invalidAttrs = (nodeId: number): Record<string, string> =>
+  errorOf(nodeId) ? { "aria-invalid": "true", "aria-describedby": fieldErrorId(rgssFieldId(nodeId)) } : {};
+
+const typed = (nodeId: number, type: RgssScalarType, original: RawScalar, event: Event): void => {
+  emit("draft", nodeId, type, original, (event.target as HTMLInputElement | HTMLSelectElement).value);
 };
 </script>
 
@@ -215,7 +217,8 @@ const commit = (nodeId: number, type: RgssScalarType, original: RawScalar, event
             :class="{ 'raw-dirty': patches.has(refKey(entry.node.id)) }"
             :value="String(current(entry.node.id, entry.node.v))"
             :aria-label="`Value of ${entry.label}`"
-            @change="commit(entry.node.id, 'bool', entry.node.v, $event)"
+            @change="typed(entry.node.id, 'bool', entry.node.v, $event)"
+            @blur="emit('settle', rgssFieldId(entry.node.id))"
           >
             <option value="true">true</option>
             <option value="false">false</option>
@@ -224,19 +227,23 @@ const commit = (nodeId: number, type: RgssScalarType, original: RawScalar, event
             v-else
             class="raw-input"
             :class="{ 'raw-dirty': patches.has(refKey(entry.node.id)) }"
-            :value="String(current(entry.node.id, entry.node.v as RawScalar))"
+            :value="shownText(entry.node.id, entry.node.v as RawScalar)"
             :aria-label="`Value of ${entry.label}`"
-            @change="commit(entry.node.id, entry.node.t, entry.node.v as RawScalar, $event)"
+            v-bind="invalidAttrs(entry.node.id)"
+            @input="typed(entry.node.id, entry.node.t, entry.node.v as RawScalar, $event)"
+            @blur="emit('settle', rgssFieldId(entry.node.id))"
           />
         </template>
         <span v-else class="raw-readonly" :title="readonlyTitle(entry.node)">{{ readonlyText(entry.node) }}</span>
-        <span v-if="errors[String(entry.node.id)]" role="alert" class="raw-error">{{ errors[String(entry.node.id)] }}</span>
+        <span v-if="errorOf(entry.node.id)" :id="fieldErrorId(rgssFieldId(entry.node.id))" class="raw-error">{{ errorOf(entry.node.id) }}</span>
       </div>
       <RgssRawNode
         v-if="isContainer(entry.node) && open.has(entry.id)"
         :entries="childEntries(entry.node)"
         :patches="patches"
-        @edit="(nid, orig, val) => emit('edit', nid, orig, val)"
+        :drafts="drafts"
+        @draft="(nid, type, orig, text) => emit('draft', nid, type, orig, text)"
+        @settle="(id) => emit('settle', id)"
       />
     </li>
     <li v-if="entries.length > shown">
@@ -256,6 +263,7 @@ const commit = (nodeId: number, type: RgssScalarType, original: RawScalar, event
 .raw-input { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 0.375rem; padding: 0.125rem 0.5rem; color: var(--text-primary); font-family: ui-monospace, monospace; min-width: 6rem; }
 .raw-input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-glow); }
 .raw-dirty { border-color: var(--brand); }
-.raw-error { color: var(--danger-text); }
+.raw-input[aria-invalid="true"] { border-color: var(--danger-text); }
+.raw-error { color: var(--danger-text); overflow-wrap: anywhere; }
 .raw-more { color: var(--brand); background: none; border: 0; font-size: 0.75rem; padding: 0.25rem 0; }
 </style>
