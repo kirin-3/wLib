@@ -11,7 +11,7 @@ async page => {
       const url = performance.getEntriesByType('resource').map(x => x.name).find(x => /\/src\/utils\/controllerActions\.ts/.test(x));
       (await import(url)).dispatchController(action, () => {});
     },action);
-    await page.locator('#general input[type="checkbox"]').first().focus();
+    await page.locator('#library input[type="checkbox"]').first().focus();
     await dispatch({type:'move',direction:'left'});
     if (!await page.evaluate(() => !!document.activeElement?.closest('nav[aria-label="Settings sections"]'))) throw Error('Left did not enter section list');
     await page.getByRole('button',{name:'Appearance',exact:true}).focus();
@@ -21,7 +21,7 @@ async page => {
     if (!await page.locator('#settings-search-desktop').evaluate(el => document.activeElement === el)) throw Error('Y did not focus search');
     await page.getByRole('button',{name:'Appearance',exact:true}).focus();
     await dispatch({type:'activate'}); await dispatch({type:'nextTab'});
-    if (!await page.evaluate(() => !!document.activeElement?.closest('#wine-proton'))) throw Error('RB did not focus next section');
+    if (!await page.evaluate(() => !!document.activeElement?.closest('#steam'))) throw Error('RB did not focus next section');
     const proton = page.locator('#settings-proton-path');
     await proton.fill('/keyboard-save');
     await page.keyboard.press('ArrowDown');

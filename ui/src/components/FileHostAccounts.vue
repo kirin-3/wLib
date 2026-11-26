@@ -2,9 +2,10 @@
 <script setup lang="ts">
 import { useSettingsRowVisibility } from "../utils/settingsVisibility";
 import { onMounted, ref } from "vue";
-import { IconCircleCheck, IconCloudDownload, IconLoader2 } from "@tabler/icons-vue";
+import { IconCircleCheck, IconLoader2 } from "@tabler/icons-vue";
 import { api, onWebviewReady, type DownloadAccounts } from "../services/api";
 import { notify, notifyError } from "../utils/toast";
+import SettingsGroup from "./settings/SettingsGroup.vue";
 
 const settingsRowVisible = useSettingsRowVisibility();
 
@@ -78,11 +79,7 @@ onMounted(() => onWebviewReady(() => { void refresh(); }));
 </script>
 
 <template>
-  <section id="file-hosts" class="settings-card rounded-xl p-6 space-y-5" aria-labelledby="file-hosts-heading">
-    <h3 id="file-hosts-heading" class="ui-section-heading text-lg font-semibold" style="color:var(--text-primary)">
-      <IconCloudDownload class="ui-section-icon" />
-      File host accounts
-    </h3>
+  <SettingsGroup id="file-hosts" title="File host accounts">
     <p data-settings-row="file-hosts-intro" data-settings-bound v-show="settingsRowVisible('file-hosts-intro')" class="text-xs" style="color:var(--text-muted)">
       In-app update downloads use these accounts, so your premium speed and transfer quota apply. They stay on this device and are never included in backups or sync.
     </p>
@@ -90,19 +87,19 @@ onMounted(() => onWebviewReady(() => { void refresh(); }));
     <div data-settings-row="file-hosts-pixeldrain" data-keywords="pixeldrain api key premium" data-settings-bound v-show="settingsRowVisible('file-hosts-pixeldrain')" class="ui-card-row space-y-3">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h4 class="text-sm font-medium" style="color:var(--text-primary)">Pixeldrain</h4>
+          <h5 class="text-sm font-medium" style="color:var(--text-primary)">Pixeldrain</h5>
           <p v-if="accounts?.pixeldrain.connected" class="text-xs mt-1 flex items-center gap-1" style="color:var(--text-muted)">
             <IconCircleCheck class="w-3.5 h-3.5" />Connected as {{ accounts.pixeldrain.username }}
           </p>
           <p v-else class="text-xs mt-1" style="color:var(--text-muted)">
             Paste an API key from
-            <button type="button" class="underline" @click="openPage('https://pixeldrain.com/user/api_keys')">pixeldrain.com/user/api_keys</button>.
+            <button type="button" class="ui-card-btn ui-card-btn--link" @click="openPage('https://pixeldrain.com/user/api_keys')">pixeldrain.com/user/api_keys</button>.
           </p>
         </div>
         <button v-if="accounts?.pixeldrain.connected" class="ui-card-btn" :disabled="busy === 'pixeldrain'" @click="disconnectPixeldrain">Disconnect</button>
       </div>
       <form v-if="accounts && !accounts.pixeldrain.connected" class="flex flex-wrap gap-2" @submit.prevent="connectPixeldrain">
-        <input v-model="pixeldrainKey" type="password" autocomplete="off" class="host-input flex-1 min-w-[12rem] font-mono" placeholder="API key" aria-label="Pixeldrain API key" />
+        <input v-model="pixeldrainKey" type="password" autocomplete="off" class="settings-input flex-1 min-w-[12rem] font-mono" placeholder="API key" aria-label="Pixeldrain API key" />
         <button type="submit" class="ui-card-btn ui-card-btn--primary" :disabled="busy === 'pixeldrain' || !pixeldrainKey.trim()">
           <IconLoader2 v-if="busy === 'pixeldrain'" class="w-3.5 h-3.5 animate-spin" />Connect
         </button>
@@ -112,7 +109,7 @@ onMounted(() => onWebviewReady(() => { void refresh(); }));
     <div data-settings-row="file-hosts-mega" data-keywords="mega account sign in login premium pro" data-settings-bound v-show="settingsRowVisible('file-hosts-mega')" class="ui-card-row space-y-3">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h4 class="text-sm font-medium" style="color:var(--text-primary)">MEGA</h4>
+          <h5 class="text-sm font-medium" style="color:var(--text-primary)">MEGA</h5>
           <p v-if="accounts?.mega.connected" class="text-xs mt-1 flex items-center gap-1" style="color:var(--text-muted)">
             <IconCircleCheck class="w-3.5 h-3.5" />Signed in as {{ accounts.mega.email }}
           </p>
@@ -123,9 +120,9 @@ onMounted(() => onWebviewReady(() => { void refresh(); }));
         <button v-if="accounts?.mega.connected" class="ui-card-btn" :disabled="busy === 'mega'" @click="disconnectMega">Sign out</button>
       </div>
       <form v-if="accounts && !accounts.mega.connected" class="grid gap-2 sm:grid-cols-2" @submit.prevent="connectMega">
-        <input v-model="megaEmail" type="email" autocomplete="username" class="host-input" placeholder="Email" aria-label="MEGA email" />
-        <input v-model="megaPassword" type="password" autocomplete="current-password" class="host-input" placeholder="Password" aria-label="MEGA password" />
-        <input v-if="megaNeedsCode" v-model="megaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" class="host-input font-mono" placeholder="6-digit code" aria-label="MEGA two-factor code" />
+        <input v-model="megaEmail" type="email" autocomplete="username" class="settings-input" placeholder="Email" aria-label="MEGA email" />
+        <input v-model="megaPassword" type="password" autocomplete="current-password" class="settings-input" placeholder="Password" aria-label="MEGA password" />
+        <input v-if="megaNeedsCode" v-model="megaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" class="settings-input font-mono" placeholder="6-digit code" aria-label="MEGA two-factor code" />
         <div class="flex items-center sm:col-span-2">
           <button type="submit" class="ui-card-btn ui-card-btn--primary" :disabled="busy === 'mega' || !megaEmail.trim() || !megaPassword || (megaNeedsCode && megaCode.trim().length !== 6)">
             <IconLoader2 v-if="busy === 'mega'" class="w-3.5 h-3.5 animate-spin" />Sign in
@@ -134,16 +131,16 @@ onMounted(() => onWebviewReady(() => { void refresh(); }));
       </form>
     </div>
 
-    <div data-settings-row="file-hosts-rpdl" data-keywords="rpdl torrent account sign in login seed" data-settings-bound v-show="settingsRowVisible('file-hosts-rpdl')" class="ui-card-row space-y-3">
+    <div id="file-hosts-rpdl" data-settings-row="file-hosts-rpdl" data-keywords="rpdl torrent account sign in login seed" data-settings-bound v-show="settingsRowVisible('file-hosts-rpdl')" class="ui-card-row space-y-3">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h4 class="text-sm font-medium" style="color:var(--text-primary)">RPDL (torrents)</h4>
+          <h5 class="text-sm font-medium" style="color:var(--text-primary)">RPDL (torrents)</h5>
           <p v-if="accounts?.rpdl?.connected" class="text-xs mt-1 flex items-center gap-1" style="color:var(--text-muted)">
             <IconCircleCheck class="w-3.5 h-3.5" />Signed in as {{ accounts.rpdl.username }}
           </p>
           <p v-else class="text-xs mt-1" style="color:var(--text-muted)">
             Needed to download RPDL torrents. No account yet?
-            <button type="button" class="underline" @click="openPage('https://dl.rpdl.net/register')">Sign up on RPDL</button>.
+            <button type="button" class="ui-card-btn ui-card-btn--link" @click="openPage('https://dl.rpdl.net/register')">Sign up on RPDL</button>.
           </p>
           <p class="text-xs mt-1" style="color:var(--text-muted)">
             wLib stores your RPDL password on this device, so it can renew the session without asking. Signing out removes it.
@@ -152,8 +149,8 @@ onMounted(() => onWebviewReady(() => { void refresh(); }));
         <button v-if="accounts?.rpdl?.connected" class="ui-card-btn" :disabled="busy === 'rpdl'" @click="disconnectRpdl">Sign out</button>
       </div>
       <form v-if="accounts && !accounts.rpdl?.connected" class="grid gap-2 sm:grid-cols-2" @submit.prevent="connectRpdl">
-        <input v-model="rpdlUsername" type="text" autocomplete="username" class="host-input" placeholder="Username or email" aria-label="RPDL username" />
-        <input v-model="rpdlPassword" type="password" autocomplete="current-password" class="host-input" placeholder="Password" aria-label="RPDL password" />
+        <input v-model="rpdlUsername" type="text" autocomplete="username" class="settings-input" placeholder="Username or email" aria-label="RPDL username" />
+        <input v-model="rpdlPassword" type="password" autocomplete="current-password" class="settings-input" placeholder="Password" aria-label="RPDL password" />
         <div class="flex items-center sm:col-span-2">
           <button type="submit" class="ui-card-btn ui-card-btn--primary" :disabled="busy === 'rpdl' || !rpdlUsername.trim() || !rpdlPassword">
             <IconLoader2 v-if="busy === 'rpdl'" class="w-3.5 h-3.5 animate-spin" />Sign in
@@ -161,23 +158,5 @@ onMounted(() => onWebviewReady(() => { void refresh(); }));
         </div>
       </form>
     </div>
-  </section>
+  </SettingsGroup>
 </template>
-
-<style scoped>
-.host-input {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  padding: 0.5rem 0.875rem;
-  font-size: 0.875rem;
-  color: var(--text-primary);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.host-input::placeholder { color: var(--text-muted); }
-.host-input:focus {
-  outline: none;
-  border-color: var(--brand);
-  box-shadow: 0 0 0 3px var(--brand-glow);
-}
-</style>

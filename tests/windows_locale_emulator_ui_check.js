@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Run with playwright-cli run-code --filename tests/windows_locale_emulator_ui_check.js.
-// Windows tools section, the per-game Locale Emulator toggle, and the launch toast.
+// The Japanese locale group (Running games, Windows only), the per-game Locale Emulator toggle, and the launch toast.
 async page => {
   const check = (ok, message) => { if (!ok) throw new Error(message); };
   const url = page.url();
@@ -24,17 +24,18 @@ async page => {
     const section = page.locator('#windows-tools');
     await section.waitFor();
     check(await page.locator('#wine-proton').count() === 0, 'Windows must not show the Wine / Proton section');
-    await page.waitForFunction(() => document.querySelector('nav [data-section-id="windows-tools"]')?.getAttribute('aria-current') === 'location');
-    check((await section.innerText()).includes('Windows games launch directly'), 'Windows note row moved into Windows tools');
+    await page.waitForFunction(() => document.querySelector('nav [data-section-id="running-games"]')?.getAttribute('aria-current') === 'location');
+    check(await page.locator('#running-games #windows-tools').count() === 1, 'Japanese locale is a group in Running games');
+    check(!(await page.locator('#running-games').innerText()).includes('not supported'), 'Windows shows no Wine placeholder');
     const status = section.getByTestId('locale-emulator-status');
     await page.waitForFunction(() => document.querySelector('[data-testid="locale-emulator-status"]')?.textContent.startsWith('Not detected'));
 
     step = 'search';
     const search = page.locator('#settings-search-desktop');
-    for (const word of ['locale', 'japanese', 'windows']) {
+    for (const word of ['locale', 'japanese', 'leproc']) {
       await search.fill(word);
       await section.waitFor({ state: 'visible' });
-      await page.locator('[data-settings-row="windows-tools-static-1"]').waitFor({ state: word === 'windows' ? 'attached' : 'visible' });
+      await page.locator('[data-settings-row="windows-tools-static-1"]').waitFor({ state: 'visible' });
     }
     await search.fill('');
 
@@ -68,12 +69,15 @@ async page => {
     });
     await go('/');
     const open = async (title) => {
-      const card = page.getByRole('checkbox', { name: new RegExp(`^${title}(?: .*)?\\. Press Enter for details\\.$`) });
+      const card = page.getByRole('row', { name: new RegExp(`^${title}(?: .*)?$`) });
       await card.waitFor();
       await card.press('Enter');
       const dialog = page.getByRole('dialog');
       await dialog.getByRole('heading', { name: new RegExp(`^${title}`) }).waitFor();
       await dialog.getByRole('tab', { name: 'Launch', exact: true }).click();
+      // The locale toggle is in Launch > Advanced, which is collapsed while every option in it is at its default.
+      const advanced = dialog.getByTestId('launch-advanced');
+      if (!(await advanced.evaluate(el => el.open))) await advanced.locator('summary').click();
       return dialog;
     };
     let dialog = await open('Kana');
@@ -97,7 +101,7 @@ async page => {
     check(await toggle.isDisabled() && !(await toggle.isChecked()), 'Off toggle is grayed out while missing');
     await dialog.getByTestId('japanese-locale-note').getByRole('button', { name: 'Set up' }).click();
     await page.locator('#windows-tools').waitFor();
-    check(page.url().includes('#windows-tools'), 'Set up opens Windows tools');
+    check(page.url().includes('#windows-tools'), 'Set up opens the Japanese locale group');
 
     step = 'detail toggle, ready';
     await page.evaluate(() => localStorage.setItem('wlib-mock-locale-emulator', 'installed'));
@@ -113,13 +117,13 @@ async page => {
     step = 'launch toast';
     await page.evaluate(() => localStorage.removeItem('wlib-mock-locale-emulator'));
     await go('/');
-    const kana = page.getByRole('checkbox', { name: /^Kana(?: .*)?\. Press Enter for details\.$/ });
+    const kana = page.getByRole('row', { name: /^Kana(?: .*)?$/ });
     await kana.waitFor();
-    await kana.getByRole('button', { name: 'Play', exact: true }).click();
+    await kana.getByRole('button', { name: 'Play Kana', exact: true }).click();
     await page.getByText('Locale Emulator is not set up', { exact: false }).first().waitFor();
-    await page.getByRole('button', { name: 'Open Windows tools' }).click();
+    await page.getByRole('button', { name: 'Open Locale Emulator settings' }).click();
     await page.locator('#windows-tools').waitFor();
-    check(page.url().includes('#windows-tools'), 'Toast action opens Windows tools');
+    check(page.url().includes('#windows-tools'), 'Toast action opens the Japanese locale group');
     check(await kana.count() === 0 || true, 'navigated');
 
     step = 'linux toggle label';
@@ -129,7 +133,7 @@ async page => {
     await dialog.getByRole('checkbox', { name: 'Run with Japanese locale' }).waitFor({ state: 'attached' });
     check(!(await dialog.innerText()).includes('Locale Emulator'), 'Linux toggle does not mention Locale Emulator');
     await page.keyboard.press('Escape');
-    return 'PASS: Windows tools section, search, save/recheck, wrong-file toast, toggle states, Set up link, launch toast, Linux label';
+    return 'PASS: Japanese locale group, search, save/recheck, wrong-file toast, toggle states, Set up link, launch toast, Linux label';
   } catch (error) {
     throw new Error(`${step}: ${error}`);
   } finally {

@@ -3,16 +3,19 @@
 import { useSettingsRowVisibility } from "../utils/settingsVisibility";
 import { confirmAction } from "../utils/confirm";
 import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { IconDatabase } from '@tabler/icons-vue';
 import { api, onWebviewReady } from '../services/api';
 import type { CatalogStatusResponse } from '../services/api';
 import { catalogSourceLines, catalogSummary, formatCatalogTime } from '../utils/catalog';
 import { notifyError } from '../utils/toast';
+import { useSaveStatus } from '../composables/useSaveStatus';
+import SettingRow from './settings/SettingRow.vue';
+import SettingsGroup from './settings/SettingsGroup.vue';
 
 const settingsRowVisible = useSettingsRowVisibility();
 
 const status = ref<CatalogStatusResponse | null>(null);
 const saving = ref(false);
+const saveStatus = useSaveStatus();
 const enabled = computed(() => status.value?.enabled !== false);
 const summary = computed(() => catalogSummary(status.value));
 const sources = computed(() => catalogSourceLines(status.value));
@@ -40,16 +43,13 @@ const toggle = async (event: Event) => {
     return;
   }
   saving.value = true;
-  try {
+  const saved = await saveStatus.run(async () => {
     const result = await api.saveSettings({ catalog_enabled: next });
     if (!result.success) throw new Error(result.error || 'Could not save the catalog setting.');
-  } catch (e) {
-    input.checked = !next;
-    notifyError(e instanceof Error ? e.message : String(e));
-  } finally {
-    saving.value = false;
-    await refresh();
-  }
+  });
+  if (!saved) input.checked = !next;
+  saving.value = false;
+  await refresh();
 };
 
 const checkNow = async () => {
@@ -68,23 +68,17 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
 </script>
 
 <template>
-  <section id="catalog" class="catalog-card rounded-xl p-6 space-y-5" aria-labelledby="catalog-heading">
-    <h3 id="catalog-heading" class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
-      <IconDatabase class="ui-section-icon" />
-      Game catalog
-    </h3>
+  <SettingsGroup id="catalog" title="Game catalog">
 
-    <div data-settings-row="catalog-static-0" data-settings-bound v-show="settingsRowVisible('catalog-static-0')" class="ui-card-row flex items-center justify-between gap-4">
-      <div>
-        <h4 class="text-sm font-medium" style="color: var(--text-primary)">Download the game catalog</h4>
-        <p class="text-xs mt-1" style="color: var(--text-muted)">
-          A shared list of games from F95Zone, DLsite, Ryuugames and VNDB, checked at most twice a day.
-          wLib only downloads it; nothing from your library is sent.
-        </p>
-      </div>
+    <SettingRow data-settings-row="catalog-static-0" data-settings-bound v-show="settingsRowVisible('catalog-static-0')"
+      label="Download the game catalog" control-id="catalog-enabled"
+      help="A shared list of games from F95Zone, DLsite, Ryuugames and VNDB, checked at most twice a day. wLib only downloads it; nothing from your library is sent."
+      :save-state="saveStatus.state.value" :save-error="saveStatus.error.value">
       <label class="relative inline-flex items-center cursor-pointer shrink-0">
         <input
+          id="catalog-enabled"
           type="checkbox"
+          role="switch"
           :checked="enabled"
           :disabled="saving || !status"
           class="sr-only peer"
@@ -93,7 +87,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
         />
         <div class="ui-toggle"></div>
       </label>
-    </div>
+    </SettingRow>
 
     <div data-settings-row="catalog-static-1" data-settings-bound v-show="settingsRowVisible('catalog-static-1')" class="ui-card-row flex flex-wrap items-start justify-between gap-3">
       <div class="space-y-1 text-sm" role="status">
@@ -102,12 +96,12 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
           Last checked: {{ formatCatalogTime(status?.last_check) }}<span v-if="status?.checking"> · checking now…</span>
         </p>
       </div>
-      <button class="catalog-btn" :disabled="!enabled || status?.checking || !status" @click="checkNow">
+      <button class="ui-card-btn" :disabled="!enabled || status?.checking || !status" @click="checkNow">
         {{ status?.checking ? 'Checking…' : 'Check now' }}
       </button>
     </div>
 
-    <p data-settings-row="catalog-static-2" data-settings-bound v-show="settingsRowVisible('catalog-static-2')" v-if="enabled && status?.last_error" class="text-xs" role="alert" style="color: var(--danger-text)">
+    <p data-settings-row="catalog-static-2" data-settings-bound v-show="settingsRowVisible('catalog-static-2')" v-if="enabled && status?.last_error" class="settings-row-attached text-xs" role="alert" style="color: var(--danger-text)">
       Last check failed: {{ status.last_error }}
     </p>
 
@@ -137,23 +131,10 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
         @click.prevent="api.openInBrowser('https://opendatacommons.org/licenses/odbl/1-0/')"
       >Open Database License</a>.
     </p>
-  </section>
+  </SettingsGroup>
 </template>
 
 <style scoped>
-.catalog-card { color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border); scroll-margin-top: 1.5rem; }
-.catalog-btn {
-  background: var(--bg-overlay);
-  border: 1px solid var(--border-hover);
-  color: var(--text-primary);
-  padding: 0.5rem 1rem;
-  border-radius: 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  transition: background-color 0.15s ease;
-}
-.catalog-btn:hover:not(:disabled) { background: var(--border-hover); }
-.catalog-btn:disabled { opacity: 0.5; cursor: default; }
 .catalog-table { border-collapse: collapse; color: var(--text-secondary); }
 .catalog-table th { color: var(--text-muted); font-weight: 600; text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
 .catalog-table th.text-right { text-align: right; }

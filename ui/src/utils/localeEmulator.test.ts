@@ -43,10 +43,10 @@ test('Linux toggle keeps its label and never mentions Locale Emulator', () => {
   assert.deepEqual(linux, { label: 'Run with Japanese locale', disabled: false, needsSettings: false, note: '' });
 });
 
-test('launch error maps only locale_emulator_missing to Windows tools', () => {
+test('launch error maps only locale_emulator_missing to the Japanese locale settings', () => {
   assert.deepEqual(localeEmulatorLaunchError('locale_emulator_missing', 'Set it up.'), {
     message: 'Set it up.',
-    action: 'Open Windows tools',
+    action: 'Open Locale Emulator settings',
     route: '/settings#windows-tools',
   });
   assert.equal(localeEmulatorLaunchError('sandbox_missing', 'x'), null);

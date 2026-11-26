@@ -5,6 +5,12 @@ import { useGamescopeSettings } from "../composables/useGamescopeSettings";
 import { FILTER_OPTIONS, SCALER_OPTIONS, WINDOW_MODE_OPTIONS } from "../utils/gamescope";
 import type { GamescopeFilter, GamescopeScaler, GamescopeWindowMode } from "../services/api";
 import FieldSaveFeedback from "../components/FieldSaveFeedback.vue";
+import SettingRow from "../components/settings/SettingRow.vue";
+import SettingsGroup from "../components/settings/SettingsGroup.vue";
+import SettingsHelpLink from "../components/settings/SettingsHelpLink.vue";
+import RunningGamesReadiness from "../components/settings/RunningGamesReadiness.vue";
+import { isRunnerPath, optionalToolsSummary, windowsReadiness, type OptionalTool, type ReadinessTarget, type UmuReadiness } from "../utils/settingsReadiness";
+import { useSaveStatus } from "../composables/useSaveStatus";
 import type { LcPlusMode, LcPlusStatus, SettingsPayload } from "../services/api";
 import { lcPlusCheckedAt, lcPlusCheckReason, lcPlusDetectedText } from "../utils/lewdcorner";
 import { mergeSettingsFields } from "../utils/settingsMerge";
@@ -16,23 +22,29 @@ import { computed, reactive, ref, useTemplateRef, onMounted, onUnmounted, watch,
 import { onBeforeRouteLeave, useRoute } from "vue-router";
 import { settingsVisibleRows } from "../utils/settingsVisibility";
 import { matchSettings, type SettingsSearchSection } from "../utils/settingsSearch";
+import { pickActiveSection } from "../utils/settingsNav";
+import { useEventListener } from "../composables/useEventListener";
 import { controllerFocusText, useControllerActions } from "../utils/controllerActions";
 import { focusCandidates, pickNext } from "../utils/spatialFocus";
 import {
-  IconAdjustments,
-  IconAutomation,
-  IconBook2,
+  IconArrowDown,
+  IconArrowUp,
+  IconCircleCheck,
+  IconDatabase,
+  IconDownload,
   IconDownloadFilled,
+  IconExternalLink,
   IconFolderOpen,
-  IconKeyboard,
+  IconLayout2,
   IconLoader2,
   IconPalette,
+  IconPlayerPlay,
   IconSettings,
   IconTool,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
 import { gamesStore } from "../composables/useGamesStore";
-import { notify, notifyError } from "../utils/toast";
+import { errorReason, notify, notifyError } from "../utils/toast";
 import { motionEnabled, saveMotionPreference } from "../utils/motionPreference";
 import { coverAnimation, saveCoverAnimation } from "../utils/coverAnimation";
 import {
@@ -79,7 +91,8 @@ import CatalogSettings from "../components/CatalogSettings.vue";
 import SteamSettings from "../components/SteamSettings.vue";
 import FileHostAccounts from "../components/FileHostAccounts.vue";
 import TorrentSettings from "../components/TorrentSettings.vue";
-import { MAX_ACTIVE_DOWNLOADS, clampLimitKib } from "../utils/downloadQueue";
+import { MAX_ACTIVE_DOWNLOADS, clampLimitKib, limitInMegabytes } from "../utils/downloadQueue";
+import type { SandboxStatus } from "../services/api";
 
 const coverAnimationOptions = [
   { value: "always", label: "Always" },
@@ -93,6 +106,7 @@ const URM_PAGE_URL = "https://0x52.dev/mods/Universal-Ren-Py-Mod-1000";
 
 const protonPath = ref("");
 const availableRunners = ref<RunnerInfo[]>([]);
+const runnersLoaded = ref(false);
 const customStatuses = ref<string[]>([]);
 const newStatus = ref("");
 const statusError = ref("");
@@ -124,29 +138,32 @@ const removeLibraryFolder = (path: string) => {
 const lcSettings = [
   { key: "lc_enabled", label: "Use LewdCorner", description: "Show LewdCorner thread fields and fill in LewdCorner threads for your games from the catalog." },
 ] as const;
+// Save one payload at once and show "Saving…", "Saved" or the error on the row's status.
+const saveNow = (status: ReturnType<typeof useSaveStatus>, payload: SettingsPayload) => status.run(async () => {
+  const result = await api.saveSettings(payload);
+  if (!result || result.success === false) throw new Error(result?.error || "Unknown error");
+});
 const lcValues = reactive({ lc_enabled: false });
 const lcSaving = reactive({ lc_enabled: false });
+const lcStatus = { lc_enabled: useSaveStatus() };
 const saveLcSetting = async (key: typeof lcSettings[number]["key"], event: Event) => {
   const previous = lcValues[key];
   lcValues[key] = (event.target as HTMLInputElement).checked;
   lcSaving[key] = true;
-  try {
-    const result = await api.saveSettings({ [key]: lcValues[key] });
-    if (!result.success) throw new Error(result.error || "Unknown error");
+  if (await saveNow(lcStatus[key], { [key]: lcValues[key] })) {
     // Turning LC on can start an LC Plus check; read the new state back.
     void refreshLcPlus();
-  } catch (error) {
+  } else {
     lcValues[key] = previous;
-    notifyError(`Failed to save the LewdCorner setting: ${String(error)}`);
-  } finally {
-    lcSaving[key] = false;
   }
+  lcSaving[key] = false;
 };
 // "LC Plus": Auto, Yes or No. In Auto, the detected tier and "Check now".
 const lcPlus = reactive<LcPlusStatus>({
   lc_plus: false, lc_plus_mode: "auto", lc_plus_detected: "", lc_plus_detected_at: "", lc_plus_check: "ready",
 });
 const lcPlusSaving = ref(false);
+const lcPlusStatus = useSaveStatus();
 const lcPlusChecking = ref(false);
 const lcPlusMessage = ref("");
 const lcPlusCheckDisabled = computed(() => lcPlusCheckReason(lcPlus.lc_plus_check, lcValues.lc_enabled));
@@ -171,15 +188,8 @@ const saveLcPlusMode = async (event: Event) => {
   lcPlus.lc_plus_mode = mode;
   lcPlusMessage.value = "";
   lcPlusSaving.value = true;
-  try {
-    const result = await api.saveSettings({ lc_plus_mode: mode });
-    if (!result.success) throw new Error(result.error || "Unknown error");
-  } catch (error) {
-    lcPlus.lc_plus_mode = previous;
-    notifyError(`Failed to save the LC Plus setting: ${String(error)}`);
-  } finally {
-    lcPlusSaving.value = false;
-  }
+  if (!(await saveNow(lcPlusStatus, { lc_plus_mode: mode }))) lcPlus.lc_plus_mode = previous;
+  lcPlusSaving.value = false;
   void refreshLcPlus();
 };
 const checkLcPlus = async () => {
@@ -209,60 +219,48 @@ const enableLogging = ref(false);
 const gamemodeEnabled = ref(false);
 const mangohudEnabled = ref(false);
 const performanceTools = ref({ gamemode: false, mangohud: false });
+const performanceToolsLoaded = ref(false);
 const gamescope = useGamescopeSettings();
 const gamescopeInstalled = computed(() => gamescope.status.value?.installed === true);
 const htmlBuiltinPlayer = ref(true);
+const htmlPlayerStatus = useSaveStatus();
 const saveHtmlBuiltinPlayer = async (event: Event) => {
   const value = (event.target as HTMLInputElement).checked;
   const previous = htmlBuiltinPlayer.value;
   htmlBuiltinPlayer.value = value;
-  try {
-    const result = await api.saveSettings({ html_builtin_player: value });
-    if (!result.success) throw new Error(result.error || "Unknown error");
-  } catch (error) {
-    htmlBuiltinPlayer.value = previous;
-    notifyError(`Failed to save the HTML game player: ${String(error)}`);
-  }
+  if (!(await saveNow(htmlPlayerStatus, { html_builtin_player: value }))) htmlBuiltinPlayer.value = previous;
 };
 const webPlayerDevtools = ref(true);
+const devtoolsStatus = useSaveStatus();
 const saveWebPlayerDevtools = async (event: Event) => {
   const value = (event.target as HTMLInputElement).checked;
   const previous = webPlayerDevtools.value;
   webPlayerDevtools.value = value;
-  try {
-    const result = await api.saveSettings({ web_player_devtools: value });
-    if (!result.success) throw new Error(result.error || "Unknown error");
-  } catch (error) {
-    webPlayerDevtools.value = previous;
-    notifyError(`Failed to save the web player DevTools setting: ${String(error)}`);
-  }
+  if (!(await saveNow(devtoolsStatus, { web_player_devtools: value }))) webPlayerDevtools.value = previous;
 };
+const performanceToolStatus = { gamemode: useSaveStatus(), mangohud: useSaveStatus() };
 const savePerformanceTool = async (tool: "gamemode" | "mangohud", event: Event) => {
   const value = (event.target as HTMLInputElement).checked;
   const state = tool === "gamemode" ? gamemodeEnabled : mangohudEnabled;
   const previous = state.value;
   state.value = value;
-  try {
-    const result = await api.saveSettings({ [`${tool}_enabled`]: value });
-    if (!result.success) throw new Error(result.error || "Unknown error");
-  } catch (error) {
-    state.value = previous;
-    notifyError(`Failed to save ${tool}: ${String(error)}`);
-  }
+  if (!(await saveNow(performanceToolStatus[tool], { [`${tool}_enabled`]: value }))) state.value = previous;
 };
 const openPrefixTool = async (tool: "winecfg" | "winetricks") => {
   try {
     const result = await api.openWinePrefixTool(tool, prefixPath.value, protonPath.value);
     if (!result.success) throw new Error(result.error || "Unknown error");
     notify(`Opening ${tool === "winecfg" ? "Winecfg" : "Winetricks"}…`, "success");
-  } catch (error) { notifyError(String(error)); }
+  } catch (error) { notifyError(errorReason(error), `Could not open ${tool === "winecfg" ? "Winecfg" : "Winetricks"}`); }
 };
 // Save backups to keep per game: a preset, or "custom" with its own number.
 const KEEP_PRESETS = [1, 3, 5, 10, 20];
 const keepChoice = ref("all");
 const keepCustom = ref(10);
 const savingKeep = ref(false);
+const keepStatus = useSaveStatus();
 const savingLogging = ref(false);
+const loggingStatus = useSaveStatus();
 const protonDownload = ref<ProtonDownloadStatus | null>(null);
 let protonDownloadTimer: ReturnType<typeof setInterval> | null = null;
 const installingDeps = ref(false);
@@ -444,6 +442,9 @@ const startRpgmakerRunnerInstall = async (target: "runner" | "mkxpz") => {
 const rpgmakerLinuxRunnerAvailable = computed(
   () => rpgmakerLinuxRunnerStatus.value.available,
 );
+// Not installed and no path typed: the runner is optional, so no warning colour.
+const rpgmakerRunnerOptional = computed(() => !rpgmakerLinuxRunnerStatus.value.available
+  && !rpgmakerLinuxRunnerStatus.value.configured_path && !rpgmakerLinuxRunnerPath.value.trim());
 const rpgmakerLinuxRunnerStatusText = computed(() => {
   if (rpgmakerLinuxRunnerStatus.value.available) {
     const detected = `Detected: ${rpgmakerLinuxRunnerStatus.value.path}`;
@@ -454,6 +455,62 @@ const rpgmakerLinuxRunnerStatusText = computed(() => {
   }
   return rpgmakerLinuxRunnerStatus.value.error || "Not detected";
 });
+
+// The setup summary at the top of Running games (Linux only). It reads the
+// statuses this page and its groups already load; see utils/settingsReadiness.
+const umuReadiness = ref<UmuReadiness | null>(null);
+const umuSettings = useTemplateRef<{ refresh: () => Promise<void> }>("umuSettings");
+const sandboxStatus = ref<SandboxStatus | null>(null);
+const sandboxLoaded = ref(false);
+const onSandboxStatus = (status: SandboxStatus | null) => { sandboxStatus.value = status; sandboxLoaded.value = true; };
+// Whether the saved runner path exists. Named runners (Wine, GE-Proton, UMU-Proton) need no check.
+const runnerPathOk = ref<boolean | null>(null);
+let runnerPathRequest = 0;
+const checkSavedRunnerPath = async (path: string) => {
+  const request = ++runnerPathRequest;
+  runnerPathOk.value = null;
+  if (!isRunnerPath(path)) return;
+  try {
+    const result = await api.checkPath(path.trim(), "runner");
+    if (request === runnerPathRequest) runnerPathOk.value = !!result?.ok;
+  } catch {
+    // Unknown: the summary keeps saying "checking", and the field shows its own status.
+  }
+};
+watch(() => [settingsLoaded.value, savedValues.value.protonPath] as const, ([loaded, path]) => {
+  if (loaded && supportsLinuxRuntimes.value) void checkSavedRunnerPath(path);
+});
+const windowsSetup = computed(() => windowsReadiness({
+  runner: savedValues.value.protonPath,
+  runners: runnersLoaded.value ? availableRunners.value : null,
+  runnerPathOk: runnerPathOk.value,
+  umu: umuReadiness.value,
+}));
+const optionalTools = computed(() => {
+  const tools: OptionalTool[] = [
+    { name: "GameMode", installed: performanceToolsLoaded.value ? performanceTools.value.gamemode : null },
+    { name: "MangoHud", installed: performanceToolsLoaded.value ? performanceTools.value.mangohud : null },
+    { name: "Gamescope", installed: gamescope.status.value ? gamescope.status.value.installed : null },
+  ];
+  if (platformCapabilities.value.rpgmaker_linux) {
+    const known = settingsLoaded.value && !settingsLoadError.value;
+    tools.push(
+      { name: "RPG Maker runner", installed: known ? rpgmakerLinuxRunnerStatus.value.available : null },
+      { name: "mkxp-z", installed: known ? rpgmakerRunnerUi.value.mkxpzInstalled : null },
+    );
+  }
+  if (platformCapabilities.value.sandbox) tools.push({ name: "Sandbox tool", installed: sandboxLoaded.value ? sandboxStatus.value?.status === "ready" : null });
+  return optionalToolsSummary(tools);
+});
+// Jump to the group that does the next step, and focus its main button or field.
+const goToSetup = async (target: ReadinessTarget) => {
+  scrollToSection("running-games", false, target);
+  await nextTick();
+  const control = target === "wine-proton"
+    ? document.getElementById("settings-proton-path")
+    : document.querySelector<HTMLElement>(`#${target} [data-readiness-target]`);
+  control?.focus({ preventScroll: true });
+};
 
 const applyKeepSetting = (keep: SaveBackupKeep | undefined) => {
   if (typeof keep !== "number") {
@@ -468,16 +525,11 @@ const applyKeepSetting = (keep: SaveBackupKeep | undefined) => {
 
 const persistKeep = async (value: SaveBackupKeep, previous: { choice: string; custom: number }) => {
   savingKeep.value = true;
-  try {
-    const res = await api.saveSettings({ save_backup_keep: value });
-    if (!res || res.success === false) throw new Error(res?.error || "Unknown error");
-  } catch (e) {
+  if (!(await saveNow(keepStatus, { save_backup_keep: value }))) {
     keepChoice.value = previous.choice;
     keepCustom.value = previous.custom;
-    notifyError("Failed to save backup limit: " + (e instanceof Error ? e.message : String(e)));
-  } finally {
-    savingKeep.value = false;
   }
+  savingKeep.value = false;
 };
 
 const onKeepChoice = (event: Event) => {
@@ -626,7 +678,7 @@ const onAccentColorInput = (event: Event, save: boolean): void => {
 };
 
 const shortcuts = [
-  { keys: ["/", "Ctrl+F"], action: "Search the library" },
+  { keys: ["/", "Ctrl+F"], action: "Search the library or settings" },
   { keys: ["Ctrl+N"], action: "Add a game" },
   { keys: ["Enter"], action: "Open the focused game" },
   { keys: ["Shift+F10"], action: "Game actions menu" },
@@ -638,15 +690,8 @@ const toggleLogging = async () => {
   const enabled = !enableLogging.value;
   enableLogging.value = enabled;
   savingLogging.value = true;
-  try {
-    const res = await api.saveSettings({ enable_logging: enabled });
-    if (!res || res.success === false) throw new Error(res?.error || "Unknown error");
-  } catch (e) {
-    enableLogging.value = !enabled;
-    notifyError("Failed to save debug logging: " + (e instanceof Error ? e.message : String(e)));
-  } finally {
-    savingLogging.value = false;
-  }
+  if (!(await saveNow(loggingStatus, { enable_logging: enabled }))) enableLogging.value = !enabled;
+  savingLogging.value = false;
 };
 
 const loadSettings = async () => {
@@ -679,9 +724,11 @@ const loadSettings = async () => {
 
     if (supportsLinuxRuntimes.value) {
       performanceTools.value = await api.getPerformanceTools().catch(() => ({ gamemode: false, mangohud: false }));
+      performanceToolsLoaded.value = true;
       void gamescope.loadStatus();
       const runners = await api.getAvailableRunners();
       availableRunners.value = runners.runners || [];
+      runnersLoaded.value = true;
       const ceCheck = await api.isCheatEngineInstalled();
       ceInstalled.value = !!ceCheck?.installed;
       cePath.value = ceCheck?.path || "";
@@ -948,6 +995,7 @@ const downloadProton = async () => {
       protonSave.resetSaved(result.path);
       protonError.value = "";
       notify(`GE-Proton installed to ${result.path}.`, "success");
+      void umuSettings.value?.refresh();
     } else {
       protonError.value = result?.error || "Failed to download Proton.";
     }
@@ -1089,7 +1137,9 @@ const makeField = <T,>(value: import("vue").Ref<T>, payload: (value: T) => Setti
   },
 });
 const refreshInstall = async () => { if (supportsLinuxRuntimes.value) await pollInstallStatus(); };
-const protonSave = makeField(protonPath, value => ({ proton_path: value }), ["protonPath"], values => values.protonPath, refreshInstall);
+// The Steam Linux Runtime that umu needs follows the runner, so read the umu status again too.
+const afterRunnerSave = async () => { await refreshInstall(); await umuSettings.value?.refresh(); };
+const protonSave = makeField(protonPath, value => ({ proton_path: value }), ["protonPath"], values => values.protonPath, afterRunnerSave);
 const prefixSave = makeField(prefixPath, value => ({ wine_prefix_path: value }), ["prefixPath"], values => values.prefixPath, refreshInstall);
 const runnerSave = makeField(rpgmakerLinuxRunnerPath, value => ({ rpgmaker_linux_runner_path: value }), ["rpgmakerLinuxRunnerPath"], values => values.rpgmakerLinuxRunnerPath);
 const urmSave = makeField(urmPath, value => ({ urm_rpa_path: value }), ["urmPath"], values => values.urmPath);
@@ -1253,40 +1303,61 @@ const removeCollection = async (name: string) => {
 const settingsRoot = useTemplateRef<HTMLElement>("settingsRoot");
 const desktopSearch = useTemplateRef<HTMLInputElement>("desktopSearch");
 const mobileSearch = useTemplateRef<HTMLInputElement>("mobileSearch");
+// The search and section bar that stays at the top of narrow windows.
+const narrowBar = useTemplateRef<HTMLElement>("narrowBar");
+const narrowBarHeight = () => (narrowBar.value?.getClientRects().length ? narrowBar.value.getBoundingClientRect().height : 0);
 const searchQuery = ref("");
 const visibleRows = ref<Set<string> | null>(null);
 provide(settingsVisibleRows, visibleRows);
 const settingsRowVisible = (id: string) => !visibleRows.value || visibleRows.value.has(id);
-const activeSection = ref("general");
+const activeSection = ref("library");
 const shownSectionIds = ref<string[]>([]);
 const route = useRoute();
+// The top-level sections, in page order. Smaller groups inside a section
+// (SettingsGroup) keep the ids that were sections before, so old links such
+// as /settings#sandbox still open the right place.
 const sectionRegistry = computed(() => [
-  { id: "general", title: "General", keywords: "logging statuses collections" },
-  { id: "library-downloads", title: "Library & Downloads", keywords: "folders archives download queue speed limit battery storage recount disk size" },
-  { id: "file-hosts", title: "File host accounts", keywords: "pixeldrain mega rpdl account api key premium download" },
-  { id: "torrents", title: "Torrents", keywords: "torrent seed seeding ratio speed limit rpdl" },
-  { id: "appearance", title: "Appearance", keywords: "theme dark light color" },
-  ...(platformCapabilities.value.platform === "windows"
-    ? [{ id: "windows-tools", title: "Windows tools", keywords: "windows locale emulator japanese leproc" }]
-    : [{ id: "wine-proton", title: supportsLinuxRuntimes.value ? "Wine / Proton" : "Platform Environment", keywords: "wine prefix runner" }]),
-  ...(supportsLinuxRuntimes.value ? [{ id: "umu", title: "Proton (umu)", keywords: "runtime" }] : []),
-  ...(platformCapabilities.value.platform === "linux" ? [{ id: "steam", title: "Steam", keywords: "account sync" }] : []),
-  ...(platformCapabilities.value.companion_tools ? [{ id: "custom-tools", title: "Custom tools", keywords: "companion" }] : []),
-  { id: "sandbox", title: "Sandbox", keywords: "isolation" },
-  { id: "catalog", title: "Catalog", keywords: "game catalog" },
-  ...(supportsLinuxRuntimes.value ? [{ id: "tools", title: "Tools", keywords: "winetricks" }] : []),
-  { id: "renpy", title: "Ren'Py", keywords: "urm mod" },
-  { id: "keyboard-shortcuts", title: "Keyboard Shortcuts", keywords: "keys hotkeys shortcut" },
+  { id: "library", title: "Library" },
+  { id: "downloads", title: "Downloads" },
+  { id: "running-games", title: "Running games" },
+  { id: "sources", title: "Sources" },
+  { id: "appearance", title: "Appearance" },
+  ...(platformCapabilities.value.platform === "linux" ? [{ id: "steam", title: "Steam" }] : []),
+  { id: "advanced", title: "Advanced" },
 ]);
+// Old section ids whose rows now live in a section with another id.
+const SECTION_ALIASES: Record<string, string> = { general: "library", "library-downloads": "downloads" };
 const shownSections = computed(() => sectionRegistry.value.filter(section => shownSectionIds.value.includes(section.id)));
 const sectionVisible = (id: string) => !searchQuery.value.trim() || shownSectionIds.value.includes(id);
-const scrollToSection = (id: string, focus = false) => {
+// Scroll a section, or a group or row inside it, to the top of <main>. A
+// target inside a section stops under the section's sticky heading.
+const scrollToSection = (id: string, focus = false, targetId = id) => {
   const section = document.getElementById(id);
+  const target = targetId === id ? section : document.getElementById(targetId);
   const main = settingsRoot.value?.closest<HTMLElement>("main");
-  if (!section || !main || !shownSectionIds.value.includes(id)) return;
-  main.scrollTo({ top: main.scrollTop + section.getBoundingClientRect().top - main.getBoundingClientRect().top, behavior: "instant" });
+  if (!section || !target || !main || !shownSectionIds.value.includes(id)) return;
+  // -1px: the target's own top line hides under the heading's bottom line.
+  const heading = target === section ? 0 : Math.max(0, (section.firstElementChild?.getBoundingClientRect().height || 0) - 1);
+  const top = main.scrollTop + target.getBoundingClientRect().top - main.getBoundingClientRect().top - heading - narrowBarHeight();
+  main.scrollTo({ top, behavior: "instant" });
+  // Short sections at the end cannot scroll to the top. Keep the chosen
+  // section current until a scroll moves the page away from this jump.
+  jumpTop = main.scrollTop;
   activeSection.value = id;
-  if (focus) focusCandidates(section)[0]?.focus({ preventScroll: true });
+  // The quiet Help links are not where a jump should land.
+  if (focus) focusCandidates(target).find(el => !el.hasAttribute("data-settings-help"))?.focus({ preventScroll: true });
+};
+// Find the section that holds a deep-link id: a section, an old section id,
+// or a group or row inside a section.
+const resolveSettingsHash = (id: string): { section: string; target: string } | null => {
+  if (!id) return null;
+  const alias = SECTION_ALIASES[id];
+  if (alias) return shownSectionIds.value.includes(alias) ? { section: alias, target: alias } : null;
+  if (shownSectionIds.value.includes(id)) return { section: id, target: id };
+  const element = document.getElementById(id);
+  if (!element || !settingsRoot.value?.contains(element)) return null;
+  const section = shownSections.value.find(item => document.getElementById(item.id)?.contains(element));
+  return section ? { section: section.id, target: id } : null;
 };
 const cycleSection = (step: number) => {
   const list = shownSections.value;
@@ -1325,7 +1396,15 @@ useControllerActions(settingsRoot, {
 // Tag each top-level setting group and keep it mounted when filtering. This
 // also covers conditionally rendered rows supplied by child sections.
 let searchObserver: MutationObserver | null = null;
-let intersectionObserver: IntersectionObserver | null = null;
+// Where the last jump to a section left <main>. While <main> stays there the
+// jumped-to section stays current; any other scroll (wheel, keys, touch, the
+// scrollbar, controller, focus moves) clears it. Only the jump itself sets it,
+// so there is no timer.
+let jumpTop: number | null = null;
+let scrollFrame = 0;
+let narrowBarObserver: ResizeObserver | null = null;
+// Template refs are gone by onUnmounted; keep the scroller to remove its listener.
+let scroller: HTMLElement | null = null;
 let searchScheduled = false;
 const originalDisplay = new WeakMap<HTMLElement, string>();
 const refreshSearch = () => {
@@ -1333,20 +1412,38 @@ const refreshSearch = () => {
   if (!root) return;
   const sections: SettingsSearchSection[] = [];
   const elements = new Map<string, HTMLElement>();
+  // Each group's rows, so a group with no matching row hides with its heading.
+  const groups = new Map<HTMLElement, string[]>();
+  const addRow = (child: HTMLElement, fallbackId: string, rows: SettingsSearchSection["rows"], extraKeywords = "") => {
+    const id = child.dataset.settingsRow || fallbackId;
+    child.dataset.settingsRow = id;
+    if (!child.dataset.keywords) child.dataset.keywords = "";
+    if (!originalDisplay.has(child)) originalDisplay.set(child, child.style.display);
+    elements.set(id, child);
+    rows.push({ id, label: child.textContent || "", keywords: `${child.dataset.keywords} ${extraKeywords}` });
+    return id;
+  };
   for (const section of sectionRegistry.value) {
     const container = root.querySelector<HTMLElement>(`#${section.id}`);
     if (!container) continue;
     const rows: SettingsSearchSection["rows"] = [];
     let index = 0;
     for (const child of Array.from(container.children)) {
-      if (!(child instanceof HTMLElement) || child.matches("h3") || child.querySelector("h3")) continue;
-      const id = child.dataset.settingsRow || `${section.id}-dynamic-${index}`;
-      index++;
-      child.dataset.settingsRow = id;
-      if (!child.dataset.keywords) child.dataset.keywords = section.id === "appearance" && child.textContent?.includes("Theme") ? "dark light system" : "";
-      if (!originalDisplay.has(child)) originalDisplay.set(child, child.style.display);
-      elements.set(id, child);
-      rows.push({ id, label: child.textContent || "", keywords: child.dataset.keywords || "" });
+      if (!(child instanceof HTMLElement)) continue;
+      if (child.hasAttribute("data-settings-group")) {
+        // The group title and its data-keywords count as keywords of every row in it.
+        const keywords = `${child.querySelector("[data-settings-subheading] h4")?.textContent || ""} ${child.dataset.keywords || ""}`;
+        const ids: string[] = [];
+        let groupIndex = 0;
+        for (const row of Array.from(child.children)) {
+          if (!(row instanceof HTMLElement) || row.hasAttribute("data-settings-subheading")) continue;
+          ids.push(addRow(row, `${child.id}-dynamic-${groupIndex++}`, rows, keywords));
+        }
+        groups.set(child, ids);
+        continue;
+      }
+      if (child.matches("h3") || child.querySelector("h3")) continue;
+      addRow(child, `${section.id}-dynamic-${index++}`, rows);
     }
     sections.push({ id: section.id, title: section.title, rows });
   }
@@ -1356,44 +1453,65 @@ const refreshSearch = () => {
   for (const [id, element] of elements) {
     if (!element.hasAttribute("data-settings-bound")) element.style.display = matched.rowIds.includes(id) ? originalDisplay.get(element) || "" : "none";
   }
+  for (const [group, ids] of groups) {
+    if (!originalDisplay.has(group)) originalDisplay.set(group, group.style.display);
+    group.style.display = ids.some(id => matched.rowIds.includes(id)) ? originalDisplay.get(group) || "" : "none";
+  }
+  // A match inside a closed "What it installs" disclosure opens it, and closes it again when the search ends.
+  const term = searchQuery.value.trim().toLocaleLowerCase();
+  for (const details of Array.from(root.querySelectorAll<HTMLDetailsElement>("details[data-settings-disclosure]"))) {
+    if (term && (details.textContent || "").toLocaleLowerCase().includes(term)) {
+      if (!details.open) { details.open = true; details.dataset.searchOpened = ""; }
+    } else if (details.hasAttribute("data-search-opened")) {
+      details.open = false;
+      delete details.dataset.searchOpened;
+    }
+  }
   if (!shownSectionIds.value.includes(activeSection.value)) activeSection.value = shownSectionIds.value[0] || "";
-  void nextTick(observeSections);
+  void nextTick(updateActiveSection);
 };
 const scheduleSearch = () => {
   if (searchScheduled) return;
   searchScheduled = true;
   void nextTick(() => { searchScheduled = false; refreshSearch(); });
 };
-const observeSections = () => {
-  intersectionObserver?.disconnect();
+// Mark the section at the top of <main> (under the narrow bar) as current.
+const updateActiveSection = () => {
+  scrollFrame = 0;
   const main = settingsRoot.value?.closest<HTMLElement>("main");
-  if (!main || typeof IntersectionObserver === "undefined") return;
-  intersectionObserver = new IntersectionObserver(() => {
-    const top = main.getBoundingClientRect().top + 20;
-    const visible = shownSections.value.map(item => document.getElementById(item.id)).filter((el): el is HTMLElement => !!el && el.getClientRects().length > 0);
-    const passed = visible.filter(el => el.getBoundingClientRect().top <= top);
-    const atTop = passed[passed.length - 1] || visible[0];
-    if (atTop) activeSection.value = atTop.id;
-  }, { root: main, rootMargin: "-1px 0px -70% 0px", threshold: [0, 1] });
-  for (const item of shownSections.value) { const el = document.getElementById(item.id); if (el) intersectionObserver.observe(el); }
+  if (!main) return;
+  if (jumpTop !== null) {
+    if (Math.abs(main.scrollTop - jumpTop) <= 2) return;
+    jumpTop = null;
+  }
+  const probe = main.getBoundingClientRect().top + narrowBarHeight() + 20;
+  const tops = shownSections.value
+    .map(item => document.getElementById(item.id))
+    .filter((el): el is HTMLElement => !!el && el.getClientRects().length > 0)
+    .map(el => ({ id: el.id, top: el.getBoundingClientRect().top }));
+  const id = pickActiveSection(tops, probe, main);
+  if (id) activeSection.value = id;
+};
+const onMainScroll = () => {
+  if (!scrollFrame) scrollFrame = requestAnimationFrame(updateActiveSection);
 };
 const followSettingsHash = async () => {
   await nextTick();
   refreshSearch();
-  const id = route.hash.slice(1);
-  if (id && shownSectionIds.value.includes(id)) { scrollToSection(id); pinSection(id); }
+  const found = resolveSettingsHash(route.hash.slice(1));
+  if (found) { scrollToSection(found.section, false, found.target); pinSection(found.section, found.target); }
   else settingsRoot.value?.closest<HTMLElement>("main")?.scrollTo({ top: 0, behavior: "instant" });
 };
 // Sections above a deep-link target grow or shrink as settings and child
 // sections finish loading. Keep the target at the top until the user scrolls.
 let unpinSection: (() => void) | null = null;
-const pinSection = (id: string) => {
+const pinSection = (id: string, targetId = id) => {
   unpinSection?.();
   const root = settingsRoot.value;
   const main = root?.closest<HTMLElement>("main");
   if (!root || !main || typeof ResizeObserver === "undefined") return;
   let pinnedTop = main.scrollTop;
-  const resize = new ResizeObserver(() => { scrollToSection(id); pinnedTop = main.scrollTop; });
+  const resize = new ResizeObserver(() => { scrollToSection(id, false, targetId); pinnedTop = main.scrollTop; });
   // Any scroll the pin did not make (wheel, keys, controller, section list) ends it.
   const onScroll = () => { if (Math.abs(main.scrollTop - pinnedTop) > 2) stop(); };
   const stop = () => {
@@ -1407,16 +1525,43 @@ const pinSection = (id: string) => {
   resize.observe(root);
   unpinSection = stop;
 };
-watch(searchQuery, scheduleSearch);
+// A new search shows other sections: mark the one at the top again.
+watch(searchQuery, () => { jumpTop = null; scheduleSearch(); });
 watch(sectionRegistry, () => { scheduleSearch(); void followSettingsHash(); });
 watch(() => route.hash, () => { void followSettingsHash(); });
+// "/" and Ctrl+F search the library on the Library page; here they search settings.
+useEventListener(document, "keydown", event => {
+  if (event.defaultPrevented || event.altKey || document.querySelector('[aria-modal="true"]')) return;
+  const typing = event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])");
+  const find = (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "f";
+  if (!find && !(event.key === "/" && !typing && !event.ctrlKey && !event.metaKey)) return;
+  const input = [desktopSearch.value, mobileSearch.value].find(item => item?.getClientRects().length);
+  if (!input) return;
+  event.preventDefault();
+  input.focus();
+  input.select();
+});
 onMounted(() => {
   searchObserver = new MutationObserver(scheduleSearch);
   if (settingsRoot.value) searchObserver.observe(settingsRoot.value, { childList: true, subtree: true });
+  scroller = settingsRoot.value?.closest("main") || null;
+  scroller?.addEventListener("scroll", onMainScroll, { passive: true });
+  // Section headings stick under the narrow bar. Its height follows the
+  // interface scale and text size, so measure it.
+  if (narrowBar.value && typeof ResizeObserver !== "undefined") {
+    narrowBarObserver = new ResizeObserver(() => settingsRoot.value?.style.setProperty("--settings-sticky-top", `${narrowBarHeight()}px`));
+    narrowBarObserver.observe(narrowBar.value);
+  }
   scheduleSearch();
   void followSettingsHash();
 });
-onUnmounted(() => { searchObserver?.disconnect(); intersectionObserver?.disconnect(); unpinSection?.(); });
+onUnmounted(() => {
+  searchObserver?.disconnect();
+  narrowBarObserver?.disconnect();
+  scroller?.removeEventListener("scroll", onMainScroll);
+  if (scrollFrame) cancelAnimationFrame(scrollFrame);
+  unpinSection?.();
+});
 
 const browseUrm = async () => {
   const path = await api.browseUrmFile(urmPath.value);
@@ -1425,7 +1570,7 @@ const browseUrm = async () => {
 </script>
 
 <template>
-  <div ref="settingsRoot" class="allow-text-selection mx-auto w-full p-8 max-w-7xl pb-12">
+  <div ref="settingsRoot" class="settings-page allow-text-selection mx-auto w-full p-8 max-w-7xl pb-12">
     <header class="mb-8">
       <h2
         class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
@@ -1434,14 +1579,8 @@ const browseUrm = async () => {
         <IconSettings class="ui-page-heading-icon" />
         <span>Settings</span>
       </h2>
-      <p
-        class="text-sm pl-3"
-        style="
-          color: var(--text-secondary);
-          border-left: 2px solid var(--brand);
-        "
-      >
-        Configure launch paths and application behavior. Changes save automatically.
+      <p class="text-sm" style="color: var(--text-secondary)">
+        How wLib finds, downloads and runs your games, and how it looks. Changes save automatically.
       </p>
     </header>
 
@@ -1455,11 +1594,11 @@ const browseUrm = async () => {
       </p>
       <button
         type="button"
-        class="settings-btn shrink-0 disabled:opacity-50"
+        class="ui-card-btn shrink-0"
         :disabled="settingsLoading"
         @click="loadSettings"
       >
-        {{ settingsLoading ? "Retrying..." : "Retry" }}
+        {{ settingsLoading ? "Retrying…" : "Retry" }}
       </button>
     </div>
 
@@ -1472,315 +1611,253 @@ const browseUrm = async () => {
         </nav>
       </aside>
       <div data-settings-content class="min-w-0 max-w-4xl w-full">
-        <div class="lg:hidden space-y-3 mb-6">
-          <label class="block text-sm" for="settings-search-mobile">Search settings</label>
-          <input id="settings-search-mobile" ref="mobileSearch" v-model="searchQuery" type="search" class="settings-input w-full" placeholder="Search settings" />
-          <label class="block text-sm" for="settings-section-select">Section</label>
-          <select id="settings-section-select" class="settings-input w-full" :value="activeSection" @change="scrollToSection(($event.target as HTMLSelectElement).value)">
+        <div ref="narrowBar" class="settings-narrow-bar lg:hidden flex flex-col gap-2 sm:flex-row" role="search" aria-label="Settings search and sections">
+          <label class="sr-only" for="settings-search-mobile">Search settings</label>
+          <input id="settings-search-mobile" ref="mobileSearch" v-model="searchQuery" type="search" class="settings-input w-full min-w-0 sm:flex-1" placeholder="Search settings" />
+          <label class="sr-only" for="settings-section-select">Section</label>
+          <select id="settings-section-select" class="settings-input w-full sm:w-52 sm:shrink-0" :value="activeSection" @change="scrollToSection(($event.target as HTMLSelectElement).value)">
             <option v-for="section in shownSections" :key="section.id" :value="section.id">{{ section.title }}</option>
           </select>
         </div>
-        <div v-if="!shownSections.length && searchQuery.trim()" class="settings-card rounded-xl p-6 mb-6" role="status">No settings match. <button class="underline" @click="searchQuery = ''">Clear search</button></div>
+        <div v-if="!shownSections.length && searchQuery.trim()" class="settings-card rounded-xl p-6 mb-6" role="status">No settings match. <button type="button" class="ui-card-btn ui-card-btn--link" @click="searchQuery = ''">Clear search</button></div>
         <fieldset :disabled="!!settingsLoadError || settingsLoading" class="settings-sections space-y-6 w-full min-w-0 border-0 p-0">
-      <!-- General -->
-      <section v-show="sectionVisible('general')" id="general" class="settings-card rounded-xl p-6 space-y-5">
-        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
-          <IconAdjustments class="ui-section-icon" />
-          General
-        </h3>
-
-        <div data-settings-row="general-static-0" data-settings-bound v-show="settingsRowVisible('general-static-0')" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">
-              Enable Debug Logging
-            </h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              {{
-                supportsLinuxRuntimes
-                  ? "Saves Wine/Proton launch output to a .log file next to the game executable."
-                  : "Saves native launch output to a .log file next to the game executable."
-              }}
-            </p>
-          </div>
-          <label class="relative inline-flex items-center cursor-pointer shrink-0">
-            <input
-              type="checkbox"
-              :checked="enableLogging"
-              :disabled="savingLogging"
-              @change="toggleLogging"
-              class="sr-only peer"
-              aria-label="Enable debug logging"
-            />
-            <div class="ui-toggle"></div>
-          </label>
+      <section v-show="sectionVisible('library')" id="library" class="settings-card rounded-xl p-6 space-y-5">
+        <div class="settings-section-head">
+          <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
+            <IconLayout2 class="ui-section-icon" />
+            Library
+          </h3>
+          <SettingsHelpLink page="Getting-Started" anchor="1-set-your-folders" />
         </div>
 
-        <div data-settings-row="general-static-5" data-settings-bound v-show="settingsRowVisible('general-static-5')" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">
-              Play HTML games in the built-in player
-            </h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Runs HTML and Flash (.swf) games in a wLib window, so playtime, Stop, sandboxing and No internet work. Turn off to open HTML games in your system browser. Each game can override this.
-            </p>
-          </div>
-          <label class="relative inline-flex items-center cursor-pointer shrink-0">
-            <input
-              type="checkbox"
-              role="switch"
-              :checked="htmlBuiltinPlayer"
-              @change="saveHtmlBuiltinPlayer"
-              class="sr-only peer"
-              aria-label="Play HTML games in the built-in player"
-            />
-            <div class="ui-toggle"></div>
-          </label>
-        </div>
-
-        <div data-settings-row="general-static-6" data-settings-bound v-show="settingsRowVisible('general-static-6')" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">
-              Web player DevTools (F12)
-            </h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              F12 opens DevTools in the built-in player. Turn off if a game uses F12. Applies to the next launch.
-            </p>
-          </div>
-          <label class="relative inline-flex items-center cursor-pointer shrink-0">
-            <input
-              type="checkbox"
-              role="switch"
-              :checked="webPlayerDevtools"
-              @change="saveWebPlayerDevtools"
-              class="sr-only peer"
-              aria-label="Web player DevTools (F12)"
-            />
-            <div class="ui-toggle"></div>
-          </label>
-        </div>
-
-        <div data-settings-row="general-static-1" data-settings-bound v-show="settingsRowVisible('general-static-1')" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <label for="save-backup-keep" class="text-sm font-medium" style="color: var(--text-primary)">
-              Save backups to keep per game
-            </label>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Older backups are deleted after a new one is made. Changes apply right away.
-            </p>
-          </div>
-          <div class="flex items-center gap-2 shrink-0">
-            <select
-              id="save-backup-keep"
-              :value="keepChoice"
-              :disabled="savingKeep"
-              @change="onKeepChoice"
-              class="settings-input"
-            >
-              <option value="all">Keep all</option>
-              <option v-for="count in KEEP_PRESETS" :key="count" :value="String(count)">
-                Newest {{ count }}
-              </option>
-              <option value="custom">Custom…</option>
-            </select>
-            <input
-              v-if="keepChoice === 'custom'"
-              type="number"
-              min="1"
-              max="99"
-              step="1"
-              :value="keepCustom"
-              :disabled="savingKeep"
-              @change="onKeepCustom"
-              class="settings-input w-20"
-              aria-label="Number of save backups to keep"
-            />
-          </div>
-        </div>
-
-        <div data-settings-row="general-static-2" data-settings-bound v-show="settingsRowVisible('general-static-2')" class="ui-card-row space-y-3">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Play Statuses</h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Add custom statuses alongside the built-in choices.
-            </p>
-          </div>
-          <div class="flex gap-3">
-            <input
-              v-model="newStatus"
-              @input="statusError = ''"
-              :disabled="!!settingsLoadError || settingsLoading"
-              @keydown.enter.prevent="addStatus"
-              type="text"
-              class="settings-input flex-1"
-              placeholder="Custom status name"
-              aria-label="Custom status name"
-            />
-            <button @click="addStatus" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn">Add Status</button>
-          </div>
-          <FieldSaveFeedback :state="statusesSave.state.value" :error="statusesSave.error.value" />
-          <p v-if="statusError" role="alert" class="text-xs text-red-400">{{ statusError }}</p>
-          <div
-            v-for="name in customStatuses"
-            :key="name"
-            class="ui-card-row flex items-center justify-between gap-3"
-          >
-            <span class="text-sm" style="color: var(--text-primary)">{{ name }}</span>
-            <button @click="removeStatus(name)" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn" :aria-label="`Remove ${name}`">
-              Remove
+        <SettingRow data-settings-row="library-downloads-static-1" data-settings-bound v-show="settingsRowVisible('library-downloads-static-1')"
+          layout="stacked" label="Library folders"
+          help="Choose the folders available for archive installs. New installs preselect the default."
+          :save-state="foldersSave.state.value" :save-error="foldersSave.error.value">
+          <div class="space-y-3">
+            <div v-for="path in libraryFolders" :key="path" class="space-y-2 rounded-lg p-3" style="border: 1px solid var(--border)">
+              <div class="flex items-center gap-3">
+                <span class="font-mono text-sm break-all flex-1" :aria-label="path">{{ path }}</span>
+                <span v-if="path === libraryFolder" class="text-xs" style="color: var(--text-secondary)">Default</span>
+                <button v-else @click="libraryFolder = path; foldersSave.commit()" :disabled="!!settingsLoadError || settingsLoading" class="ui-card-btn">Make default</button>
+                <button @click="removeLibraryFolder(path)" :disabled="!!settingsLoadError || settingsLoading || (path === libraryFolder && libraryFolders.length > 1)" :title="path === libraryFolder && libraryFolders.length > 1 ? 'Choose another default first' : 'Remove from list'" class="ui-card-btn ui-card-btn--danger">Remove</button>
+              </div>
+              <div class="flex gap-3 text-xs" style="color: var(--text-muted)">
+                <PathStatus :path="path" kind="dir" />
+                <span>{{ folderFreeSpace(path) }}</span>
+              </div>
+            </div>
+            <p v-if="libraryFolders.length > 1" class="text-xs" style="color: var(--text-muted)">Choose another default before removing the default folder.</p>
+            <button @click="browseLibraryFolder" :disabled="!!settingsLoadError || settingsLoading" class="ui-card-btn">
+              <IconFolderOpen class="w-3.5 h-3.5" aria-hidden="true" />Add library folder
             </button>
           </div>
-        </div>
+        </SettingRow>
 
-        <div data-settings-row="general-static-3" data-settings-bound v-show="settingsRowVisible('general-static-3')" class="ui-card-row space-y-3">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Collections</h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Your own groups of games, shown as tabs above the library. Changes apply right away.
-            </p>
-          </div>
-          <div class="flex gap-3">
-            <input
-              v-model="newCollectionName"
-              @keydown.enter.prevent="addCollection"
-              type="text"
-              class="settings-input flex-1"
-              placeholder="Collection name"
-              aria-label="New collection name"
-            />
-            <button @click="addCollection" class="settings-btn">Add Collection</button>
-          </div>
-          <p v-if="collectionError" role="alert" class="text-xs text-red-400">{{ collectionError }}</p>
-          <p
-            v-if="!collectionList.length"
-            class="text-xs"
-            style="color: var(--text-muted)"
-          >
-            No collections yet.
-          </p>
-          <div
-            v-for="(name, index) in collectionList"
-            :key="name"
-            class="ui-card-row flex items-center justify-between gap-3"
-          >
-            <form
-              v-if="renamingCollection === name"
-              class="flex items-center gap-2 min-w-0 flex-1"
-              @submit.prevent="commitCollectionRename"
-            >
-              <input
-                v-model="renameCollectionDraft"
-                type="text"
-                class="settings-input flex-1"
-                :aria-label="`Rename ${name}`"
-                @keydown.escape.prevent="cancelCollectionRename"
-              />
-              <button type="submit" class="settings-btn" title="Save the new name">Save</button>
-              <button type="button" class="settings-btn" @click="cancelCollectionRename">Cancel</button>
-            </form>
-            <template v-else>
-              <span class="text-sm truncate" style="color: var(--text-primary)">{{ name }}</span>
-              <div class="flex items-center gap-1.5 shrink-0">
-                <button
-                  class="settings-btn"
-                  :disabled="index === 0"
-                  :aria-label="`Move ${name} up`"
-                  title="Move up"
-                  @click="moveCollection(name, -1)"
-                >
-                  ↑
-                </button>
-                <button
-                  class="settings-btn"
-                  :disabled="index === collectionList.length - 1"
-                  :aria-label="`Move ${name} down`"
-                  title="Move down"
-                  @click="moveCollection(name, 1)"
-                >
-                  ↓
-                </button>
-                <button class="settings-btn" @click="startCollectionRename(name)">Rename</button>
-                <button class="settings-btn" :aria-label="`Remove ${name}`" @click="removeCollection(name)">
-                  Remove
-                </button>
-              </div>
-            </template>
-          </div>
-        </div>
-      </section>
-
-      <!-- Library & Downloads -->
-      <section v-show="sectionVisible('library-downloads')" id="library-downloads" class="settings-card rounded-xl p-6 space-y-5">
-        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
-          <IconDownloadFilled class="ui-section-icon" />
-          Library &amp; Downloads
-        </h3>
-        <div data-settings-row="library-downloads-static-0" data-settings-bound v-show="settingsRowVisible('library-downloads-static-0')" class="ui-card-row flex items-center justify-between gap-3">
-          <div>
-            <p class="text-sm">Cover cache: {{ coverCache.count ? `${coverCache.count} covers, ${formatCoverCacheSize(coverCache.bytes)}` : 'Empty' }}</p>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">Cached covers stay on this device. After purging, downloads resume next launch.</p>
-            <p v-if="coverCacheError" class="text-xs" role="alert">{{ coverCacheError }}</p>
-          </div>
-          <button class="settings-btn disabled:opacity-50" :disabled="coverCacheBusy || !coverCache.count" @click="purgeCoverCache">Purge</button>
-        </div>
-
-        <div data-settings-row="library-downloads-static-1" data-settings-bound v-show="settingsRowVisible('library-downloads-static-1')" class="ui-card-row space-y-3">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Library folders</h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Choose the folders available for archive installs. New installs preselect the default.
-            </p>
-          </div>
-          <div v-for="path in libraryFolders" :key="path" class="space-y-2 rounded-lg p-3" style="border: 1px solid var(--border-color)">
-            <div class="flex items-center gap-3">
-              <span class="font-mono text-sm break-all flex-1" :aria-label="path">{{ path }}</span>
-              <span v-if="path === libraryFolder" class="text-xs">Default</span>
-              <button v-else @click="libraryFolder = path; foldersSave.commit()" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn">Make default</button>
-              <button @click="removeLibraryFolder(path)" :disabled="!!settingsLoadError || settingsLoading || (path === libraryFolder && libraryFolders.length > 1)" :title="path === libraryFolder && libraryFolders.length > 1 ? 'Choose another default first' : 'Remove from list'" class="settings-btn disabled:opacity-50">Remove</button>
-            </div>
-            <div class="flex gap-3 text-xs" style="color: var(--text-muted)">
-              <PathStatus :path="path" kind="dir" />
-              <span>{{ folderFreeSpace(path) }}</span>
-            </div>
-          </div>
-          <p v-if="libraryFolders.length > 1" class="text-xs" style="color: var(--text-muted)">Choose another default before removing the default folder.</p>
-          <button @click="browseLibraryFolder" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn ui-action-btn">Add library folder</button>
-          <FieldSaveFeedback :state="foldersSave.state.value" :error="foldersSave.error.value" />
-        </div>
-
-        <div data-settings-row="library-downloads-static-2" data-settings-bound v-show="settingsRowVisible('library-downloads-static-2')" class="ui-card-row space-y-3">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Folder pattern</h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Tokens: <code>{creator}</code> <code>{title}</code> <code>{version}</code> <code>{engine}</code>.
-              Empty parts are skipped.
-            </p>
-          </div>
+        <SettingRow data-settings-row="library-downloads-static-2" data-settings-bound v-show="settingsRowVisible('library-downloads-static-2')"
+          layout="stacked" label="Folder pattern" control-id="settings-folder-pattern"
+          :save-state="patternSave.state.value" :save-error="patternSave.error.value">
+          <template #help>
+            Tokens: <code>{creator}</code> <code>{title}</code> <code>{version}</code> <code>{engine}</code>.
+            Empty parts are skipped.
+          </template>
           <input
+            id="settings-folder-pattern"
             v-model="libraryFolderPattern"
-              @blur="commitPattern()"
-              @keydown.enter.prevent="commitPattern()"
-              :disabled="!!settingsLoadError || settingsLoading"
-              data-settings-field="libraryFolderPattern"
+            @blur="commitPattern()"
+            @keydown.enter.prevent="commitPattern()"
+            :disabled="!!settingsLoadError || settingsLoading"
+            data-settings-field="libraryFolderPattern"
             type="text"
             class="settings-input w-full font-mono"
             placeholder="{creator}/{title}/{version}"
             aria-label="Library folder pattern"
           />
-            <FieldSaveFeedback :state="patternSave.state.value" :error="patternSave.error.value" />
-          <p class="text-xs font-mono break-all" style="color: var(--text-muted)">
+          <p class="text-xs font-mono break-all mt-2" style="color: var(--text-muted)">
             Example: {{ patternExample }}
           </p>
+        </SettingRow>
+
+        <SettingRow data-settings-row="general-static-2" data-settings-bound v-show="settingsRowVisible('general-static-2')"
+          layout="stacked" label="Play statuses" control-id="settings-new-status"
+          help="Add custom statuses alongside the built-in choices."
+          :save-state="statusesSave.state.value" :save-error="statusesSave.error.value">
+          <div class="space-y-3">
+            <div class="flex gap-3">
+              <input
+                id="settings-new-status"
+                v-model="newStatus"
+                @input="statusError = ''"
+                :disabled="!!settingsLoadError || settingsLoading"
+                @keydown.enter.prevent="addStatus"
+                type="text"
+                class="settings-input flex-1"
+                placeholder="Custom status name"
+                aria-label="Custom status name"
+              />
+              <button @click="addStatus" :disabled="!!settingsLoadError || settingsLoading" class="ui-card-btn">Add status</button>
+            </div>
+            <p v-if="statusError" role="alert" class="save-status-error">{{ statusError }}</p>
+            <div
+              v-for="name in customStatuses"
+              :key="name"
+              class="ui-card-row flex items-center justify-between gap-3"
+            >
+              <span class="text-sm" style="color: var(--text-primary)">{{ name }}</span>
+              <button @click="removeStatus(name)" :disabled="!!settingsLoadError || settingsLoading" class="ui-card-btn ui-card-btn--danger" :aria-label="`Remove ${name}`">
+                Remove
+              </button>
+            </div>
+          </div>
+        </SettingRow>
+
+        <SettingRow data-settings-row="general-static-3" data-settings-bound v-show="settingsRowVisible('general-static-3')"
+          layout="stacked" label="Collections" control-id="settings-new-collection"
+          help="Your own groups of games, shown as tabs above the library. Changes apply right away.">
+          <div class="space-y-3">
+            <div class="flex gap-3">
+              <input
+                id="settings-new-collection"
+                v-model="newCollectionName"
+                @keydown.enter.prevent="addCollection"
+                type="text"
+                class="settings-input flex-1"
+                placeholder="Collection name"
+                aria-label="New collection name"
+              />
+              <button @click="addCollection" class="ui-card-btn">Add collection</button>
+            </div>
+            <p v-if="collectionError" role="alert" class="save-status-error">{{ collectionError }}</p>
+            <p
+              v-if="!collectionList.length"
+              class="text-xs"
+              style="color: var(--text-muted)"
+            >
+              No collections yet.
+            </p>
+            <div
+              v-for="(name, index) in collectionList"
+              :key="name"
+              class="ui-card-row flex items-center justify-between gap-3"
+            >
+              <form
+                v-if="renamingCollection === name"
+                class="flex items-center gap-2 min-w-0 flex-1"
+                @submit.prevent="commitCollectionRename"
+              >
+                <input
+                  v-model="renameCollectionDraft"
+                  type="text"
+                  class="settings-input flex-1"
+                  :aria-label="`Rename ${name}`"
+                  @keydown.escape.prevent="cancelCollectionRename"
+                />
+                <button type="submit" class="ui-card-btn ui-card-btn--primary" title="Save the new name">Save</button>
+                <button type="button" class="ui-card-btn" @click="cancelCollectionRename">Cancel</button>
+              </form>
+              <template v-else>
+                <span class="text-sm truncate" style="color: var(--text-primary)">{{ name }}</span>
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <button
+                    class="ui-card-btn"
+                    :disabled="index === 0"
+                    :aria-label="`Move ${name} up`"
+                    title="Move up"
+                    @click="moveCollection(name, -1)"
+                  >
+                    <IconArrowUp class="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                  <button
+                    class="ui-card-btn"
+                    :disabled="index === collectionList.length - 1"
+                    :aria-label="`Move ${name} down`"
+                    title="Move down"
+                    @click="moveCollection(name, 1)"
+                  >
+                    <IconArrowDown class="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                  <button class="ui-card-btn" @click="startCollectionRename(name)">Rename</button>
+                  <button class="ui-card-btn ui-card-btn--danger" :aria-label="`Remove ${name}`" @click="removeCollection(name)">
+                    Remove
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+        </SettingRow>
+
+        <SettingRow data-settings-row="general-static-1" data-settings-bound v-show="settingsRowVisible('general-static-1')"
+          label="Save backups to keep per game" control-id="save-backup-keep"
+          help="Older backups are deleted after a new one is made. Changes apply right away."
+          :save-state="keepStatus.state.value" :save-error="keepStatus.error.value">
+          <select
+            id="save-backup-keep"
+            :value="keepChoice"
+            :disabled="savingKeep"
+            @change="onKeepChoice"
+            class="settings-input"
+          >
+            <option value="all">Keep all</option>
+            <option v-for="count in KEEP_PRESETS" :key="count" :value="String(count)">
+              Newest {{ count }}
+            </option>
+            <option value="custom">Custom…</option>
+          </select>
+          <input
+            v-if="keepChoice === 'custom'"
+            type="number"
+            min="1"
+            max="99"
+            step="1"
+            :value="keepCustom"
+            :disabled="savingKeep"
+            @change="onKeepCustom"
+            class="settings-input w-20"
+            aria-label="Number of save backups to keep"
+          />
+        </SettingRow>
+
+        <SettingRow
+          data-settings-row="library-downloads-storage-recount"
+          data-settings-bound
+          data-keywords="storage recount disk size install update move battery"
+          v-show="settingsRowVisible('library-downloads-storage-recount')"
+          label="Count a game's size again after install, update or move" control-id="settings-storage-recount"
+          help="Recounts only that game in the background at low priority when a storage report exists. Skipped on battery power and stored on this device only."
+          :save-state="storageRecountSave.state.value" :save-error="storageRecountSave.error.value"
+        >
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              id="settings-storage-recount"
+              type="checkbox"
+              role="switch"
+              v-model="storageRecountAfterChanges"
+              @change="storageRecountSave.commit()"
+              :disabled="!!settingsLoadError || settingsLoading"
+              class="sr-only peer"
+              aria-label="Count a game's size again after install, update or move"
+            />
+            <div class="ui-toggle"></div>
+          </label>
+        </SettingRow>
+      </section>
+
+      <section v-show="sectionVisible('downloads')" id="downloads" class="settings-card rounded-xl p-6 space-y-5">
+        <div class="settings-section-head">
+          <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
+            <IconDownload class="ui-section-icon" />
+            Downloads
+          </h3>
+          <SettingsHelpLink page="Updates-and-Downloads" />
         </div>
 
-        <div data-settings-row="library-downloads-static-3" data-settings-bound v-show="settingsRowVisible('library-downloads-static-3')" class="ui-card-row space-y-3">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Downloads folder</h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              wLib looks here for archives matching games with pending updates.
-            </p>
-          </div>
+        <SettingRow data-settings-row="library-downloads-static-3" data-settings-bound v-show="settingsRowVisible('library-downloads-static-3')"
+          layout="stacked" label="Downloads folder" control-id="settings-downloads-folder"
+          help="wLib looks here for archives matching games with pending updates."
+          :save-state="downloadsSave.state.value" :save-error="downloadsSave.error.value">
           <div class="flex gap-3">
             <input
+              id="settings-downloads-folder"
               v-model="downloadsFolder"
               @blur="downloadsSave.commit()"
               @keydown.enter.prevent="downloadsSave.commit()"
@@ -1791,25 +1868,22 @@ const browseUrm = async () => {
               placeholder="~/Downloads"
               aria-label="Downloads folder"
             />
-            <FieldSaveFeedback :state="downloadsSave.state.value" :error="downloadsSave.error.value" />
-            <button @click="browseDownloadsFolder" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn ui-action-btn">Browse</button>
+            <button @click="browseDownloadsFolder" :disabled="!!settingsLoadError || settingsLoading" class="ui-card-btn">
+              <IconFolderOpen class="w-3.5 h-3.5" aria-hidden="true" />Browse
+            </button>
           </div>
           <PathStatus :path="downloadsFolder" kind="dir" />
-        </div>
+        </SettingRow>
 
-        <div data-settings-row="library-downloads-static-4" data-settings-bound v-show="settingsRowVisible('library-downloads-static-4')" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">
-              Detect downloaded updates
-            </h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Offer to install matching archives when the app starts, after update checks, and when the window regains focus.
-            </p>
-          </div>
-          <FieldSaveFeedback :state="detectionSave.state.value" :error="detectionSave.error.value" />
+        <SettingRow data-settings-row="library-downloads-static-4" data-settings-bound v-show="settingsRowVisible('library-downloads-static-4')"
+          label="Detect downloaded updates" control-id="settings-detect-downloads"
+          help="Offer to install matching archives when the app starts, after update checks, and when the window regains focus."
+          :save-state="detectionSave.state.value" :save-error="detectionSave.error.value">
           <label class="relative inline-flex items-center cursor-pointer shrink-0">
             <input
+              id="settings-detect-downloads"
               type="checkbox"
+              role="switch"
               v-model="downloadDetectionEnabled"
               @change="detectionSave.commit()"
               :disabled="!!settingsLoadError || settingsLoading"
@@ -1818,68 +1892,699 @@ const browseUrm = async () => {
             />
             <div class="ui-toggle"></div>
           </label>
-        </div>
+        </SettingRow>
 
-        <div
-          data-settings-row="library-downloads-storage-recount"
-          data-settings-bound
-          data-keywords="storage recount disk size install update move battery"
-          v-show="settingsRowVisible('library-downloads-storage-recount')"
-          class="ui-card-row flex items-center justify-between gap-4"
-        >
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">
-              Count a game's size again after install, update or move
-            </h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Recounts only that game in the background at low priority when a storage report exists. Skipped on battery power and stored on this device only.
-            </p>
-          </div>
-          <FieldSaveFeedback :state="storageRecountSave.state.value" :error="storageRecountSave.error.value" />
-          <label class="relative inline-flex items-center cursor-pointer shrink-0">
-            <input
-              type="checkbox"
-              v-model="storageRecountAfterChanges"
-              @change="storageRecountSave.commit()"
-              :disabled="!!settingsLoadError || settingsLoading"
-              class="sr-only peer"
-              aria-label="Count a game's size again after install, update or move"
-            />
-            <div class="ui-toggle"></div>
-          </label>
-        </div>
-
-        <div v-for="{ key, label, description } in lcSettings" :key="key"
-          :data-settings-row="key" data-settings-bound data-keywords="lewdcorner thread lc plus premium"
-          v-show="settingsRowVisible(key)" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <h4 :id="`settings-${key}-label`" class="text-sm font-medium" style="color: var(--text-primary)">{{ label }}</h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">{{ description }}</p>
-          </div>
-          <label class="relative inline-flex items-center cursor-pointer shrink-0">
-            <input
-              type="checkbox"
-              role="switch"
-              :aria-labelledby="`settings-${key}-label`"
-              :checked="lcValues[key]"
-              :disabled="settingsLoading || !!settingsLoadError || lcSaving[key]"
-              class="sr-only peer"
-              @change="saveLcSetting(key, $event)"
-            />
-            <div class="ui-toggle"></div>
-          </label>
-        </div>
-
-        <div data-settings-row="lc_plus" data-settings-bound data-keywords="lewdcorner thread lc plus premium tier detect check"
-          v-show="settingsRowVisible('lc_plus')" class="ui-card-row space-y-2" data-testid="settings-lc-plus">
-          <div class="flex items-center justify-between gap-4">
-            <div>
-              <h4 id="settings-lc_plus-label" class="text-sm font-medium" style="color: var(--text-primary)">LC Plus</h4>
-              <p class="text-xs mt-1" style="color: var(--text-muted)">
-                Also fill in LewdCorner Plus (Premium) threads. Auto checks your LewdCorner account through the browser extension.
-              </p>
+        <SettingRow data-settings-row="library-downloads-queue" data-keywords="download queue speed limit bandwidth slots same time pause playing game battery" data-settings-bound v-show="settingsRowVisible('library-downloads-queue')" data-testid="settings-download-queue"
+          layout="stacked" label="In-app downloads"
+          help="For file hosts and torrents together. The Downloads page shows the same settings. This device only.">
+          <div class="space-y-3">
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div class="space-y-1">
+                <div class="flex items-center justify-between gap-2">
+                  <label for="settings-download-limit" class="settings-field-label">Speed limit (KiB/s, 0 for no limit)</label>
+                  <FieldSaveFeedback v-if="limitSave.state.value !== 'error'" :state="limitSave.state.value" :error="limitSave.error.value" />
+                </div>
+                <input id="settings-download-limit" v-model.number="downloadLimitKib" type="number" min="0" step="64" class="settings-input w-full" aria-describedby="settings-download-limit-mb" :disabled="!!settingsLoadError || settingsLoading" @change="downloadLimitKib = clampLimitKib(downloadLimitKib); limitSave.commit()" />
+                <p id="settings-download-limit-mb" class="text-xs" style="color: var(--text-muted)" data-testid="settings-download-limit-mb">{{ limitInMegabytes(downloadLimitKib) }}. 1024 KiB/s is 1 MB/s.</p>
+                <FieldSaveFeedback v-if="limitSave.state.value === 'error'" :state="limitSave.state.value" :error="limitSave.error.value" />
+              </div>
+              <div class="space-y-1">
+                <div class="flex items-center justify-between gap-2">
+                  <label for="settings-download-slots" class="settings-field-label">Downloads at the same time</label>
+                  <FieldSaveFeedback v-if="slotsSave.state.value !== 'error'" :state="slotsSave.state.value" :error="slotsSave.error.value" />
+                </div>
+                <select id="settings-download-slots" v-model.number="downloadMaxActive" class="settings-input w-full" :disabled="!!settingsLoadError || settingsLoading" @change="slotsSave.commit()">
+                  <option v-for="count in MAX_ACTIVE_DOWNLOADS" :key="count" :value="count">{{ count }}</option>
+                </select>
+                <FieldSaveFeedback v-if="slotsSave.state.value === 'error'" :state="slotsSave.state.value" :error="slotsSave.error.value" />
+              </div>
             </div>
+            <div class="space-y-1">
+              <label class="flex items-center justify-between gap-3 cursor-pointer">
+                <span class="text-sm" style="color: var(--text-primary)">Pause downloads while a game runs</span>
+                <span class="flex items-center gap-3">
+                  <FieldSaveFeedback v-if="playingSave.state.value !== 'error'" class="save-status-slot" :state="playingSave.state.value" :error="playingSave.error.value" />
+                  <span class="relative inline-flex">
+                    <input v-model="downloadPauseWhilePlaying" type="checkbox" role="switch" class="sr-only peer" aria-label="Pause downloads while a game runs" :disabled="!!settingsLoadError || settingsLoading" @change="playingSave.commit()" />
+                    <span class="ui-toggle"></span>
+                  </span>
+                </span>
+              </label>
+              <FieldSaveFeedback v-if="playingSave.state.value === 'error'" :state="playingSave.state.value" :error="playingSave.error.value" />
+            </div>
+            <div class="space-y-1">
+              <label class="flex items-center justify-between gap-3 cursor-pointer">
+                <span class="text-sm" style="color: var(--text-primary)">Pause downloads on battery power</span>
+                <span class="flex items-center gap-3">
+                  <FieldSaveFeedback v-if="batterySave.state.value !== 'error'" class="save-status-slot" :state="batterySave.state.value" :error="batterySave.error.value" />
+                  <span class="relative inline-flex">
+                    <input v-model="downloadPauseOnBattery" type="checkbox" role="switch" class="sr-only peer" aria-label="Pause downloads on battery power" :disabled="!!settingsLoadError || settingsLoading" @change="batterySave.commit()" />
+                    <span class="ui-toggle"></span>
+                  </span>
+                </span>
+              </label>
+              <FieldSaveFeedback v-if="batterySave.state.value === 'error'" :state="batterySave.state.value" :error="batterySave.error.value" />
+            </div>
+          </div>
+        </SettingRow>
+
+        <FileHostAccounts />
+
+        <TorrentSettings />
+      </section>
+
+      <section v-show="sectionVisible('running-games')" id="running-games" class="settings-card rounded-xl p-6 space-y-5">
+        <div class="settings-section-head">
+          <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
+            <IconPlayerPlay class="ui-section-icon" />
+            Running games
+          </h3>
+          <SettingsHelpLink page="Launching-Games" />
+        </div>
+
+        <RunningGamesReadiness v-if="supportsLinuxRuntimes" data-settings-row="running-games-readiness" data-settings-bound
+          data-keywords="setup ready required optional status what do i need umu wine proton"
+          v-show="settingsRowVisible('running-games-readiness')"
+          :windows="windowsSetup" :optional="optionalTools" @go="goToSetup" />
+
+        <SettingsGroup id="wine-proton" title="Wine and Proton" v-if="supportsLinuxRuntimes" data-keywords="wine proton prefix runner">
+          <template #description>Windows games run in Wine or Proton. Wine works on its own. Proton also needs the umu setup below.</template>
+          <template #actions><SettingsHelpLink page="Launching-Games" anchor="wine-and-proton-linux" /></template>
+          <SettingRow data-settings-row="wine-proton-static-2" data-settings-bound v-show="settingsRowVisible('wine-proton-static-2')" v-if="supportsLinuxRuntimes"
+            layout="stacked" label="Proton / Wine executable path" control-id="settings-proton-path" help-id="settings-proton-help"
+            help="Leave empty for system Wine, or UMU-Proton if Wine is unavailable. GE-Proton (latest) may check for updates when launching."
+            :save-state="protonSave.state.value" :save-error="protonSave.error.value">
+            <template #actions>
+              <button
+                type="button"
+                @click="downloadProton"
+                :disabled="downloadingProton"
+                class="ui-card-btn ui-card-btn--link"
+              >
+                <IconLoader2 v-if="downloadingProton" class="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                <IconDownloadFilled v-else class="w-3.5 h-3.5" aria-hidden="true" />
+                {{ downloadingProton ? "Downloading GE-Proton…" : "Auto download latest GE-Proton" }}
+              </button>
+            </template>
+            <div class="flex gap-3">
+              <input
+                id="settings-proton-path"
+                v-model="protonPath"
+                @blur="protonSave.commit()"
+                @keydown.enter.prevent="protonSave.commit()"
+                :disabled="!!settingsLoadError || settingsLoading"
+                data-settings-field="protonPath"
+                list="runner-paths"
+                aria-describedby="settings-proton-help"
+                type="text"
+                placeholder="/usr/bin/wine or /path/to/GE-Proton/proton"
+                class="settings-input flex-1"
+              />
+              <datalist id="runner-paths">
+                <option v-for="runner in availableRunners" :key="runner.path" :value="runner.path">{{ runner.name }}</option>
+              </datalist>
+              <button @click="browseProton" :disabled="!!settingsLoadError || settingsLoading" class="ui-card-btn">
+                <IconFolderOpen class="w-3.5 h-3.5" aria-hidden="true" />
+                Browse
+              </button>
+            </div>
+            <PathStatus :path="protonPath" kind="runner" />
+            <div v-if="protonDownload" class="mt-3 space-y-1.5" role="status">
+              <div class="flex justify-between gap-3 text-xs" style="color: var(--text-secondary)">
+                <span>{{ protonDownload.stage }}… It keeps downloading if you leave this page.</span>
+                <span v-if="protonDownload.total" class="font-mono">
+                  {{ formatMegabytes(protonDownload.done) }} / {{ formatMegabytes(protonDownload.total) }}
+                </span>
+                <span v-else-if="protonDownload.done" class="font-mono">
+                  {{ formatMegabytes(protonDownload.done) }}
+                </span>
+              </div>
+              <div class="w-full rounded-full h-1.5 overflow-hidden" style="background: var(--bg-raised)">
+                <div
+                  class="h-1.5 rounded-full transition-all duration-300"
+                  :class="{ 'animate-pulse': !protonDownload.total }"
+                  style="background: var(--brand)"
+                  :style="{
+                    width: protonDownload.total
+                      ? (protonDownload.done / protonDownload.total) * 100 + '%'
+                      : '100%',
+                  }"
+                ></div>
+              </div>
+            </div>
+            <p v-if="protonError" class="copyable-feedback save-status-error mt-2" role="alert">
+              {{ protonError }}
+            </p>
+          </SettingRow>
+
+          <SettingRow data-settings-row="wine-proton-static-3" data-settings-bound v-show="settingsRowVisible('wine-proton-static-3')" v-if="supportsLinuxRuntimes"
+            layout="stacked" label="Default Wine prefix path (WINEPREFIX)" control-id="settings-prefix-path" help-id="settings-prefix-help"
+            help="A Wine prefix is a folder that acts like a small Windows PC: its own C: drive, fonts and game saves. Games share this one unless a game sets its own. Leave empty and wLib manages it."
+            :save-state="prefixSave.state.value" :save-error="prefixSave.error.value">
+            <div class="flex gap-3">
+              <input
+                id="settings-prefix-path"
+                v-model="prefixPath"
+                @blur="prefixSave.commit()"
+                @keydown.enter.prevent="prefixSave.commit()"
+                :disabled="!!settingsLoadError || settingsLoading"
+                data-settings-field="prefixPath"
+                aria-describedby="settings-prefix-help"
+                type="text"
+                placeholder="Auto-managed (~/.local/share/wLib/prefix) if left empty"
+                class="settings-input flex-1"
+              />
+              <button @click="browsePrefix" :disabled="!!settingsLoadError || settingsLoading" class="ui-card-btn">
+                <IconFolderOpen class="w-3.5 h-3.5" aria-hidden="true" />
+                Browse
+              </button>
+            </div>
+            <PathStatus :path="prefixPath" kind="dir" />
+          </SettingRow>
+
+          <SettingRow data-settings-row="wine-proton-static-4" data-settings-bound v-show="settingsRowVisible('wine-proton-static-4')" v-if="supportsLinuxRuntimes"
+            label="Prefix tools" help="Open Winecfg or Winetricks in the default Wine prefix.">
+            <div class="flex flex-wrap gap-2">
+              <button class="ui-card-btn" @click="openPrefixTool('winecfg')">Winecfg</button>
+              <button class="ui-card-btn" @click="openPrefixTool('winetricks')">Winetricks</button>
+            </div>
+          </SettingRow>
+        </SettingsGroup>
+
+        <UmuSettings v-if="supportsLinuxRuntimes" ref="umuSettings" data-keywords="runtime steam linux runtime steamrt"
+          :required="windowsSetup.usesProton" @status="umuReadiness = $event" />
+
+        <LocaleEmulatorSettings v-if="platformCapabilities.platform === 'windows'" />
+
+        <SettingsGroup id="tools" title="Game engine tools" data-keywords="rpg maker rpgm renpy ren'py mod winetricks">
+          <template v-if="supportsLinuxRuntimes" #description>All optional. Winetricks, RTP and Cheat Engine install into the default Wine prefix set under Wine and Proton.</template>
+          <template #actions><SettingsHelpLink page="Launching-Games" anchor="runtime-installers" /></template>
+          <SettingRow data-settings-row="wine-proton-static-5" data-settings-bound v-show="settingsRowVisible('wine-proton-static-5')" v-if="platformCapabilities.rpgmaker_linux"
+            layout="stacked" label="RPGMaker Linux Runner" label-id="settings-rpgm-label" help-id="settings-rpgm-help"
+            help="Optional. Runs RPG Maker XP, VX, VX Ace, MV and MZ games natively on Linux, often better than Wine. When installed, Auto Detect uses it unless a game sets its own Wine or Proton options."
+            :save-state="runnerSave.state.value" :save-error="runnerSave.error.value">
+            <template #actions>
+              <button type="button" @click="openRpgmakerLinuxRepo" class="ui-card-btn shrink-0">
+                <IconExternalLink class="w-3.5 h-3.5" aria-hidden="true" />Open GitHub
+              </button>
+            </template>
+            <div class="flex flex-col gap-3">
+              <div class="flex gap-3">
+                <input
+                  v-model="rpgmakerLinuxRunnerPath"
+                @blur="runnerSave.commit()"
+                @keydown.enter.prevent="runnerSave.commit()"
+                :disabled="!!settingsLoadError || settingsLoading"
+                data-settings-field="rpgmakerLinuxRunnerPath"
+                  aria-labelledby="settings-rpgm-label"
+                  aria-describedby="settings-rpgm-help"
+                  type="text"
+                  placeholder="Auto-detect or choose /path/to/rpgmaker-linux"
+                  class="settings-input flex-1"
+                />
+                <button @click="browseRpgmakerLinuxRunner" :disabled="!!settingsLoadError || settingsLoading" class="ui-card-btn">
+                  <IconFolderOpen class="w-3.5 h-3.5" aria-hidden="true" />
+                  Browse
+                </button>
+              </div>
+              <PathStatus :path="rpgmakerLinuxRunnerPath" kind="runner" />
+
+              <p
+                class="copyable-feedback text-xs"
+                :style="{ color: rpgmakerLinuxRunnerAvailable ? 'var(--success-text)' : rpgmakerRunnerOptional ? 'var(--text-muted)' : 'var(--warning-text)' }"
+              >
+                {{ rpgmakerRunnerOptional ? "Optional · not installed. RPG Maker games run in Wine or Proton until you install it." : rpgmakerLinuxRunnerStatusText }}
+              </p>
+
+              <div
+                v-if="rpgmakerRunnerUi.showRunnerInstall"
+                data-rpgm-runner-install
+                class="rounded-lg p-3 space-y-2 border"
+                style="background: var(--bg-surface); border-color: var(--border)"
+              >
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <p class="text-xs" style="color: var(--text-secondary)">
+                    Downloads the runner, checks it, and installs it in your home folder.
+                  </p>
+                  <button
+                    type="button"
+                    class="ui-card-btn shrink-0"
+                    :disabled="rpgmakerRunnerUi.installDisabled || !!settingsLoadError || settingsLoading"
+                    @click="startRpgmakerRunnerInstall('runner')"
+                  >
+                    <IconLoader2
+                      v-if="rpgmakerRunnerUi.installing && rpgmakerRunnerUi.installTarget === 'runner'"
+                      class="w-3.5 h-3.5 animate-spin"
+                    />
+                    {{ rpgmakerRunnerUi.installing && rpgmakerRunnerUi.installTarget === 'runner' ? 'Installing…' : 'Install runner' }}
+                  </button>
+                </div>
+                <details class="settings-disclosure" data-settings-disclosure>
+                  <summary>What the installer changes</summary>
+                  <div class="settings-disclosure-body space-y-1">
+                    <p>
+                      It downloads the pinned v1.1.9 archive, checks its SHA-256 hash and runs the
+                      runner's own <code>install.sh</code>. Files go to <code>~/desktopapps/nwjs</code>
+                      (or your custom install folder). It adds the <code>rpgmaker-linux</code> command
+                      and menu entries, and can add a Steam compatibility tool.
+                    </p>
+                    <p>
+                      It can also add one line to your shell settings, so the <code>rpgmaker-linux</code>
+                      command works in a terminal. wLib does not need that line.
+                    </p>
+                    <p>
+                      Installs run only when you click Install. wLib never runs the runner's
+                      update, export, bug-report, patching or plugin-install commands.
+                    </p>
+                  </div>
+                </details>
+              </div>
+
+              <p
+                v-else-if="rpgmakerRunnerUi.showRunnerMissingToolsNote"
+                class="text-xs"
+                style="color: var(--warning-text)"
+              >
+                {{ rpgmakerRunnerUi.runnerMissingToolsReason }} Install manually from GitHub or install the missing command first.
+              </p>
+
+              <div
+                data-rpgm-mkxpz-row
+                class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pt-2 border-t"
+                style="border-color: var(--border)"
+              >
+                <div class="min-w-0">
+                  <p class="text-xs font-medium" style="color: var(--text-primary)">
+                    mkxp-z module (RPG Maker XP, VX, VX Ace)
+                  </p>
+                  <p class="text-xs mt-0.5" style="color: var(--text-muted)">
+                    Plays these older RPG Maker games on Linux without Wine. It needs the runner above.
+                  </p>
+                  <p
+                    class="copyable-feedback text-xs mt-0.5 break-all"
+                    :style="{ color: rpgmakerRunnerUi.mkxpzInstalled ? 'var(--success-text)' : 'var(--text-muted)' }"
+                  >
+                    {{ rpgmakerRunnerUi.mkxpzStatusText }}
+                  </p>
+                </div>
+                <button
+                  v-if="rpgmakerRunnerUi.showMkxpzInstall"
+                  type="button"
+                  class="ui-card-btn shrink-0"
+                  :disabled="rpgmakerRunnerUi.installDisabled || !!settingsLoadError || settingsLoading"
+                  @click="startRpgmakerRunnerInstall('mkxpz')"
+                >
+                  <IconLoader2
+                    v-if="rpgmakerRunnerUi.installing && rpgmakerRunnerUi.installTarget === 'mkxpz'"
+                    class="w-3.5 h-3.5 animate-spin"
+                  />
+                  {{ rpgmakerRunnerUi.installing && rpgmakerRunnerUi.installTarget === 'mkxpz' ? 'Installing…' : 'Install mkxp-z' }}
+                </button>
+              </div>
+
+              <p
+                v-if="rpgmakerRunnerUi.installing"
+                data-rpgm-install-stage
+                class="ui-callout"
+                role="status"
+              >
+                <IconLoader2 class="w-4 h-4 shrink-0 animate-spin" style="color: var(--brand)" />
+                {{ rpgmakerRunnerUi.stageText }}
+              </p>
+
+              <div
+                v-if="rpgmakerRunnerUi.errorText"
+                data-rpgm-install-error
+                class="ui-callout ui-callout--danger flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+                role="alert"
+              >
+                <span class="break-words">{{ rpgmakerRunnerUi.errorText }}</span>
+                <button
+                  type="button"
+                  @click="openRpgmakerLinuxRepo"
+                  class="ui-card-btn shrink-0"
+                >
+                  Open GitHub
+                </button>
+              </div>
+
+            </div>
+          </SettingRow>
+
+          <!-- Wine installers (Linux only) -->
+          <div data-settings-row="tools-static-0" data-settings-bound v-show="settingsRowVisible('tools-static-0')" v-if="supportsLinuxRuntimes" class="flex flex-col gap-3">
+            <!-- DLL Install Card -->
+            <div class="tool-card p-4 rounded-lg">
+              <div class="flex flex-wrap items-center justify-between gap-4">
+                <div class="flex items-start gap-3 min-w-0 grow basis-56">
+                  <span class="ui-status-badge" :class="dllsInstalled ? 'ui-status-badge--ok' : ''" aria-hidden="true">
+                    <IconLoader2 v-if="installingDeps" class="w-4 h-4 animate-spin" />
+                    <IconCircleCheck v-else-if="dllsInstalled" class="w-4 h-4" />
+                    <IconDownload v-else class="w-4 h-4" />
+                  </span>
+                  <div class="min-w-0">
+                    <h5 class="text-sm font-medium" style="color: var(--text-primary)">
+                      RPGMaker / Unity fix (Winetricks)
+                    </h5>
+                    <p
+                      v-if="!dllsInstalled && !installingDeps"
+                      class="text-xs mt-1"
+                      style="color: var(--text-muted)"
+                    >
+                      Adds Windows fonts, video parts and runtimes that many RPG Maker and
+                      Unity games need. Fixes black screens in videos. Takes 30 minutes or more.
+                    </p>
+                    <p v-if="installingDeps" class="text-xs mt-1" style="color: var(--text-secondary)" role="status">
+                      Installing <span class="font-mono">{{ depsProgress.current }}</span> ({{ depsProgress.done }}/{{
+                        depsProgress.total
+                      }})… This can take 30 minutes or more. It keeps running if you leave this page.
+                    </p>
+                    <details v-if="!dllsInstalled" class="settings-disclosure mt-1" data-settings-disclosure>
+                      <summary>What it installs</summary>
+                      <p class="settings-disclosure-body">
+                        Winetricks packages, among them corefonts and other fonts, d3dx9 and d3dcompiler (DirectX),
+                        quartz, directshow and wmp9 (video), and the .NET and Visual C++ runtimes.
+                      </p>
+                    </details>
+                    <p v-if="dllsInstalled && !installingDeps" class="text-xs mt-1" style="color: var(--success-text)">
+                      Installed
+                    </p>
+                  </div>
+                </div>
+                <button
+                  @click="installDeps"
+                  :disabled="installingDeps || dllsInstalled"
+                  class="ui-card-btn shrink-0"
+                >
+                  <IconLoader2 v-if="installingDeps" class="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                  {{ dllsInstalled ? "Installed" : installingDeps ? "Installing…" : "Install DLLs" }}
+                </button>
+              </div>
+              <div v-if="installingDeps && depsProgress.total > 0" class="mt-3 ml-11">
+                <div class="w-full rounded-full h-1.5 overflow-hidden" style="background: var(--bg-surface)">
+                  <div
+                    class="h-1.5 rounded-full transition-all duration-500"
+                    style="background: var(--brand)"
+                    :style="{ width: (depsProgress.done / depsProgress.total) * 100 + '%' }"
+                  ></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- RTP Install Card -->
+            <div class="tool-card p-4 rounded-lg">
+              <div class="flex flex-wrap items-center justify-between gap-4">
+                <div class="flex items-start gap-3 min-w-0 grow basis-56">
+                  <span class="ui-status-badge" :class="rtpsInstalled ? 'ui-status-badge--ok' : ''" aria-hidden="true">
+                    <IconLoader2 v-if="installingRtps" class="w-4 h-4 animate-spin" />
+                    <IconCircleCheck v-else-if="rtpsInstalled" class="w-4 h-4" />
+                    <IconDownload v-else class="w-4 h-4" />
+                  </span>
+                  <div class="min-w-0">
+                    <h5 class="text-sm font-medium" style="color: var(--text-primary)">
+                      RPGMaker RTP (VX Ace, VX, XP, 2003)
+                    </h5>
+                    <p
+                      v-if="!rtpsInstalled && !installingRtps"
+                      class="text-xs mt-1"
+                      style="color: var(--text-muted)"
+                    >
+                      The RTP (Run Time Package) has the shared graphics, sounds and fonts
+                      that older RPG Maker games expect. Downloads and checks the official packages.
+                    </p>
+                    <p v-if="installingRtps" class="text-xs mt-1" style="color: var(--text-secondary)" role="status">
+                      Installing <span class="font-mono">{{ rtpProgress.current }}</span> ({{ rtpProgress.done }}/{{
+                        rtpProgress.total
+                      }})… It keeps running if you leave this page.
+                    </p>
+                    <p v-if="rtpsInstalled && !installingRtps" class="text-xs mt-1" style="color: var(--success-text)">
+                      Installed
+                    </p>
+                  </div>
+                </div>
+                <button
+                  @click="installRtps"
+                  :disabled="installingRtps || rtpsInstalled"
+                  class="ui-card-btn shrink-0"
+                >
+                  <IconLoader2 v-if="installingRtps" class="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                  {{ rtpsInstalled ? "Installed" : installingRtps ? "Installing…" : "Install RTPs" }}
+                </button>
+              </div>
+              <div v-if="installingRtps && rtpProgress.total > 0" class="mt-3 ml-11">
+                <div class="w-full rounded-full h-1.5 overflow-hidden" style="background: var(--bg-surface)">
+                  <div
+                    class="h-1.5 rounded-full transition-all duration-500"
+                    style="background: var(--brand)"
+                    :style="{ width: (rtpProgress.done / rtpProgress.total) * 100 + '%' }"
+                  ></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Cheat Engine Card -->
+            <div class="tool-card p-4 rounded-lg">
+              <div class="flex flex-wrap items-center justify-between gap-4">
+                <div class="flex items-start gap-3 min-w-0 grow basis-56">
+                  <span class="ui-status-badge" :class="ceInstalled ? 'ui-status-badge--ok' : ''" aria-hidden="true">
+                    <IconLoader2 v-if="installingCe" class="w-4 h-4 animate-spin" />
+                    <IconCircleCheck v-else-if="ceInstalled" class="w-4 h-4" />
+                    <IconDownload v-else class="w-4 h-4" />
+                  </span>
+                  <div class="min-w-0">
+                    <h5 class="text-sm font-medium" style="color: var(--text-primary)">
+                      Cheat Engine (Lunar Engine)
+                    </h5>
+                    <p v-if="!ceInstalled" class="text-xs mt-1" style="color: var(--text-muted)">
+                      Cheat Engine changes values in a running game, such as money or health.
+                      wLib can start it with a game.
+                    </p>
+                    <p v-else class="text-xs mt-1" style="color: var(--success-text)">Installed</p>
+                  </div>
+                </div>
+                <button
+                  @click="downloadCe"
+                  :disabled="installingCe || ceInstalled"
+                  class="ui-card-btn shrink-0"
+                >
+                  <IconLoader2 v-if="installingCe" class="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                  {{ ceInstalled ? "Installed" : installingCe ? "Downloading…" : "Install Cheat Engine" }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div data-settings-row="tools-static-1" data-settings-bound v-show="settingsRowVisible('tools-static-1')" v-if="installError || rtpError || ceError" class="space-y-1" role="alert">
+            <p v-if="installError" class="copyable-feedback save-status-error">{{ installError }}</p>
+            <p v-if="rtpError" class="copyable-feedback save-status-error">{{ rtpError }}</p>
+            <p v-if="ceError" class="copyable-feedback save-status-error">{{ ceError }}</p>
+          </div>
+
+          <SettingRow id="renpy" data-settings-row="renpy-static-0" data-settings-bound v-show="settingsRowVisible('renpy-static-0')"
+            layout="stacked" label="Universal Ren'Py Mod (URM) source file (.rpa)" control-id="urm-source" help-id="settings-urm-help"
+            help="URM is a mod that adds cheat and editing tools to Ren'Py games. Download it from its official page on 0x52.dev, choose the .rpa file you got (a Ren'Py archive), then turn on URM in a Ren'Py game's details."
+            :save-state="urmSave.state.value" :save-error="urmSave.error.value">
+            <template #actions>
+              <button type="button" @click="openUrmPage" class="ui-card-btn shrink-0">
+                <IconExternalLink class="w-3.5 h-3.5" aria-hidden="true" />Open official page
+              </button>
+            </template>
+            <div class="flex gap-3">
+              <input
+                id="urm-source"
+                v-model="urmPath"
+                @blur="urmSave.commit()"
+                @keydown.enter.prevent="urmSave.commit()"
+                :disabled="!!settingsLoadError || settingsLoading"
+                data-settings-field="urmPath"
+                aria-describedby="settings-urm-help"
+                type="text"
+                class="settings-input flex-1"
+                placeholder="/path/to/0x52_URM.rpa"
+              />
+              <button @click="browseUrm" :disabled="!!settingsLoadError || settingsLoading" class="ui-card-btn">
+                <IconFolderOpen class="w-3.5 h-3.5" aria-hidden="true" />Browse
+              </button>
+            </div>
+            <PathStatus :path="urmPath" kind="file" />
+          </SettingRow>
+        </SettingsGroup>
+
+        <SettingsGroup id="performance" title="Performance and scaling" v-if="supportsLinuxRuntimes" description="All optional. Install a tool with your system's package manager to use it.">
+          <template #actions><SettingsHelpLink page="Launching-Games" anchor="gamemode-mangohud-and-gamescope-linux" /></template>
+          <SettingRow data-settings-row="performance-gamemode-mangohud" data-settings-bound data-keywords="gamemode mangohud fps overlay" v-show="settingsRowVisible('performance-gamemode-mangohud')" v-if="supportsLinuxRuntimes"
+            layout="stacked" label="GameMode and MangoHud"
+            help="Apply to every game unless a game sets its own choice.">
+            <div class="space-y-3">
+              <div v-for="tool in (['gamemode', 'mangohud'] as const)" :key="tool" class="space-y-1">
+                <div class="flex items-center justify-between gap-3 text-sm">
+                  <span class="min-w-0">
+                    <span class="block" :style="{ color: performanceTools[tool] ? 'var(--text-primary)' : 'var(--text-secondary)' }">{{ tool === 'gamemode' ? 'GameMode' : 'MangoHud' }} <span v-if="!performanceTools[tool]" class="text-xs" style="color: var(--text-muted)">Optional · not installed</span></span>
+                    <span class="block text-xs mt-0.5" style="color: var(--text-muted)">{{ tool === 'gamemode'
+                      ? 'Asks your computer to run at full speed while a game plays.'
+                      : 'Shows FPS, CPU and GPU use over the game.' }}</span>
+                  </span>
+                  <span class="flex items-center gap-3">
+                    <FieldSaveFeedback v-if="performanceToolStatus[tool].state.value !== 'error'" class="save-status-slot" :state="performanceToolStatus[tool].state.value" :error="performanceToolStatus[tool].error.value" />
+                    <label class="relative inline-flex items-center shrink-0" :class="performanceTools[tool] ? 'cursor-pointer' : 'cursor-not-allowed'">
+                      <input type="checkbox" role="switch" :aria-label="tool === 'gamemode' ? 'GameMode' : 'MangoHud'" class="sr-only peer" :checked="tool === 'gamemode' ? gamemodeEnabled : mangohudEnabled" :disabled="!performanceTools[tool]" @change="savePerformanceTool(tool, $event)" />
+                      <div class="ui-toggle"></div>
+                    </label>
+                  </span>
+                </div>
+                <FieldSaveFeedback v-if="performanceToolStatus[tool].state.value === 'error'" :state="performanceToolStatus[tool].state.value" :error="performanceToolStatus[tool].error.value" />
+              </div>
+            </div>
+          </SettingRow>
+
+          <SettingRow data-settings-row="wine-proton-static-6" data-settings-bound data-keywords="gamescope scaler scaling upscale resolution fsr nis integer pixel art fullscreen" v-show="settingsRowVisible('wine-proton-static-6')" v-if="supportsLinuxRuntimes"
+            label-id="settings-gamescope-label" help-id="settings-gamescope-help"
+            :help="gamescope.status.value && !gamescopeInstalled
+              ? 'Scales small games to your screen. Install it to see its options.'
+              : 'Run games in gamescope to scale small games to your screen. Each game can override this on its Launch tab. Scaling needs Fullscreen or an output resolution.'"
+            :save-state="gamescope.saveStatus.state.value" :save-error="gamescope.saveStatus.error.value">
+            <template #label>Gamescope <span v-if="gamescope.status.value && !gamescopeInstalled" class="text-xs font-normal" style="color: var(--text-muted)">Optional · not installed</span></template>
+            <label class="relative inline-flex items-center shrink-0" :class="gamescopeInstalled ? 'cursor-pointer' : 'cursor-not-allowed'">
+              <input type="checkbox" role="switch" aria-labelledby="settings-gamescope-label" aria-describedby="settings-gamescope-help" class="sr-only peer"
+                :checked="gamescope.values.gamescope_enabled" :disabled="!gamescopeInstalled"
+                @change="gamescope.save('gamescope_enabled', ($event.target as HTMLInputElement).checked)" />
+              <div class="ui-toggle"></div>
+            </label>
+            <template v-if="gamescope.status.value" #after>
+            <div class="space-y-3">
+            <div v-if="gamescope.status.value && !gamescopeInstalled" class="rounded-lg p-3 space-y-2 text-xs" style="background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)">
+              <template v-if="gamescope.status.value.command">
+                <p>{{ gamescope.status.value.nixos ? "Add this to your NixOS system configuration:" : "Install gamescope with this command:" }}</p>
+                <code class="block break-all rounded px-2 py-1" style="background: var(--bg-inset); color: var(--text-primary)">{{ gamescope.status.value.command }}</code>
+              </template>
+              <p v-else>Install gamescope from your distribution's packages.</p>
+              <div class="flex flex-wrap gap-2">
+                <button v-if="gamescope.status.value.command" type="button" class="ui-card-btn" @click="gamescope.copyInstallCommand()">Copy command</button>
+                <button type="button" class="ui-card-btn" :disabled="gamescope.checking.value" @click="gamescope.loadStatus(true)">
+                  {{ gamescope.checking.value ? "Checking…" : "Check again" }}
+                </button>
+              </div>
+            </div>
+            <fieldset v-if="gamescopeInstalled" class="settings-fieldset grid gap-3 sm:grid-cols-2">
+              <legend class="sr-only">Gamescope options</legend>
+              <label class="settings-field-label text-xs space-y-1">
+                <span class="block">Window mode</span>
+                <select class="settings-input w-full" :value="gamescope.values.gamescope_window_mode"
+                  @change="gamescope.save('gamescope_window_mode', ($event.target as HTMLSelectElement).value as GamescopeWindowMode)">
+                  <option v-for="option in WINDOW_MODE_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                </select>
+              </label>
+              <label class="settings-field-label text-xs space-y-1">
+                <span class="block">FPS limit</span>
+                <input v-model="gamescope.drafts.gamescope_fps_limit" type="text" inputmode="numeric" class="settings-input w-full" placeholder="Off"
+                  :aria-invalid="!!gamescope.errors.gamescope_fps_limit"
+                  @input="gamescope.checkText('gamescope_fps_limit')" @blur="gamescope.commitText('gamescope_fps_limit')" @keydown.enter.prevent="gamescope.commitText('gamescope_fps_limit')" />
+                <span v-if="gamescope.errors.gamescope_fps_limit" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_fps_limit }}</span>
+              </label>
+              <label class="settings-field-label text-xs space-y-1">
+                <span class="block">Output resolution</span>
+                <input v-model="gamescope.drafts.gamescope_output_resolution" type="text" class="settings-input w-full" placeholder="Auto (for example 2560x1440)"
+                  :aria-invalid="!!gamescope.errors.gamescope_output_resolution"
+                  @input="gamescope.checkText('gamescope_output_resolution')" @blur="gamescope.commitText('gamescope_output_resolution')" @keydown.enter.prevent="gamescope.commitText('gamescope_output_resolution')" />
+                <span v-if="gamescope.errors.gamescope_output_resolution" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_output_resolution }}</span>
+              </label>
+              <label class="settings-field-label text-xs space-y-1">
+                <span class="block">Game resolution</span>
+                <input v-model="gamescope.drafts.gamescope_game_resolution" type="text" class="settings-input w-full" placeholder="Auto (the game's own size when wLib finds it, else the output)"
+                  :aria-invalid="!!gamescope.errors.gamescope_game_resolution"
+                  @input="gamescope.checkText('gamescope_game_resolution')" @blur="gamescope.commitText('gamescope_game_resolution')" @keydown.enter.prevent="gamescope.commitText('gamescope_game_resolution')" />
+                <span v-if="gamescope.errors.gamescope_game_resolution" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_game_resolution }}</span>
+              </label>
+              <label class="settings-field-label text-xs space-y-1">
+                <span class="block">Scaler</span>
+                <select class="settings-input w-full" :value="gamescope.values.gamescope_scaler"
+                  @change="gamescope.save('gamescope_scaler', ($event.target as HTMLSelectElement).value as GamescopeScaler)">
+                  <option v-for="option in SCALER_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                </select>
+              </label>
+              <label class="settings-field-label text-xs space-y-1">
+                <span class="block">Filter</span>
+                <select class="settings-input w-full" :value="gamescope.values.gamescope_filter"
+                  @change="gamescope.save('gamescope_filter', ($event.target as HTMLSelectElement).value as GamescopeFilter)">
+                  <option v-for="option in FILTER_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                </select>
+              </label>
+              <label class="settings-field-label text-xs space-y-1 sm:col-span-2">
+                <span class="block">Extra arguments</span>
+                <input v-model="gamescope.drafts.gamescope_args" type="text" class="settings-input w-full font-mono" placeholder="For example --hdr-enabled"
+                  :aria-invalid="!!gamescope.errors.gamescope_args"
+                  @input="gamescope.checkText('gamescope_args')" @blur="gamescope.commitText('gamescope_args')" @keydown.enter.prevent="gamescope.commitText('gamescope_args')" />
+                <span v-if="gamescope.errors.gamescope_args" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_args }}</span>
+              </label>
+            </fieldset>
+            </div>
+            </template>
+          </SettingRow>
+        </SettingsGroup>
+
+        <SettingsGroup id="html-games" title="HTML and Flash games">
+          <template #actions><SettingsHelpLink page="Launching-Games" anchor="html-and-flash-games" /></template>
+          <SettingRow data-settings-row="general-static-5" data-settings-bound v-show="settingsRowVisible('general-static-5')"
+            label="Play HTML games in the built-in player" control-id="settings-html-player"
+            help="Runs HTML and Flash (.swf) games in a wLib window, so playtime, Stop, sandboxing and No internet work. Turn off to open HTML games in your system browser. Each game can override this."
+            :save-state="htmlPlayerStatus.state.value" :save-error="htmlPlayerStatus.error.value">
+            <label class="relative inline-flex items-center cursor-pointer shrink-0">
+              <input
+                id="settings-html-player"
+                type="checkbox"
+                role="switch"
+                :checked="htmlBuiltinPlayer"
+                @change="saveHtmlBuiltinPlayer"
+                class="sr-only peer"
+                aria-label="Play HTML games in the built-in player"
+              />
+              <div class="ui-toggle"></div>
+            </label>
+          </SettingRow>
+        </SettingsGroup>
+
+        <SandboxSettings data-keywords="isolation bubblewrap sandboxie" @status="onSandboxStatus" />
+
+        <CompanionToolsSettings v-if="platformCapabilities.companion_tools" data-keywords="companion" />
+      </section>
+
+      <section v-show="sectionVisible('sources')" id="sources" class="settings-card rounded-xl p-6 space-y-5">
+        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
+          <IconDatabase class="ui-section-icon" />
+          Sources
+        </h3>
+
+        <CatalogSettings />
+
+        <SettingsGroup id="lewdcorner" title="LewdCorner">
+          <template #actions><SettingsHelpLink page="Getting-Started" anchor="lewdcorner" /></template>
+          <SettingRow v-for="{ key, label, description } in lcSettings" :key="key"
+            :data-settings-row="key" data-settings-bound data-keywords="lewdcorner thread lc plus premium"
+            v-show="settingsRowVisible(key)"
+            :label="label" :label-id="`settings-${key}-label`" :control-id="`settings-${key}`" :help="description"
+            :save-state="lcStatus[key].state.value" :save-error="lcStatus[key].error.value">
+            <label class="relative inline-flex items-center cursor-pointer shrink-0">
+              <input
+                :id="`settings-${key}`"
+                type="checkbox"
+                role="switch"
+                :aria-labelledby="`settings-${key}-label`"
+                :checked="lcValues[key]"
+                :disabled="settingsLoading || !!settingsLoadError || lcSaving[key]"
+                class="sr-only peer"
+                @change="saveLcSetting(key, $event)"
+              />
+              <div class="ui-toggle"></div>
+            </label>
+          </SettingRow>
+
+          <SettingRow v-if="lcValues.lc_enabled" data-settings-row="lc_plus" data-settings-bound data-keywords="lewdcorner thread lc plus premium tier detect check"
+            v-show="settingsRowVisible('lc_plus')" data-testid="settings-lc-plus"
+            label="LC Plus" label-id="settings-lc_plus-label" control-id="settings-lc-plus-mode"
+            help="Also fill in LewdCorner Plus (Premium) threads. Auto checks your LewdCorner account through the browser extension."
+            :save-state="lcPlusStatus.state.value" :save-error="lcPlusStatus.error.value">
             <select
+              id="settings-lc-plus-mode"
               class="settings-input shrink-0"
               aria-labelledby="settings-lc_plus-label"
               :value="lcPlus.lc_plus_mode"
@@ -1890,69 +2595,29 @@ const browseUrm = async () => {
               <option value="yes">Yes</option>
               <option value="no">No</option>
             </select>
-          </div>
-          <div v-if="lcPlus.lc_plus_mode === 'auto'" class="flex flex-wrap items-center justify-between gap-3">
-            <p class="text-xs" style="color: var(--text-secondary)" data-testid="lc-plus-detected">
-              {{ lcPlusDetectedText(lcPlus.lc_plus_detected) }}<template v-if="lcPlusCheckedAt(lcPlus.lc_plus_detected_at)"> · checked {{ lcPlusCheckedAt(lcPlus.lc_plus_detected_at) }}</template>
-            </p>
-            <button
-              type="button"
-              class="settings-btn shrink-0 disabled:opacity-50"
-              :disabled="!!lcPlusCheckDisabled || lcPlusChecking || settingsLoading || !!settingsLoadError"
-              :title="lcPlusCheckDisabled || undefined"
-              :aria-describedby="lcPlusCheckDisabled ? 'settings-lc_plus-reason' : undefined"
-              @click="checkLcPlus"
-            >{{ lcPlusChecking ? "Checking…" : "Check now" }}</button>
-          </div>
-          <p v-if="lcPlus.lc_plus_mode === 'auto' && lcPlusCheckDisabled" id="settings-lc_plus-reason" class="text-xs" style="color: var(--text-muted)">{{ lcPlusCheckDisabled }}</p>
-          <p v-if="lcPlus.lc_plus_mode === 'auto' && lcPlusMessage" role="status" class="text-xs" style="color: var(--warning-text)">{{ lcPlusMessage }}</p>
-        </div>
+            <template v-if="lcPlus.lc_plus_mode === 'auto'" #after>
+              <div class="space-y-2">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <p class="text-xs" style="color: var(--text-secondary)" data-testid="lc-plus-detected">
+                    {{ lcPlusDetectedText(lcPlus.lc_plus_detected) }}<template v-if="lcPlusCheckedAt(lcPlus.lc_plus_detected_at)"> · checked {{ lcPlusCheckedAt(lcPlus.lc_plus_detected_at) }}</template>
+                  </p>
+                  <button
+                    type="button"
+                    class="ui-card-btn shrink-0"
+                    :disabled="!!lcPlusCheckDisabled || lcPlusChecking || settingsLoading || !!settingsLoadError"
+                    :title="lcPlusCheckDisabled || undefined"
+                    :aria-describedby="lcPlusCheckDisabled ? 'settings-lc_plus-reason' : undefined"
+                    @click="checkLcPlus"
+                  >{{ lcPlusChecking ? "Checking…" : "Check now" }}</button>
+                </div>
+                <p v-if="lcPlusCheckDisabled" id="settings-lc_plus-reason" class="text-xs" style="color: var(--text-muted)">{{ lcPlusCheckDisabled }}</p>
+                <p v-if="lcPlusMessage" role="status" class="text-xs" style="color: var(--warning-text)">{{ lcPlusMessage }}</p>
+              </div>
+            </template>
+          </SettingRow>
+        </SettingsGroup>
 
-        <div data-settings-row="library-downloads-queue" data-keywords="download queue speed limit bandwidth slots same time pause playing game battery" data-settings-bound v-show="settingsRowVisible('library-downloads-queue')" class="ui-card-row space-y-3" data-testid="settings-download-queue">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">In-app downloads</h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">For file hosts and torrents together. The Downloads page shows the same settings. This device only.</p>
-          </div>
-          <div class="grid gap-3 sm:grid-cols-2">
-            <label class="text-sm space-y-1">
-              <span class="block" style="color: var(--text-secondary)">Speed limit (KiB/s, 0 for no limit)</span>
-              <input v-model.number="downloadLimitKib" type="number" min="0" step="64" class="settings-input w-full" :disabled="!!settingsLoadError || settingsLoading" @change="downloadLimitKib = clampLimitKib(downloadLimitKib); limitSave.commit()" />
-            </label>
-            <label class="text-sm space-y-1">
-              <span class="block" style="color: var(--text-secondary)">Downloads at the same time</span>
-              <select v-model.number="downloadMaxActive" class="settings-input w-full" :disabled="!!settingsLoadError || settingsLoading" @change="slotsSave.commit()">
-                <option v-for="count in MAX_ACTIVE_DOWNLOADS" :key="count" :value="count">{{ count }}</option>
-              </select>
-            </label>
-          </div>
-          <FieldSaveFeedback :state="limitSave.state.value" :error="limitSave.error.value" />
-          <FieldSaveFeedback :state="slotsSave.state.value" :error="slotsSave.error.value" />
-          <label class="flex items-center justify-between gap-3 cursor-pointer">
-            <span class="text-sm" style="color: var(--text-primary)">Pause downloads while a game runs</span>
-            <span class="flex items-center gap-2">
-              <FieldSaveFeedback :state="playingSave.state.value" :error="playingSave.error.value" />
-              <span class="relative inline-flex">
-                <input v-model="downloadPauseWhilePlaying" type="checkbox" class="sr-only peer" aria-label="Pause downloads while a game runs" :disabled="!!settingsLoadError || settingsLoading" @change="playingSave.commit()" />
-                <span class="ui-toggle"></span>
-              </span>
-            </span>
-          </label>
-          <label class="flex items-center justify-between gap-3 cursor-pointer">
-            <span class="text-sm" style="color: var(--text-primary)">Pause downloads on battery power</span>
-            <span class="flex items-center gap-2">
-              <FieldSaveFeedback :state="batterySave.state.value" :error="batterySave.error.value" />
-              <span class="relative inline-flex">
-                <input v-model="downloadPauseOnBattery" type="checkbox" class="sr-only peer" aria-label="Pause downloads on battery power" :disabled="!!settingsLoadError || settingsLoading" @change="batterySave.commit()" />
-                <span class="ui-toggle"></span>
-              </span>
-            </span>
-          </label>
-        </div>
       </section>
-
-      <FileHostAccounts v-show="sectionVisible('file-hosts')" />
-
-      <TorrentSettings v-show="sectionVisible('torrents')" />
 
       <!-- Appearance -->
       <section v-show="sectionVisible('appearance')" id="appearance" class="settings-card rounded-xl p-6 space-y-4">
@@ -1961,13 +2626,8 @@ const browseUrm = async () => {
           Appearance
         </h3>
 
-        <div data-settings-row="appearance-static-0" data-keywords="dark light system" data-settings-bound v-show="settingsRowVisible('appearance-static-0')" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Theme</h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              System follows your desktop's light or dark setting.
-            </p>
-          </div>
+        <SettingRow data-settings-row="appearance-static-0" data-keywords="dark light system" data-settings-bound v-show="settingsRowVisible('appearance-static-0')"
+          label="Theme" help="System follows your desktop's light or dark setting.">
           <div class="motion-toggle inline-flex rounded-lg p-1 shrink-0" role="group" aria-label="Theme">
             <button
               v-for="option in themeOptions"
@@ -1981,16 +2641,11 @@ const browseUrm = async () => {
               {{ option.label }}
             </button>
           </div>
-        </div>
+        </SettingRow>
 
-        <div data-settings-row="appearance-static-1" data-settings-bound v-show="settingsRowVisible('appearance-static-1')" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <h4 id="accent-label" class="text-sm font-medium" style="color: var(--text-primary)">Accent</h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Highlight color for buttons, tabs, and active items. Play buttons stay green.
-            </p>
-          </div>
-          <div class="accent-swatches flex flex-wrap justify-end gap-2 shrink-0" role="radiogroup" aria-labelledby="accent-label">
+        <SettingRow data-settings-row="appearance-static-1" data-settings-bound v-show="settingsRowVisible('appearance-static-1')"
+          label="Accent" label-id="accent-label" help="Highlight color for buttons, tabs, and active items. Play buttons stay green.">
+          <div class="accent-swatches flex flex-wrap justify-end gap-2 shrink-0 max-w-full" role="radiogroup" aria-labelledby="accent-label">
             <button
               v-for="option in accentOptions"
               :key="option.value"
@@ -2020,15 +2675,10 @@ const browseUrm = async () => {
               />
             </label>
           </div>
-        </div>
+        </SettingRow>
 
-        <div data-settings-row="appearance-static-2" data-settings-bound v-show="settingsRowVisible('appearance-static-2')" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Text size</h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Scales text and spacing across the whole interface. Kept on this device.
-            </p>
-          </div>
+        <SettingRow data-settings-row="appearance-static-2" data-settings-bound v-show="settingsRowVisible('appearance-static-2')"
+          label="Text size" help="Makes text and the space around it larger or smaller. Works together with Interface scale. Kept on this device.">
           <div class="motion-toggle inline-flex rounded-lg p-1 shrink-0" role="group" aria-label="Text size">
             <button
               v-for="option in TEXT_SIZE_OPTIONS"
@@ -2042,44 +2692,28 @@ const browseUrm = async () => {
               {{ option.label }}
             </button>
           </div>
-        </div>
+        </SettingRow>
 
-        <div data-settings-row="appearance-static-3" data-settings-bound v-show="settingsRowVisible('appearance-static-3')" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">TV mode</h4>
-            <label class="sr-only" for="tv-mode">TV mode</label>
-            <p class="text-xs" style="color: var(--text-muted)">Larger controls for a TV or Steam Deck. Kept on this device. <span v-if="tvPreference === 'auto'">{{ gamingMode ? 'Active (Gaming Mode)' : 'Inactive' }}</span></p>
-          </div>
-          <select id="tv-mode" class="rounded-lg border px-3 py-1.5 text-sm" style="background: var(--bg-surface); color: var(--text-primary); border-color: var(--border)" :value="tvPreference" @change="setTvPreference(($event.target as HTMLSelectElement).value)">
-              <option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option>
-            </select>
-        </div>
+        <SettingRow data-settings-row="appearance-static-3" data-settings-bound v-show="settingsRowVisible('appearance-static-3')"
+          label="TV mode" control-id="tv-mode">
+          <template #help>Larger controls for a TV or Steam Deck. While on, it uses 150% in place of Interface scale. Kept on this device.<span v-if="tvPreference === 'auto'" class="block mt-0.5" data-testid="tv-mode-state">{{ gamingMode ? 'On now: Steam Gaming Mode is running.' : 'Off now. Auto turns it on in Steam Gaming Mode.' }}</span></template>
+          <select id="tv-mode" class="settings-input" :value="tvPreference" @change="setTvPreference(($event.target as HTMLSelectElement).value)">
+            <option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option>
+          </select>
+        </SettingRow>
 
-        <div data-settings-row="appearance-static-4" data-settings-bound v-show="settingsRowVisible('appearance-static-4')" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <label for="interface-scale" class="text-sm font-medium" style="color: var(--text-primary)">Interface scale</label>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Scales the whole interface evenly. Kept on this device. <span v-if="tvModeActive">TV mode uses 150%.</span>
-            </p>
-          </div>
-          <div class="flex items-center gap-2 shrink-0">
-            <select id="interface-scale" class="rounded-lg border px-3 py-1.5 text-sm"
-              style="background: var(--bg-surface); color: var(--text-primary); border-color: var(--border)"
-              :value="interfaceScale" @change="setInterfaceScale(($event.target as HTMLSelectElement).value)">
-              <option v-for="option in INTERFACE_SCALE_OPTIONS" :key="option" :value="option">{{ option }}%</option>
-            </select>
-            <button v-if="interfaceScale !== 100" type="button" class="motion-option px-3 py-1.5 rounded-md text-xs font-semibold"
-              @click="setInterfaceScale(100)">Reset</button>
-          </div>
-        </div>
+        <SettingRow data-settings-row="appearance-static-4" data-settings-bound v-show="settingsRowVisible('appearance-static-4')"
+          label="Interface scale" control-id="interface-scale">
+          <template #help>Zooms the whole window, images included. Kept on this device.<span v-if="tvModeActive" class="block mt-0.5">TV mode is on, so 150% is used now.</span></template>
+          <select id="interface-scale" class="settings-input"
+            :value="interfaceScale" @change="setInterfaceScale(($event.target as HTMLSelectElement).value)">
+            <option v-for="option in INTERFACE_SCALE_OPTIONS" :key="option" :value="option">{{ option }}%</option>
+          </select>
+          <button v-if="interfaceScale !== 100" type="button" class="ui-card-btn" @click="setInterfaceScale(100)">Reset</button>
+        </SettingRow>
 
-        <div data-settings-row="appearance-static-5" data-settings-bound v-show="settingsRowVisible('appearance-static-5')" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Animations</h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Turn non-essential UI motion on or off. Loading indicators stay visible either way.
-            </p>
-          </div>
+        <SettingRow data-settings-row="appearance-static-5" data-settings-bound v-show="settingsRowVisible('appearance-static-5')"
+          label="Animations" help="Turn non-essential UI motion on or off. Loading indicators stay visible either way.">
           <div class="motion-toggle inline-flex rounded-lg p-1 shrink-0" role="group" aria-label="Animations">
             <button
               type="button"
@@ -2100,18 +2734,14 @@ const browseUrm = async () => {
               Off
             </button>
           </div>
-        </div>
+        </SettingRow>
 
-        <div data-settings-row="appearance-static-6" data-keywords="gif cover covers animate animated hover" data-settings-bound v-show="settingsRowVisible('appearance-static-6')" class="ui-card-row flex items-center justify-between gap-4">
-          <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Animate covers</h4>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              {{ motionEnabled
-                ? "When animated covers play. They always stay still while a game is running."
-                : "Covers stay still while Animations are off." }}
-            </p>
-          </div>
-          <div class="motion-toggle inline-flex rounded-lg p-1 shrink-0" :class="motionEnabled ? '' : 'opacity-50'" role="group" aria-label="Animate covers">
+        <SettingRow data-settings-row="appearance-static-6" data-keywords="gif cover covers animate animated hover" data-settings-bound v-show="settingsRowVisible('appearance-static-6')"
+          label="Animate covers"
+          :help="motionEnabled
+            ? 'When animated covers play. They always stay still while a game is running.'
+            : 'Covers stay still while Animations are off.'">
+          <div class="motion-toggle inline-flex rounded-lg p-1 shrink-0" role="group" aria-label="Animate covers">
             <button
               v-for="option in coverAnimationOptions"
               :key="option.value"
@@ -2125,632 +2755,116 @@ const browseUrm = async () => {
               {{ option.label }}
             </button>
           </div>
-        </div>
+        </SettingRow>
       </section>
-
-      <!-- Wine / Proton -->
-      <!-- Windows tools (Windows only; replaces the Wine / Proton section) -->
-      <LocaleEmulatorSettings v-if="platformCapabilities.platform === 'windows'" v-show="sectionVisible('windows-tools')" />
-
-      <section v-if="platformCapabilities.platform !== 'windows'" v-show="sectionVisible('wine-proton')" id="wine-proton" class="settings-card rounded-xl p-6 space-y-5">
-        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
-          <IconAutomation class="ui-section-icon" />
-          {{ supportsLinuxRuntimes ? "Wine / Proton" : "Platform Environment" }}
-        </h3>
-
-        <div data-settings-row="wine-proton-static-1" data-settings-bound v-show="settingsRowVisible('wine-proton-static-1')"
-          v-if="!supportsLinuxRuntimes"
-          class="ui-card-row text-sm"
-          style="color: var(--text-secondary)"
-        >
-          Wine, Proton, and Linux runtime installers are not supported on this platform.
-        </div>
-
-        <div data-settings-row="wine-proton-static-2" data-settings-bound v-show="settingsRowVisible('wine-proton-static-2')" v-if="supportsLinuxRuntimes">
-          <div class="mb-1.5 flex justify-between items-center">
-            <label
-              for="settings-proton-path"
-              class="block text-sm font-medium"
-              style="color: var(--text-secondary)"
-            >
-              Proton / Wine Executable Path
-            </label>
-            <button
-              @click="downloadProton"
-              :disabled="downloadingProton"
-              class="ui-action-btn text-xs font-medium disabled:opacity-50"
-              style="color: var(--brand)"
-            >
-              <IconLoader2 v-if="downloadingProton" class="ui-action-icon animate-spin" />
-              <IconDownloadFilled v-else class="ui-action-icon" />
-              {{ downloadingProton ? "Downloading GE-Proton…" : "Auto Download Latest GE-Proton" }}
-            </button>
-          </div>
-          <div class="flex gap-3">
-            <input
-              id="settings-proton-path"
-              v-model="protonPath"
-              @blur="protonSave.commit()"
-              @keydown.enter.prevent="protonSave.commit()"
-              :disabled="!!settingsLoadError || settingsLoading"
-              data-settings-field="protonPath"
-              list="runner-paths"
-              aria-describedby="settings-proton-help"
-              type="text"
-              placeholder="/usr/bin/wine or /path/to/GE-Proton/proton"
-              class="settings-input flex-1"
-            />
-            <FieldSaveFeedback :state="protonSave.state.value" :error="protonSave.error.value" />
-            <datalist id="runner-paths">
-              <option v-for="runner in availableRunners" :key="runner.path" :value="runner.path">{{ runner.name }}</option>
-            </datalist>
-            <button @click="browseProton" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn ui-action-btn">
-              <IconFolderOpen class="ui-action-icon" />
-              Browse
-            </button>
-          </div>
-          <PathStatus :path="protonPath" kind="runner" />
-          <div v-if="protonDownload" class="mt-3 space-y-1.5" role="status">
-            <div class="flex justify-between text-xs" style="color: var(--text-secondary)">
-              <span>{{ protonDownload.stage }}…</span>
-              <span v-if="protonDownload.total" class="font-mono">
-                {{ formatMegabytes(protonDownload.done) }} / {{ formatMegabytes(protonDownload.total) }}
-              </span>
-              <span v-else-if="protonDownload.done" class="font-mono">
-                {{ formatMegabytes(protonDownload.done) }}
-              </span>
-            </div>
-            <div class="w-full rounded-full h-1.5 overflow-hidden" style="background: var(--bg-raised)">
-              <div
-                class="h-1.5 rounded-full transition-all duration-300"
-                :class="{ 'animate-pulse': !protonDownload.total }"
-                style="background: var(--brand)"
-                :style="{
-                  width: protonDownload.total
-                    ? (protonDownload.done / protonDownload.total) * 100 + '%'
-                    : '100%',
-                }"
-              ></div>
-            </div>
-          </div>
-          <p id="settings-proton-help" class="text-xs mt-2" style="color: var(--text-muted)">
-            Leave empty for system Wine, or UMU-Proton if Wine is unavailable. GE-Proton (latest) may check for updates when launching.
-          </p>
-          <p v-if="protonError" class="copyable-feedback text-xs text-red-400 mt-1">
-            {{ protonError }}
-          </p>
-        </div>
-
-        <div data-settings-row="wine-proton-static-3" data-settings-bound v-show="settingsRowVisible('wine-proton-static-3')" v-if="supportsLinuxRuntimes">
-          <label
-            for="settings-prefix-path"
-            class="block text-sm font-medium mb-1.5"
-            style="color: var(--text-secondary)"
-          >
-            Default Wine Prefix Path (WINEPREFIX)
-          </label>
-          <div class="flex gap-3">
-            <input
-              id="settings-prefix-path"
-              v-model="prefixPath"
-              @blur="prefixSave.commit()"
-              @keydown.enter.prevent="prefixSave.commit()"
-              :disabled="!!settingsLoadError || settingsLoading"
-              data-settings-field="prefixPath"
-              aria-describedby="settings-prefix-help"
-              type="text"
-              placeholder="Auto-managed (~/.local/share/wLib/prefix) if left empty"
-              class="settings-input flex-1"
-            />
-            <FieldSaveFeedback :state="prefixSave.state.value" :error="prefixSave.error.value" />
-            <button @click="browsePrefix" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn ui-action-btn">
-              <IconFolderOpen class="ui-action-icon" />
-              Browse
-            </button>
-          </div>
-          <PathStatus :path="prefixPath" kind="dir" />
-          <p id="settings-prefix-help" class="text-xs mt-2" style="color: var(--text-muted)">
-            The location where game dependencies and save files will be isolated.
-          </p>
-        </div>
-
-        <div data-settings-row="wine-proton-static-4" data-settings-bound v-show="settingsRowVisible('wine-proton-static-4')" v-if="supportsLinuxRuntimes" class="ui-card-row space-y-3">
-          <div class="flex flex-wrap gap-2">
-            <button class="settings-btn" @click="openPrefixTool('winecfg')">Winecfg</button>
-            <button class="settings-btn" @click="openPrefixTool('winetricks')">Winetricks</button>
-          </div>
-          <div class="flex items-center justify-between text-sm" :class="{ 'opacity-50': !performanceTools.gamemode }">
-            <span>GameMode <span v-if="!performanceTools.gamemode" style="color: var(--text-muted)">(not installed)</span></span>
-            <label class="relative inline-flex items-center shrink-0" :class="performanceTools.gamemode ? 'cursor-pointer' : 'cursor-not-allowed'">
-              <input type="checkbox" role="switch" aria-label="GameMode" class="sr-only peer" :checked="gamemodeEnabled" :disabled="!performanceTools.gamemode" @change="savePerformanceTool('gamemode', $event)" />
-              <div class="ui-toggle"></div>
-            </label>
-          </div>
-          <div class="flex items-center justify-between text-sm" :class="{ 'opacity-50': !performanceTools.mangohud }">
-            <span>MangoHud <span v-if="!performanceTools.mangohud" style="color: var(--text-muted)">(not installed)</span></span>
-            <label class="relative inline-flex items-center shrink-0" :class="performanceTools.mangohud ? 'cursor-pointer' : 'cursor-not-allowed'">
-              <input type="checkbox" role="switch" aria-label="MangoHud" class="sr-only peer" :checked="mangohudEnabled" :disabled="!performanceTools.mangohud" @change="savePerformanceTool('mangohud', $event)" />
-              <div class="ui-toggle"></div>
-            </label>
-          </div>
-        </div>
-
-        <div data-settings-row="wine-proton-static-6" data-settings-bound data-keywords="gamescope scaler scaling upscale resolution fsr nis integer pixel art fullscreen" v-show="settingsRowVisible('wine-proton-static-6')" v-if="supportsLinuxRuntimes" class="ui-card-row space-y-3">
-          <div class="flex items-start justify-between gap-3">
-            <div>
-              <h4 id="settings-gamescope-label" class="text-sm font-medium" style="color: var(--text-primary)">
-                Gamescope <span v-if="gamescope.status.value && !gamescopeInstalled" class="font-normal" style="color: var(--text-muted)">(not installed)</span>
-              </h4>
-              <p id="settings-gamescope-help" class="text-xs mt-1" style="color: var(--text-muted)">
-                Run games in gamescope to scale small games to your screen. Each game can override this on its Launch tab.
-                Scaling needs Fullscreen or an output resolution.
-              </p>
-            </div>
-            <label class="relative inline-flex items-center shrink-0" :class="gamescopeInstalled ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'">
-              <input type="checkbox" role="switch" aria-labelledby="settings-gamescope-label" aria-describedby="settings-gamescope-help" class="sr-only peer"
-                :checked="gamescope.values.gamescope_enabled" :disabled="!gamescopeInstalled"
-                @change="gamescope.save('gamescope_enabled', ($event.target as HTMLInputElement).checked)" />
-              <div class="ui-toggle"></div>
-            </label>
-          </div>
-          <div v-if="gamescope.status.value && !gamescopeInstalled" class="rounded-lg p-3 space-y-2 text-xs" style="background: var(--bg-surface); color: var(--text-secondary)">
-            <template v-if="gamescope.status.value.command">
-              <p>{{ gamescope.status.value.nixos ? "Add this to your NixOS system configuration:" : "Install gamescope with this command:" }}</p>
-              <code class="block break-all rounded px-2 py-1" style="background: var(--bg-inset); color: var(--text-primary)">{{ gamescope.status.value.command }}</code>
-            </template>
-            <p v-else>Install gamescope from your distribution's packages.</p>
-            <div class="flex flex-wrap gap-2">
-              <button v-if="gamescope.status.value.command" type="button" class="settings-btn" @click="gamescope.copyInstallCommand()">Copy command</button>
-              <button type="button" class="settings-btn disabled:opacity-50" :disabled="gamescope.checking.value" @click="gamescope.loadStatus(true)">
-                {{ gamescope.checking.value ? "Checking…" : "Check again" }}
-              </button>
-            </div>
-          </div>
-          <fieldset :disabled="!gamescopeInstalled" class="grid gap-3 sm:grid-cols-2" :class="{ 'opacity-50': !gamescopeInstalled }">
-            <legend class="sr-only">Gamescope options</legend>
-            <label class="text-xs space-y-1" style="color: var(--text-secondary)">
-              <span class="block">Window mode</span>
-              <select class="settings-input w-full" :value="gamescope.values.gamescope_window_mode"
-                @change="gamescope.save('gamescope_window_mode', ($event.target as HTMLSelectElement).value as GamescopeWindowMode)">
-                <option v-for="option in WINDOW_MODE_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
-              </select>
-            </label>
-            <label class="text-xs space-y-1" style="color: var(--text-secondary)">
-              <span class="block">FPS limit</span>
-              <input v-model="gamescope.drafts.gamescope_fps_limit" type="text" inputmode="numeric" class="settings-input w-full" placeholder="Off"
-                :aria-invalid="!!gamescope.errors.gamescope_fps_limit"
-                @input="gamescope.checkText('gamescope_fps_limit')" @blur="gamescope.commitText('gamescope_fps_limit')" @keydown.enter.prevent="gamescope.commitText('gamescope_fps_limit')" />
-              <span v-if="gamescope.errors.gamescope_fps_limit" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_fps_limit }}</span>
-            </label>
-            <label class="text-xs space-y-1" style="color: var(--text-secondary)">
-              <span class="block">Output resolution</span>
-              <input v-model="gamescope.drafts.gamescope_output_resolution" type="text" class="settings-input w-full" placeholder="Auto (for example 2560x1440)"
-                :aria-invalid="!!gamescope.errors.gamescope_output_resolution"
-                @input="gamescope.checkText('gamescope_output_resolution')" @blur="gamescope.commitText('gamescope_output_resolution')" @keydown.enter.prevent="gamescope.commitText('gamescope_output_resolution')" />
-              <span v-if="gamescope.errors.gamescope_output_resolution" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_output_resolution }}</span>
-            </label>
-            <label class="text-xs space-y-1" style="color: var(--text-secondary)">
-              <span class="block">Game resolution</span>
-              <input v-model="gamescope.drafts.gamescope_game_resolution" type="text" class="settings-input w-full" placeholder="Auto (the game's own size when wLib finds it, else the output)"
-                :aria-invalid="!!gamescope.errors.gamescope_game_resolution"
-                @input="gamescope.checkText('gamescope_game_resolution')" @blur="gamescope.commitText('gamescope_game_resolution')" @keydown.enter.prevent="gamescope.commitText('gamescope_game_resolution')" />
-              <span v-if="gamescope.errors.gamescope_game_resolution" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_game_resolution }}</span>
-            </label>
-            <label class="text-xs space-y-1" style="color: var(--text-secondary)">
-              <span class="block">Scaler</span>
-              <select class="settings-input w-full" :value="gamescope.values.gamescope_scaler"
-                @change="gamescope.save('gamescope_scaler', ($event.target as HTMLSelectElement).value as GamescopeScaler)">
-                <option v-for="option in SCALER_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
-              </select>
-            </label>
-            <label class="text-xs space-y-1" style="color: var(--text-secondary)">
-              <span class="block">Filter</span>
-              <select class="settings-input w-full" :value="gamescope.values.gamescope_filter"
-                @change="gamescope.save('gamescope_filter', ($event.target as HTMLSelectElement).value as GamescopeFilter)">
-                <option v-for="option in FILTER_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
-              </select>
-            </label>
-            <label class="text-xs space-y-1 sm:col-span-2" style="color: var(--text-secondary)">
-              <span class="block">Extra arguments</span>
-              <input v-model="gamescope.drafts.gamescope_args" type="text" class="settings-input w-full font-mono" placeholder="For example --hdr-enabled"
-                :aria-invalid="!!gamescope.errors.gamescope_args"
-                @input="gamescope.checkText('gamescope_args')" @blur="gamescope.commitText('gamescope_args')" @keydown.enter.prevent="gamescope.commitText('gamescope_args')" />
-              <span v-if="gamescope.errors.gamescope_args" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_args }}</span>
-            </label>
-          </fieldset>
-        </div>
-
-        <div data-settings-row="wine-proton-static-5" data-settings-bound v-show="settingsRowVisible('wine-proton-static-5')" v-if="platformCapabilities.rpgmaker_linux" class="ui-card-row">
-          <div class="flex flex-col gap-3">
-            <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h4 id="settings-rpgm-label" class="text-sm font-medium" style="color: var(--text-primary)">
-                  RPGMaker Linux Runner
-                </h4>
-                <p id="settings-rpgm-help" class="text-xs mt-1" style="color: var(--text-muted)">
-                  Native Linux runner for RPG Maker XP, VX, VX Ace, MV, and MZ games.
-                  When installed, Auto Detect uses it automatically unless Wine/Proton
-                  overrides are set on a game.
-                </p>
-              </div>
-              <button
-                type="button"
-                @click="openRpgmakerLinuxRepo"
-                class="settings-btn ui-action-btn shrink-0"
-              >
-                Open GitHub
-              </button>
-            </div>
-
-            <div class="flex gap-3">
-              <input
-                v-model="rpgmakerLinuxRunnerPath"
-              @blur="runnerSave.commit()"
-              @keydown.enter.prevent="runnerSave.commit()"
-              :disabled="!!settingsLoadError || settingsLoading"
-              data-settings-field="rpgmakerLinuxRunnerPath"
-                aria-labelledby="settings-rpgm-label"
-                aria-describedby="settings-rpgm-help"
-                type="text"
-                placeholder="Auto-detect or choose /path/to/rpgmaker-linux"
-                class="settings-input flex-1"
-              />
-            <FieldSaveFeedback :state="runnerSave.state.value" :error="runnerSave.error.value" />
-              <button @click="browseRpgmakerLinuxRunner" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn ui-action-btn">
-                <IconFolderOpen class="ui-action-icon" />
-                Browse
-              </button>
-            </div>
-            <PathStatus :path="rpgmakerLinuxRunnerPath" kind="runner" />
-
-            <p
-              class="copyable-feedback text-xs"
-              :style="{ color: rpgmakerLinuxRunnerAvailable ? 'var(--success-text)' : 'var(--warning-text)' }"
-            >
-              {{ rpgmakerLinuxRunnerStatusText }}
-            </p>
-
-            <div
-              v-if="rpgmakerRunnerUi.showRunnerInstall"
-              data-rpgm-runner-install
-              class="rounded-lg p-3 space-y-2 border"
-              style="background: var(--bg-surface); border-color: var(--border)"
-            >
-              <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <p class="text-xs" style="color: var(--text-secondary)">
-                  Downloads the pinned v1.1.9 archive, verifies its SHA-256 hash, and runs upstream
-                  <code>install.sh</code>. It writes to <code>~/desktopapps/nwjs</code> (or your
-                  custom install folder), adds <code>~/.local/bin/rpgmaker-linux</code> and desktop
-                  entries, and can add a Steam compatibility tool and a PATH line to
-                  <code>~/.bash_profile</code>.
-                </p>
-                <button
-                  type="button"
-                  class="ui-card-btn ui-card-btn--primary shrink-0"
-                  :disabled="rpgmakerRunnerUi.installDisabled || !!settingsLoadError || settingsLoading"
-                  @click="startRpgmakerRunnerInstall('runner')"
-                >
-                  <IconLoader2
-                    v-if="rpgmakerRunnerUi.installing && rpgmakerRunnerUi.installTarget === 'runner'"
-                    class="w-3.5 h-3.5 animate-spin"
-                  />
-                  {{ rpgmakerRunnerUi.installing && rpgmakerRunnerUi.installTarget === 'runner' ? 'Installing…' : 'Install Runner' }}
-                </button>
-              </div>
-            </div>
-
-            <p
-              v-else-if="rpgmakerRunnerUi.showRunnerMissingToolsNote"
-              class="text-xs"
-              style="color: var(--warning-text)"
-            >
-              {{ rpgmakerRunnerUi.runnerMissingToolsReason }} Install manually from GitHub or install the missing command first.
-            </p>
-
-            <div
-              data-rpgm-mkxpz-row
-              class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pt-2 border-t"
-              style="border-color: var(--border)"
-            >
-              <div class="min-w-0">
-                <p class="text-xs font-medium" style="color: var(--text-primary)">
-                  mkxp-z module (RPG Maker XP, VX, VX Ace)
-                </p>
-                <p
-                  class="copyable-feedback text-xs mt-0.5 break-all"
-                  :style="{ color: rpgmakerRunnerUi.mkxpzInstalled ? 'var(--success-text)' : 'var(--warning-text)' }"
-                >
-                  {{ rpgmakerRunnerUi.mkxpzStatusText }}
-                </p>
-              </div>
-              <button
-                v-if="rpgmakerRunnerUi.showMkxpzInstall"
-                type="button"
-                class="ui-card-btn ui-card-btn--primary shrink-0"
-                :disabled="rpgmakerRunnerUi.installDisabled || !!settingsLoadError || settingsLoading"
-                @click="startRpgmakerRunnerInstall('mkxpz')"
-              >
-                <IconLoader2
-                  v-if="rpgmakerRunnerUi.installing && rpgmakerRunnerUi.installTarget === 'mkxpz'"
-                  class="w-3.5 h-3.5 animate-spin"
-                />
-                {{ rpgmakerRunnerUi.installing && rpgmakerRunnerUi.installTarget === 'mkxpz' ? 'Installing…' : 'Install mkxp-z' }}
-              </button>
-            </div>
-
-            <p
-              v-if="rpgmakerRunnerUi.installing"
-              data-rpgm-install-stage
-              class="ui-callout"
-              role="status"
-            >
-              <IconLoader2 class="w-4 h-4 shrink-0 animate-spin" style="color: var(--brand)" />
-              {{ rpgmakerRunnerUi.stageText }}
-            </p>
-
-            <div
-              v-if="rpgmakerRunnerUi.errorText"
-              data-rpgm-install-error
-              class="ui-callout ui-callout--danger flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
-              role="alert"
-            >
-              <span class="break-words">{{ rpgmakerRunnerUi.errorText }}</span>
-              <button
-                type="button"
-                @click="openRpgmakerLinuxRepo"
-                class="ui-card-btn shrink-0"
-              >
-                Open GitHub
-              </button>
-            </div>
-
-            <p class="text-xs" style="color: var(--text-muted)">
-              Installs run only when you click Install. wLib never runs the runner's
-              update, export, bug-report, patching, or plugin-install commands.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <UmuSettings v-show="sectionVisible('umu')" v-if="supportsLinuxRuntimes" />
 
       <SteamSettings v-show="sectionVisible('steam')" v-if="platformCapabilities.platform === 'linux'" />
-      <CompanionToolsSettings v-show="sectionVisible('custom-tools')" v-if="platformCapabilities.companion_tools" />
 
-      <SandboxSettings v-show="sectionVisible('sandbox')" />
-
-      <CatalogSettings v-show="sectionVisible('catalog')" />
-
-      <!-- Tools -->
-      <section v-show="sectionVisible('tools')" id="tools" v-if="supportsLinuxRuntimes" class="settings-card rounded-xl p-6 space-y-4">
-        <div>
+      <section v-show="sectionVisible('advanced')" id="advanced" class="settings-card rounded-xl p-6 space-y-5">
+        <div class="settings-section-head">
           <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
             <IconTool class="ui-section-icon" />
-            Tools
+            Advanced
           </h3>
-          <p class="text-xs mt-1" style="color: var(--text-secondary)">
-            Fix common issues with certain game engines. Installs go into the default prefix above.
-          </p>
+          <SettingsHelpLink page="Troubleshooting" />
         </div>
 
-        <div data-settings-row="tools-static-0" data-settings-bound v-show="settingsRowVisible('tools-static-0')" class="flex flex-col gap-3">
-          <!-- DLL Install Card -->
-          <div class="tool-card p-4 rounded-lg relative overflow-hidden">
-            <div
-              class="absolute inset-y-0 left-0 w-1"
-              :class="dllsInstalled ? 'bg-green-500' : ''"
-              :style="!dllsInstalled ? 'background: var(--text-muted)' : ''"
-            ></div>
-            <div class="flex items-center justify-between gap-4">
-              <div class="pl-3">
-                <h5 class="text-sm font-medium" style="color: var(--text-primary)">
-                  RPGMaker / Unity Fix (Winetricks)
-                </h5>
-                <p
-                  v-if="!dllsInstalled && !installingDeps"
-                  class="text-xs mt-1"
-                  style="color: var(--text-muted)"
-                >
-                  Installs corefonts, d3d, quartz, wmp9, directshow. Fixes
-                  video decoding black screens.
-                </p>
-                <p v-if="installingDeps" class="text-xs text-yellow-400 mt-1 font-mono">
-                  Installing {{ depsProgress.current }} ({{ depsProgress.done }}/{{
-                    depsProgress.total
-                  }})... This may take 30+ minutes.
-                </p>
-                <p v-if="dllsInstalled && !installingDeps" class="text-xs text-green-400 mt-1 font-mono">
-                  Installed
-                </p>
-              </div>
-              <button
-                @click="installDeps"
-                :disabled="installingDeps || dllsInstalled"
-                class="settings-btn ui-action-btn shrink-0 disabled:opacity-50"
+        <SettingRow data-settings-row="general-static-0" data-settings-bound v-show="settingsRowVisible('general-static-0')"
+          label="Enable debug logging" control-id="settings-enable-logging"
+          :help="supportsLinuxRuntimes
+            ? 'Saves Wine/Proton launch output to a .log file next to the game executable.'
+            : 'Saves native launch output to a .log file next to the game executable.'"
+          :save-state="loggingStatus.state.value" :save-error="loggingStatus.error.value">
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              id="settings-enable-logging"
+              type="checkbox"
+              role="switch"
+              :checked="enableLogging"
+              :disabled="savingLogging"
+              @change="toggleLogging"
+              class="sr-only peer"
+              aria-label="Enable debug logging"
+            />
+            <div class="ui-toggle"></div>
+          </label>
+        </SettingRow>
+
+        <SettingRow data-settings-row="general-static-6" data-settings-bound v-show="settingsRowVisible('general-static-6')"
+          label="Web player DevTools (F12)" control-id="settings-web-devtools"
+          help="F12 opens DevTools in the built-in player. Turn off if a game uses F12. Applies to the next launch."
+          :save-state="devtoolsStatus.state.value" :save-error="devtoolsStatus.error.value">
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              id="settings-web-devtools"
+              type="checkbox"
+              role="switch"
+              :checked="webPlayerDevtools"
+              @change="saveWebPlayerDevtools"
+              class="sr-only peer"
+              aria-label="Web player DevTools (F12)"
+            />
+            <div class="ui-toggle"></div>
+          </label>
+        </SettingRow>
+
+        <SettingRow data-settings-row="library-downloads-static-0" data-settings-bound v-show="settingsRowVisible('library-downloads-static-0')"
+          :label="`Cover cache: ${coverCache.count ? `${coverCache.count} covers, ${formatCoverCacheSize(coverCache.bytes)}` : 'Empty'}`"
+          help="Cached covers stay on this device. After purging, downloads resume next launch.">
+          <button class="ui-card-btn ui-card-btn--danger" :disabled="coverCacheBusy || !coverCache.count" @click="purgeCoverCache">Purge</button>
+          <template v-if="coverCacheError" #after>
+            <p class="save-status-error" role="alert">{{ coverCacheError }}</p>
+          </template>
+        </SettingRow>
+
+        <SettingRow data-settings-row="advanced-diagnostics" data-settings-bound data-keywords="diagnostics bug report logs log folder system details" v-show="settingsRowVisible('advanced-diagnostics')"
+          label="Diagnostics" help="App details for a bug report, and the log folder.">
+          <RouterLink to="/diagnostics" class="ui-card-btn">Open diagnostics</RouterLink>
+        </SettingRow>
+
+        <SettingsGroup id="keyboard-shortcuts" title="Keyboard shortcuts" data-keywords="keys hotkeys shortcut">
+          <div data-settings-row="keyboard-shortcuts-static-0" data-settings-bound v-show="settingsRowVisible('keyboard-shortcuts-static-0')">
+            <dl class="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
+              <div
+                v-for="shortcut in shortcuts"
+                :key="shortcut.action"
+                class="flex items-center justify-between gap-3"
               >
-                <IconLoader2 v-if="installingDeps" class="ui-action-icon animate-spin" />
-                {{ dllsInstalled ? "Installed" : installingDeps ? "Installing..." : "Install DLLs" }}
-              </button>
-            </div>
-            <div v-if="installingDeps && depsProgress.total > 0" class="mt-3 ml-3">
-              <div class="w-full rounded-full h-1.5 overflow-hidden" style="background: var(--bg-surface)">
-                <div
-                  class="h-1.5 rounded-full transition-all duration-500"
-                  style="background: var(--brand)"
-                  :style="{ width: (depsProgress.done / depsProgress.total) * 100 + '%' }"
-                ></div>
+                <dt style="color: var(--text-secondary)">{{ shortcut.action }}</dt>
+                <dd class="flex gap-1 shrink-0">
+                  <kbd v-for="key in shortcut.keys" :key="key">{{ key }}</kbd>
+                </dd>
               </div>
-            </div>
+            </dl>
           </div>
+        </SettingsGroup>
 
-          <!-- RTP Install Card -->
-          <div class="tool-card p-4 rounded-lg relative overflow-hidden">
-            <div
-              class="absolute inset-y-0 left-0 w-1"
-              :class="rtpsInstalled ? 'bg-green-500' : ''"
-              :style="!rtpsInstalled ? 'background: var(--text-muted)' : ''"
-            ></div>
-            <div class="flex items-center justify-between gap-4">
-              <div class="pl-3">
-                <h5 class="text-sm font-medium" style="color: var(--text-primary)">
-                  RPGMaker RTP (VX Ace, VX, XP, 2003)
-                </h5>
-                <p
-                  v-if="!rtpsInstalled && !installingRtps"
-                  class="text-xs mt-1"
-                  style="color: var(--text-muted)"
-                >
-                  Downloads and verifies the official RTP packages for VX
-                  Ace, VX, XP, and 2003.
-                </p>
-                <p v-if="installingRtps" class="text-xs text-yellow-400 mt-1 font-mono">
-                  Installing {{ rtpProgress.current }} ({{ rtpProgress.done }}/{{
-                    rtpProgress.total
-                  }})...
-                </p>
-                <p v-if="rtpsInstalled && !installingRtps" class="text-xs text-green-400 mt-1 font-mono">
-                  Installed
-                </p>
-              </div>
-              <button
-                @click="installRtps"
-                :disabled="installingRtps || rtpsInstalled"
-                class="settings-btn ui-action-btn shrink-0 disabled:opacity-50"
-              >
-                <IconLoader2 v-if="installingRtps" class="ui-action-icon animate-spin" />
-                {{ rtpsInstalled ? "Installed" : installingRtps ? "Processing..." : "Install RTPs" }}
-              </button>
-            </div>
-            <div v-if="installingRtps && rtpProgress.total > 0" class="mt-3 ml-3">
-              <div class="w-full rounded-full h-1.5 overflow-hidden" style="background: var(--bg-surface)">
-                <div
-                  class="h-1.5 rounded-full transition-all duration-500"
-                  style="background: var(--brand)"
-                  :style="{ width: (rtpProgress.done / rtpProgress.total) * 100 + '%' }"
-                ></div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Cheat Engine Card -->
-          <div class="tool-card p-4 rounded-lg relative overflow-hidden">
-            <div
-              class="absolute inset-y-0 left-0 w-1"
-              :class="ceInstalled ? 'bg-green-500' : ''"
-              :style="!ceInstalled ? 'background: var(--text-muted)' : ''"
-            ></div>
-            <div class="flex items-center justify-between gap-4">
-              <div class="pl-3">
-                <h5 class="text-sm font-medium" style="color: var(--text-primary)">
-                  Cheat Engine (Lunar Engine)
-                </h5>
-                <p v-if="!ceInstalled" class="text-xs mt-1" style="color: var(--text-muted)">
-                  Provides the ability to auto-inject CE when launching
-                  games to modify values.
-                </p>
-                <p v-else class="text-xs text-green-400 mt-1 font-mono">Installed</p>
-              </div>
-              <button
-                @click="downloadCe"
-                :disabled="installingCe || ceInstalled"
-                class="settings-btn ui-action-btn shrink-0 disabled:opacity-50"
-              >
-                <IconLoader2 v-if="installingCe" class="ui-action-icon animate-spin" />
-                {{ ceInstalled ? "Installed" : installingCe ? "Downloading..." : "Install CE" }}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div data-settings-row="tools-static-1" data-settings-bound v-show="settingsRowVisible('tools-static-1')" class="space-y-1">
-          <p v-if="installError" class="copyable-feedback text-xs text-red-400">{{ installError }}</p>
-          <p v-if="rtpError" class="copyable-feedback text-xs text-red-400">{{ rtpError }}</p>
-          <p v-if="ceError" class="copyable-feedback text-xs text-red-400">{{ ceError }}</p>
-        </div>
-      </section>
-
-      <!-- Ren'Py -->
-      <section v-show="sectionVisible('renpy')" id="renpy" class="settings-card rounded-xl p-6 space-y-3">
-        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
-          <IconBook2 class="ui-section-icon" />
-          Ren'Py
-        </h3>
-        <div data-settings-row="renpy-static-0" data-settings-bound v-show="settingsRowVisible('renpy-static-0')" class="space-y-3">
-        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <label for="urm-source" class="block text-sm font-medium" style="color: var(--text-secondary)">
-              Universal Ren'Py Mod (URM) source file (.rpa)
-            </label>
-            <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Download URM from its official page on 0x52.dev.
-            </p>
-          </div>
-          <button type="button" @click="openUrmPage" class="settings-btn ui-action-btn shrink-0">
-            Open official page
-          </button>
-        </div>
-        <div class="flex gap-3">
-          <input
-            id="urm-source"
-            v-model="urmPath"
-              @blur="urmSave.commit()"
-              @keydown.enter.prevent="urmSave.commit()"
-              :disabled="!!settingsLoadError || settingsLoading"
-              data-settings-field="urmPath"
-            aria-describedby="settings-urm-help"
-            type="text"
-            class="settings-input flex-1"
-            placeholder="/path/to/0x52_URM.rpa"
-          />
-            <FieldSaveFeedback :state="urmSave.state.value" :error="urmSave.error.value" />
-          <button @click="browseUrm" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn ui-action-btn">
-            <IconFolderOpen class="ui-action-icon" />Browse
-          </button>
-        </div>
-        <PathStatus :path="urmPath" kind="file" />
-        <p id="settings-urm-help" class="text-xs" style="color: var(--text-muted)">
-          Select the .rpa file you downloaded, then enable URM in a Ren'Py game's details.
-        </p>
-        </div>
-      </section>
-
-      <!-- Keyboard Shortcuts -->
-      <section v-show="sectionVisible('keyboard-shortcuts')" id="keyboard-shortcuts" class="settings-card rounded-xl p-6 space-y-3">
-        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
-          <IconKeyboard class="ui-section-icon" />
-          Keyboard Shortcuts
-        </h3>
-        <div data-settings-row="keyboard-shortcuts-static-0" data-settings-bound v-show="settingsRowVisible('keyboard-shortcuts-static-0')">
-          <dl class="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
-            <div
-              v-for="shortcut in shortcuts"
-              :key="shortcut.action"
-              class="flex items-center justify-between gap-3"
-            >
-              <dt style="color: var(--text-secondary)">{{ shortcut.action }}</dt>
-              <dd class="flex gap-1 shrink-0">
-                <kbd v-for="key in shortcut.keys" :key="key">{{ key }}</kbd>
-              </dd>
-            </div>
-          </dl>
-        </div>
       </section>
         </fieldset>
       </div>
     </div>
 
-    <footer class="mt-6">
-      <RouterLink to="/diagnostics" class="inline-flex min-h-11 items-center underline underline-offset-4" style="color: var(--text-primary)">Diagnostics</RouterLink>
-    </footer>
-
-
   </div>
 </template>
 
 <style scoped>
+/* No scroll anchoring here: groups that appear after their status loads would move the page on their own.
+   A deep link keeps its target at the top itself (pinSection), and needs the scroll position left alone. */
+.settings-page { overflow-anchor: none; }
 .settings-nav-item { color: var(--text-secondary); }
-.settings-nav-item:hover, .settings-nav-active { color: var(--text-primary); background: var(--bg-raised); }
-.settings-nav-active { box-shadow: inset 3px 0 var(--brand); }
+.settings-nav-item:hover { color: var(--text-primary); background: var(--bg-raised); }
+/* A filled state: the accent and its paired text color (as on primary buttons) clear 4.5:1 for the text and 3:1 against the page. */
+.settings-nav-active, .settings-nav-active:hover { color: var(--on-brand); background: var(--brand); font-weight: 600; }
+/* Narrow windows have no section list: search and the section menu stay at the top of the page. */
+.settings-narrow-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin-bottom: 1.5rem;
+  padding-block: 0.75rem;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border);
+}
 .settings-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -2794,7 +2908,12 @@ const browseUrm = async () => {
 .motion-toggle {
   background: var(--bg-raised);
   border: 1px solid var(--border);
+  /* In a phone-width window the options wrap inside the card instead of running past its edge. */
+  flex-wrap: wrap;
+  max-width: 100%;
 }
+/* Wrapped options share each line's width, so the second line does not hang off one side. */
+.motion-toggle > .motion-option { flex: 1 1 auto; }
 
 kbd {
   font-family: ui-monospace, monospace;
@@ -2804,38 +2923,6 @@ kbd {
   background: var(--bg-overlay);
   border: 1px solid var(--border-hover);
   color: var(--text-primary);
-}
-
-.settings-input {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  padding: 0.625rem 1rem;
-  font-size: 0.875rem;
-  color: var(--text-primary);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease, color 0.15s ease;
-}
-.settings-input::placeholder {
-  color: var(--text-muted);
-}
-.settings-input:focus {
-  outline: none;
-  border-color: var(--brand);
-  box-shadow: 0 0 0 3px var(--brand-glow);
-}
-
-.settings-btn {
-  background: var(--bg-overlay);
-  border: 1px solid var(--border-hover);
-  color: var(--text-primary);
-  padding: 0.5rem 1rem;
-  border-radius: 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
-}
-.settings-btn:hover {
-  background: var(--border-hover);
 }
 
 .motion-option {
@@ -2849,6 +2936,14 @@ kbd {
   box-shadow: var(--shadow-card);
 }
 
+.motion-option:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+.motion-option-active:disabled {
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
 
 .tool-card {
   background: var(--bg-raised);
@@ -2857,12 +2952,44 @@ kbd {
 </style>
 
 <style>
+/* Settings text: help and body text wrap without a single word on the last line, and titles balance their lines.
+   Not scoped, so it reaches the rows that live in child components. */
+.settings-page :is(p, li, dd, .settings-disclosure-body) { text-wrap: pretty; }
+.settings-page :is(h2, h3, h4, h5, h6, .setting-row-label) { text-wrap: balance; }
+/* A section heading with its quiet Help link on the right. */
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+/* "What the installer changes" and similar: long details stay one click away. Native <details>, so
+   Enter and Space open it. Settings search opens one whose text matches. */
+.settings-disclosure > summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-radius: 0.25rem;
+}
+.settings-disclosure > summary:hover { color: var(--text-primary); }
+.settings-disclosure > summary:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+.settings-disclosure-body {
+  margin-top: 0.375rem;
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+  color: var(--text-secondary);
+  max-width: 70ch;
+}
 /* Each section's heading block stays at the top of the content area while
    its section scrolls; the next card pushes it away. Not scoped, so it also
    reaches the sections that live in child components. */
 .settings-sections > section[id] > :first-child {
   position: sticky;
-  top: 0;
+  /* Under the narrow windows' search bar (0 when the section list shows). */
+  top: var(--settings-sticky-top, 0px);
   z-index: 5;
   /* -1px: the first block's top line lies under this line, so there is never a double line. */
   margin: -1.5rem -1.5rem -1px;
@@ -2878,8 +3005,8 @@ kbd {
 }
 /* Every block in a section draws its own top line (the same as .ui-card-row), so a block that settings search
    hides with v-show also hides its line. No sibling selectors: hidden blocks stay in the DOM. A table continues
-   the block above it and gets no line. */
-.settings-sections > section[id] > :not(:first-child):not(table) {
+   the block above it and gets no line. An empty block (nothing to show yet) draws no line either. */
+.settings-sections > section[id] > :not(:first-child):not(table):not(:empty) {
   border-top: 1px solid var(--border);
   padding-top: var(--row-gap, 1.25rem);
 }

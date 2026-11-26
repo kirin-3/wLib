@@ -3,8 +3,9 @@
 import { useSettingsRowVisibility } from "../utils/settingsVisibility";
 import { confirmAction } from "../utils/confirm";
 import { onMounted, ref } from "vue";
-import { IconAppWindow } from "@tabler/icons-vue";
 import { api, type CompanionTool, type CompanionToolInput } from "../services/api";
+import SettingsGroup from "./settings/SettingsGroup.vue";
+import SettingsHelpLink from "./settings/SettingsHelpLink.vue";
 
 const settingsRowVisible = useSettingsRowVisibility();
 
@@ -58,19 +59,16 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section id="custom-tools" class="settings-card companion-settings rounded-xl p-6 space-y-4" aria-labelledby="custom-tools-heading">
-    <div class="flex items-start justify-between gap-3">
-      <div>
-        <h3 id="custom-tools-heading" class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
-          <IconAppWindow class="ui-section-icon" />
-          Custom tools
-        </h3>
-        <p class="help text-xs mt-1">Open helpers from a running game's right-click menu. Wine tools use the game's runner and prefix and close with it. Native and Command tools keep running.</p>
-      </div>
-      <button type="button" class="tool-btn shrink-0" :disabled="busy" @click="edit()">Add tool</button>
-    </div>
-    <p data-settings-row="custom-tools-static-0" data-settings-bound v-show="settingsRowVisible('custom-tools-static-0')" v-if="!tools.length" class="help text-sm">No custom tools yet.</p>
-    <ul data-settings-row="custom-tools-static-1" data-settings-bound v-show="settingsRowVisible('custom-tools-static-1')" class="space-y-2">
+  <SettingsGroup id="custom-tools" title="Custom tools" class="companion-settings"
+    description="Open helpers from a running game's right-click menu. Wine tools use the game's runner and prefix and close with it. Native and Command tools keep running.">
+    <template #actions>
+      <span class="flex items-center gap-3 shrink-0">
+        <SettingsHelpLink page="Launching-Games" anchor="custom-tools" />
+        <button type="button" class="ui-card-btn shrink-0" :disabled="busy" @click="edit()">Add tool</button>
+      </span>
+    </template>
+    <p data-settings-row="custom-tools-static-0" data-settings-bound v-show="settingsRowVisible('custom-tools-static-0')" v-if="!tools.length" class="help text-xs">No custom tools yet.</p>
+    <ul data-settings-row="custom-tools-static-1" data-settings-bound v-show="settingsRowVisible('custom-tools-static-1')" v-if="tools.length" class="space-y-2">
       <li v-for="tool in tools" :key="tool.id" class="ui-card-row flex items-center justify-between gap-3">
         <div class="min-w-0">
           <p class="font-medium break-words">{{ tool.name }} <span class="help text-xs capitalize">{{ tool.kind }}</span></p>
@@ -78,39 +76,35 @@ onMounted(async () => {
           <p class="help text-xs">{{ tool.show_on_all_games ? 'Shown on all games by default' : 'Opt in per game' }}</p>
         </div>
         <div class="flex gap-2 shrink-0">
-          <button type="button" class="tool-btn" :aria-label="`Edit ${tool.name}`" :disabled="busy" @click="edit(tool)">Edit</button>
-          <button type="button" class="tool-btn" :aria-label="`Delete ${tool.name}`" :disabled="busy" @click="remove(tool)">Delete</button>
+          <button type="button" class="ui-card-btn" :aria-label="`Edit ${tool.name}`" :disabled="busy" @click="edit(tool)">Edit</button>
+          <button type="button" class="ui-card-btn ui-card-btn--danger" :aria-label="`Delete ${tool.name}`" :disabled="busy" @click="remove(tool)">Delete</button>
         </div>
       </li>
     </ul>
     <form data-settings-row="custom-tools-static-2" data-settings-bound v-show="settingsRowVisible('custom-tools-static-2')" v-if="draft" class="ui-card-row space-y-3" @submit.prevent="save">
-      <h4 class="font-medium">{{ draft.id ? 'Edit tool' : 'Add tool' }}</h4>
+      <h5 class="text-sm font-medium">{{ draft.id ? 'Edit tool' : 'Add tool' }}</h5>
       <fieldset :disabled="busy" class="space-y-3">
-        <label class="block text-sm">Name<input v-model="draft.name" class="tool-input mt-1 w-full" required /></label>
-        <label class="block text-sm">Kind
-          <select v-model="draft.kind" class="tool-input mt-1 w-full"><option value="wine">Wine</option><option value="native">Native</option><option value="command">Command</option></select>
+        <label class="settings-field-label">Name<input v-model="draft.name" class="settings-input mt-1 w-full" required /></label>
+        <label class="settings-field-label">Kind
+          <select v-model="draft.kind" class="settings-input mt-1 w-full"><option value="wine">Wine</option><option value="native">Native</option><option value="command">Command</option></select>
         </label>
         <div v-if="draft.kind !== 'command'">
-          <label for="companion-tool-path" class="block text-sm mb-1">Executable path</label>
-          <div class="flex gap-2"><input id="companion-tool-path" v-model="draft.path" class="tool-input min-w-0 flex-1" required /><button type="button" class="tool-btn" @click="browse">Browse</button></div>
+          <label for="companion-tool-path" class="settings-field-label mb-1">Executable path</label>
+          <div class="flex gap-2"><input id="companion-tool-path" v-model="draft.path" class="settings-input min-w-0 flex-1" required /><button type="button" class="ui-card-btn" @click="browse">Browse</button></div>
         </div>
-        <label class="block text-sm">{{ draft.kind === 'command' ? 'Command line' : 'Arguments (optional)' }}
-          <input v-model="draft.arguments" class="tool-input mt-1 w-full font-mono" :required="draft.kind === 'command'" aria-describedby="companion-arguments-help" />
+        <label class="settings-field-label">{{ draft.kind === 'command' ? 'Command line' : 'Arguments (optional)' }}
+          <input v-model="draft.arguments" class="settings-input mt-1 w-full font-mono" :required="draft.kind === 'command'" aria-describedby="companion-arguments-help" />
         </label>
         <p id="companion-arguments-help" class="help text-xs">Use %game_dir% and %game_exe% for the running game's folder and executable. Leading VAR=value entries set environment variables. Quote arguments with spaces; commands run directly without shell operators.</p>
-        <label class="flex items-center justify-between gap-3 text-sm">Show on all games<input v-model="draft.show_on_all_games" type="checkbox" role="switch" /></label>
-        <div class="flex gap-2"><button type="submit" class="tool-btn">{{ busy ? 'Saving…' : 'Save tool' }}</button><button type="button" class="tool-btn" @click="draft = null; error = ''">Cancel</button></div>
+        <label class="flex items-center justify-between gap-3 text-sm cursor-pointer">Show on all games<span class="relative inline-flex shrink-0"><input v-model="draft.show_on_all_games" type="checkbox" role="switch" class="sr-only peer" /><span class="ui-toggle"></span></span></label>
+        <div class="flex gap-2"><button type="submit" class="ui-card-btn ui-card-btn--primary">{{ busy ? 'Saving…' : 'Save tool' }}</button><button type="button" class="ui-card-btn" @click="draft = null; error = ''">Cancel</button></div>
       </fieldset>
     </form>
     <p data-settings-row="custom-tools-static-3" data-settings-bound v-show="settingsRowVisible('custom-tools-static-3')" v-if="error" role="alert" class="text-sm" style="color: var(--danger-text)">{{ error }}</p>
-  </section>
+  </SettingsGroup>
 </template>
 
 <style scoped>
-.companion-settings { color: var(--text-primary); scroll-margin-top: 1rem; }
+.companion-settings { color: var(--text-primary); }
 .help { color: var(--text-muted); }
-.tool-btn, .tool-input { border: 1px solid var(--border); border-radius: .5rem; background: var(--bg-surface); color: var(--text-primary); padding: .45rem .65rem; font-size: .875rem; }
-.tool-btn:hover { border-color: var(--brand); }
-.tool-btn:disabled { opacity: .5; }
-input[type="checkbox"] { accent-color: var(--brand); }
 </style>

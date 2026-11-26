@@ -5,6 +5,9 @@ import { onMounted, onUnmounted, ref } from "vue";
 import { IconAlertTriangle, IconBrandSteam, IconCircleCheck, IconLoader2, IconPlus, IconRefresh } from "@tabler/icons-vue";
 import { api, type SteamMode, type SteamStatus } from "../services/api";
 import { notify, notifyError } from "../utils/toast";
+import { useSaveStatus } from "../composables/useSaveStatus";
+import SettingRow from "./settings/SettingRow.vue";
+import SettingsHelpLink from "./settings/SettingsHelpLink.vue";
 
 const settingsRowVisible = useSettingsRowVisibility();
 
@@ -14,14 +17,22 @@ const refresh = async () => {
   try { status.value = await api.getSteamStatus(); }
   catch (error) { console.error("Could not load Steam status", error); }
 };
+const accountStatus = useSaveStatus();
+const modeStatus = useSaveStatus();
 const setMode = async (event: Event) => {
-  const result = await api.setSteamGamesMode((event.target as HTMLSelectElement).value as SteamMode);
-  if (!result.success) notifyError(result.error || "Could not change Steam mode");
+  const mode = (event.target as HTMLSelectElement).value as SteamMode;
+  await modeStatus.run(async () => {
+    const result = await api.setSteamGamesMode(mode);
+    if (!result.success) throw new Error(result.error || "Could not change Steam mode");
+  });
   await refresh();
 };
 const setAccount = async (event: Event) => {
-  const result = await api.setSteamAccount((event.target as HTMLSelectElement).value);
-  if (!result.success) notifyError(result.error || "Could not select Steam account");
+  const account = (event.target as HTMLSelectElement).value;
+  await accountStatus.run(async () => {
+    const result = await api.setSteamAccount(account);
+    if (!result.success) throw new Error(result.error || "Could not select Steam account");
+  });
   await refresh();
 };
 const addWlib = async () => {
@@ -44,10 +55,13 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
 
 <template>
   <section id="steam" class="settings-card rounded-xl p-6 space-y-5" aria-labelledby="steam-heading">
-    <h3 id="steam-heading" class="ui-section-heading text-lg font-semibold" style="color:var(--text-primary)">
-      <IconBrandSteam class="ui-section-icon" />
-      Steam
-    </h3>
+    <div class="settings-section-head">
+      <h3 id="steam-heading" class="ui-section-heading text-lg font-semibold" style="color:var(--text-primary)">
+        <IconBrandSteam class="ui-section-icon" />
+        Steam
+      </h3>
+      <SettingsHelpLink page="Steam-and-Steam-Deck" />
+    </div>
     <div data-settings-row="steam-static-0" data-settings-bound v-show="settingsRowVisible('steam-static-0')" v-if="!status" class="ui-card-row flex items-center gap-3 text-sm" style="color:var(--text-secondary)">
       <IconLoader2 class="w-4 h-4 animate-spin" />Checking Steam…
     </div>
@@ -66,24 +80,18 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
         </div>
       </div>
       <template v-if="status.found">
-        <div v-if="status.accounts.length" class="ui-card-row flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <label for="steam-account" class="text-sm font-medium" style="color:var(--text-primary)">Account</label>
-            <p class="text-xs mt-1" style="color:var(--text-muted)">The Steam user whose library gets the shortcuts.</p>
-          </div>
-          <select id="steam-account" :value="status.account_id" class="ui-card-select shrink-0" @change="setAccount">
+        <SettingRow v-if="status.accounts.length" label="Account" control-id="steam-account" help="The Steam user whose library gets the shortcuts."
+          :save-state="accountStatus.state.value" :save-error="accountStatus.error.value">
+          <select id="steam-account" :value="status.account_id" class="settings-input" @change="setAccount">
             <option v-for="account in status.accounts" :key="account" :value="account">{{ account }}</option>
           </select>
-        </div>
-        <div class="ui-card-row flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <label for="steam-mode" class="text-sm font-medium" style="color:var(--text-primary)">Games in Steam</label>
-            <p class="text-xs mt-1" style="color:var(--text-muted)">Which wLib games appear as Steam shortcuts.</p>
-          </div>
-          <select id="steam-mode" :value="status.mode" class="ui-card-select shrink-0" :disabled="!status.account_id" @change="setMode">
+        </SettingRow>
+        <SettingRow label="Games in Steam" control-id="steam-mode" help="Which wLib games appear as Steam shortcuts."
+          :save-state="modeStatus.state.value" :save-error="modeStatus.error.value">
+          <select id="steam-mode" :value="status.mode" class="settings-input" :disabled="!status.account_id" @change="setMode">
             <option value="off">Off</option><option value="all-installed">All installed games</option><option value="marked">Only marked games</option>
           </select>
-        </div>
+        </SettingRow>
         <div class="flex flex-wrap items-center gap-2">
           <button class="ui-card-btn" :disabled="!status.account_id" @click="addWlib"><IconPlus class="w-3.5 h-3.5" />Add wLib to Steam</button>
           <button class="ui-card-btn ui-card-btn--primary" :disabled="!status.account_id || status.sync.running" @click="sync">

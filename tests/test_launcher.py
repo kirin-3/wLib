@@ -5081,7 +5081,7 @@ def test_windows_locale_emulator_missing_refuses_launch(
 
     assert result["success"] is False
     assert result["code"] == "locale_emulator_missing"
-    assert "Settings > Windows tools" in str(result["error"])
+    assert "Settings > Running games > Japanese locale" in str(result["error"])
     assert "LEProc.exe could not be found" in str(result["error"])
     mock_popen.assert_not_called()
     job.assert_not_called()

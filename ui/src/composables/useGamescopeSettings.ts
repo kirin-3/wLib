@@ -4,6 +4,7 @@ import { api, type GamescopeSettings, type GamescopeStatus } from "../services/a
 import { argsError, fpsLimitError, normalizeResolution, resolutionError } from "../utils/gamescope";
 import { copyText } from "../utils/copyText";
 import { notify, notifyError } from "../utils/toast";
+import { useSaveStatus } from "./useSaveStatus";
 
 export type GamescopeTextField =
   | "gamescope_output_resolution"
@@ -56,20 +57,21 @@ export function useGamescopeSettings() {
     for (const key of Object.keys(errors)) delete errors[key as keyof GamescopeSettings];
   };
 
+  // One save status for the whole row: Settings shows "Saved" or the error under the row.
+  const saveStatus = useSaveStatus();
+
   const save = async <K extends keyof GamescopeSettings>(key: K, value: GamescopeSettings[K]) => {
     const previous = values[key];
     values[key] = value;
     delete errors[key];
-    try {
+    const saved = await saveStatus.run(async () => {
       const result = await api.saveSettings({ [key]: value });
       if (!result.success) throw new Error(result.error || "Unknown error");
-    } catch (error) {
+    });
+    if (!saved) {
       // Put back the old value so the row shows what is saved.
       values[key] = previous;
       if (key in drafts) drafts[key as GamescopeTextField] = String(previous ?? "");
-      const message = error instanceof Error ? error.message : String(error);
-      errors[key] = message;
-      notifyError(`Failed to save the gamescope setting: ${message}`);
     }
   };
 
@@ -113,5 +115,5 @@ export function useGamescopeSettings() {
     else notifyError("Could not copy the install command.");
   };
 
-  return { values, drafts, errors, status, checking, apply, save, commitText, checkText, loadStatus, copyInstallCommand };
+  return { values, drafts, errors, status, checking, saveStatus, apply, save, commitText, checkText, loadStatus, copyInstallCommand };
 }

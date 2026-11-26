@@ -2807,7 +2807,7 @@ class Launcher:
                         "error": (
                             "Locale Emulator is not set up: "
                             + le_status["reason"]
-                            + " Set it up in Settings > Windows tools, or turn off "
+                            + " Set it up in Settings > Running games > Japanese locale, or turn off "
                             + "Run with Locale Emulator for this game."
                         ),
                     }

@@ -25,6 +25,23 @@ import { MockStorage } from "./storage";
 import { DEFAULT_MOCK_SETTINGS, isActionableVersion, isSaveBackupKeep, normalizeMockFilterPresets, normalizeMockSettings, readMockSettings, writeMockSettings } from "./settings";
 
 // Browser preview: gamescope reads as missing unless this key is "installed".
+// "wlib-mock-umu" = "ready": umu-launcher is installed and the Steam Linux Runtime is prepared.
+const mockUmuReady = (): boolean => {
+  try {
+    return localStorage.getItem("wlib-mock-umu") === "ready";
+  } catch {
+    return false;
+  }
+};
+// "wlib-mock-wine" = "missing": no system Wine, so the default runner is UMU-Proton.
+const mockSystemWine = (): boolean => {
+  try {
+    return localStorage.getItem("wlib-mock-wine") !== "missing";
+  } catch {
+    return true;
+  }
+};
+
 const mockGamescopeInstalled = (): boolean => {
   try {
     return localStorage.getItem("wlib-mock-gamescope") === "installed";
@@ -594,7 +611,7 @@ export class MockBackend {
         if (localStorage.getItem("wlib-mock-platform") === "windows" && args[3] && /\.exe$/i.test(String(args[1]))) {
           const locale = mockLocaleEmulatorStatus(readMockSettings().locale_emulator_path);
           if (locale.status !== "ready") {
-            return { success: false, code: "locale_emulator_missing", error: `Locale Emulator is not set up: ${locale.reason} Set it up in Settings > Windows tools, or turn off Run with Locale Emulator for this game.` };
+            return { success: false, code: "locale_emulator_missing", error: `Locale Emulator is not set up: ${locale.reason} Set it up in Settings > Running games > Japanese locale, or turn off Run with Locale Emulator for this game.` };
           }
         }
         if (!game?.sandbox_enabled && (mode === "wine_proton" || (mode === "auto" && /\.(exe|bat)$/i.test(String(args[1]))))) this._mockCompanionWine.add(gameId);
@@ -1648,8 +1665,9 @@ export class MockBackend {
         ].map((game) => ({ ...game, in_library: known.has(game.exe_path) })) };
       }
       case "get_available_runners":
-        return { success: true, mock: true, runners: localStorage.getItem("wlib-mock-platform") === "linux" ? [
-          { name: "System Wine", path: "wine" },
+        return { success: true, mock: true, runners: (localStorage.getItem("wlib-mock-platform") ||
+          new URLSearchParams(window.location.search).get("mock_platform")) === "linux" ? [
+          ...(mockSystemWine() ? [{ name: "System Wine", path: "wine" }] : []),
           { name: "GE-Proton (latest)", path: "GE-Proton" },
           { name: "UMU-Proton", path: "UMU-Proton" },
           { name: "GE-Proton (Steam)", path: "/home/user/.local/share/Steam/compatibilitytools.d/GE-Proton/proton" },
@@ -1764,11 +1782,13 @@ export class MockBackend {
       case "get_proton_download_status":
         return { running: false, stage: "", done: 0, total: 0 };
       case "get_umu_status":
-        return { success: true, source: "", path: "", version: "", python3: true };
+        return mockUmuReady()
+          ? { success: true, source: "wlib", path: "/home/user/.local/share/wLib/umu/umu-run", version: "1.2.6", python3: true }
+          : { success: true, source: "", path: "", version: "", python3: true };
       case "get_umu_download_status":
         return { success: true, running: false, stage: "", done: 0, total: 0, error: "" };
       case "get_umu_runtime_status":
-        return { success: true, runtime: "steamrt4", path: "", ready: false, running: false, stage: "", done: 0, error: "", error_class: "", cancelled: false };
+        return { success: true, runtime: "steamrt4", path: "", ready: mockUmuReady(), running: false, stage: "", done: 0, error: "", error_class: "", cancelled: false };
       case "download_umu":
       case "prepare_umu_runtime":
       case "cancel_umu_runtime_prepare":

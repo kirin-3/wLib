@@ -38,7 +38,7 @@ export const localeEmulatorLaunchError = (code: string | undefined, message: str
   if (code !== 'locale_emulator_missing') return null;
   return {
     message: message || 'Locale Emulator is not set up.',
-    action: 'Open Windows tools',
+    action: 'Open Locale Emulator settings',
     route: WINDOWS_TOOLS_ROUTE,
   };
 };

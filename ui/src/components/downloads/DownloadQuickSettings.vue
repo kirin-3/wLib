@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-<!-- The four queue settings in a dialog, also in Settings > Library & Downloads. A change saves at once. -->
+<!-- The four queue settings in a dialog, also in Settings > Downloads. A change saves at once. -->
 <script setup lang="ts">
 import {ref, useTemplateRef, watch} from 'vue';
 import {IconX} from '@tabler/icons-vue';
@@ -91,7 +91,7 @@ const saveOnBattery = () => { void save({download_pause_on_battery: onBattery.va
           </div>
         </div>
         <div class="px-6 py-3 flex items-center gap-3 text-sm" style="border-top: 1px solid var(--border); background: var(--bg-inset)">
-          <RouterLink to="/settings#library-downloads" class="settings-link" @click="close">More download settings</RouterLink>
+          <RouterLink to="/settings#downloads" class="settings-link" @click="close">More download settings</RouterLink>
           <button type="button" class="dialog-done ml-auto px-5 py-2 rounded-lg text-sm font-semibold" @click="close">Done</button>
         </div>
       </section>

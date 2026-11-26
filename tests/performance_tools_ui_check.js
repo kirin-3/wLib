@@ -91,7 +91,8 @@ async (page) => {
     api.getPlatformCapabilities = async () => ({ ...(await original()), platform: "windows" });
   });
   await page.getByRole("link", { name: "Settings", exact: true }).click();
-  await page.getByText("Windows games launch directly.", { exact: false }).waitFor();
+  await page.locator("#running-games #windows-tools").waitFor();
+  check(await page.locator("#wine-proton, #performance").count() === 0, "Settings showed Wine or performance groups on Windows");
   check(await page.getByRole("button", { name: "Winecfg" }).count() === 0, "Settings exposed Winecfg on Windows");
   check(await page.getByRole("switch", { name: "GameMode" }).count() === 0, "Settings exposed GameMode on Windows");
   await page.getByRole("link", { name: "Library", exact: true }).click();

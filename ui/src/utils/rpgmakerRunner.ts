@@ -50,7 +50,7 @@ export const getRpgmakerRunnerUiState = (
     mkxpzPath,
     mkxpzStatusText: mkxpzInstalled
       ? `Installed: ${mkxpzPath}`
-      : "Not installed (needed for RPG Maker XP, VX, and VX Ace)",
+      : "Optional · not installed",
     showMkxpzInstall: status.available && !mkxpzInstalled && supported,
     installing,
     installTarget: installStatus?.target || "",
