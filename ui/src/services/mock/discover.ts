@@ -21,7 +21,13 @@ const SITES: DiscoverSite[] = ["f95", "lc", "dlsite", "vndb", "ryuugames"];
 const SITE_NAMES: Record<DiscoverSite, string> = {
   f95: "F95Zone", lc: "LewdCorner", dlsite: "DLsite", vndb: "VNDB", ryuugames: "Ryuugames",
 };
-const TAGS = ["big tits", "sandbox", "male protagonist", "romance", "fantasy", "corruption", "harem", "3dcg"];
+const TAGS = [
+  "big tits", "sandbox", "male protagonist", "romance", "fantasy", "corruption", "harem", "3dcg",
+  "animated", "vaginal sex", "oral sex", "female protagonist", "monster girl", "milf", "voyeurism", "humor",
+  "adventure", "drama", "slice of life", "school setting", "rpg", "turn based combat", "management", "dating sim",
+  "sci-fi", "horror", "mystery", "netorare", "cheating", "teasing", "handjob", "groping",
+  "superpowers", "magic", "graphic violence", "2dcg", "pixel art", "point & click", "visual novel", "multiple endings",
+];
 const ENGINES = ["Ren'Py", "Unity", "RPGM", "HTML", "Others"];
 const STATUSES: DiscoverStatus[] = ["ongoing", "completed", "onhold", "abandoned"];
 const WORDS = ["Echo", "Summer", "Night", "Academy", "Witch", "Island", "Lust", "Dream", "Shadow", "Garden", "Royal", "Star"];
@@ -50,7 +56,9 @@ const buildCatalog = (): MockEntry[] => {
       developer: `Studio ${String.fromCharCode(65 + (i % 26))}`,
       version: thread ? `v0.${i % 9}.${i % 4}` : "",
       version_site: thread ? (f95 ? "f95" : "lc") : "",
-      cover_url: sites[0] === "lc" ? "" : `https://picsum.photos/seed/wlib-discover-${i}/600/340`,
+      // LC-first games have no cover but have screenshots; VNDB-first games
+      // that are on no thread site have neither.
+      cover_url: sites[0] === "lc" || (sites[0] === "vndb" && !thread) ? "" : `https://picsum.photos/seed/wlib-discover-${i}/600/340`,
       sites,
       f95_id: f95 ? 100000 + i : null,
       lc_id: sites.includes("lc") ? 50000 + i : null,
@@ -67,13 +75,22 @@ const buildCatalog = (): MockEntry[] => {
       released_at: `20${String(10 + (i % 16)).padStart(2, "0")}-${String((i % 12) + 1).padStart(2, "0")}-15`,
       updated_ts: 1_790_000_000 - i * 86_400,
       library: null,
-      tags: thread ? TAGS.filter((_tag, index) => (i + index) % 3 === 0) : [],
+      tags: thread ? TAGS.filter((_tag, index) => (i + index) % (3 + (index % 7)) === 0) : [],
     });
   }
   return games;
 };
 
 const CATALOG = buildCatalog();
+
+const DLSITE_TITLE = "プレビューのゲーム";
+// Every third thread game has an overview long enough to fold (Show more).
+const LONG_OVERVIEW = [
+  "You move to a quiet coastal town for the summer, to look after your aunt's old guesthouse while she is away.",
+  "The guesthouse is falling apart, the money is running out, and the guests who still come each have their own reasons to stay. Fix the rooms, plan the meals and keep the books, or the bank takes the house at the end of the season.",
+  "Each guest has a story of their own: the painter who never finishes a canvas, the student hiding from her family, the retired captain who knows more about the town than he says. Spend time with them and their stories change what happens in the town.",
+  "This version adds the second month of the season, two new guests, a reworked calendar and many fixes. Saves from older versions are not compatible.",
+].join("\n\n");
 
 const normalize = (text: string): string =>
   text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -92,9 +109,20 @@ const libraryMark = (entry: DiscoverCard, games: GameRecord[]): DiscoverCard["li
   return match ? { game_id: match.id, state: match.exe_path.trim() ? "installed" : "wishlisted" } : null;
 };
 
+// While the mock library is empty, two cards in the first row show the
+// "Installed" and "Wishlist" markers. Their game ids are not in the mock
+// library, so "Open in library" finds no game there.
+const DEMO_MARKS: Record<string, DiscoverCard["library"]> = {
+  "f95:1002": { game_id: -1, state: "installed" },
+  "f95:1004": { game_id: -2, state: "wishlisted" },
+};
+
+const shownMark = (entry: DiscoverCard, games: GameRecord[]): DiscoverCard["library"] =>
+  libraryMark(entry, games) ?? (games.length ? null : DEMO_MARKS[entry.key] ?? null);
+
 const card = (entry: MockEntry, games: GameRecord[]): DiscoverCard => {
   const { tags: _tags, ...rest } = entry;
-  return { ...rest, library: libraryMark(entry, games) };
+  return { ...rest, library: shownMark(entry, games) };
 };
 
 const SORTS: Record<string, (a: DiscoverCard, b: DiscoverCard) => number> = {
@@ -165,7 +193,7 @@ export class MockDiscover {
             && (!query.statuses?.length || query.statuses.includes(entry.status as DiscoverStatus))
             && (!query.engines?.length || query.engines.includes(entry.engine))
             && (!query.min_rating || (entry.score ?? 0) >= query.min_rating)
-            && (!query.hide_library || !libraryMark(entry, games));
+            && (!query.hide_library || !shownMark(entry, games));
         }).map((entry) => card(entry, games));
         const sort = SORTS[query.sort || "updated"] ?? SORTS.updated!;
         matches.sort((a, b) => sort(a, b) || a.title.localeCompare(b.title) || a.key.localeCompare(b.key));
@@ -187,7 +215,8 @@ export class MockDiscover {
             site,
             name: SITE_NAMES[site],
             id: entry.key.split(":")[1]!,
-            title: entry.title,
+            // DLsite lists a game under its Japanese title.
+            title: site === "dlsite" ? DLSITE_TITLE : entry.title,
             url: site === "f95" ? `https://f95zone.to/threads/${entry.f95_id}/`
               : site === "lc" ? `https://lewdcorner.com/threads/${entry.lc_id}/`
                 : site === "dlsite" ? `https://www.dlsite.com/maniax/work/=/product_id/${entry.dlsite_id}.html`
@@ -195,8 +224,8 @@ export class MockDiscover {
                     : `https://www.ryuugames.com/?p=${entry.ryuu_id}`,
             ...(site === "lc" ? { tier: entry.lc_tier } : {}),
           })),
-          ...(thread ? { overview: "A preview overview from the thread's first post.\nIt can span lines.", languages: ["English"] } : {}),
-          ...(entry.dlsite_id ? { dlsite_genres: ["Big Breasts", "Fantasy"], original_title: "プレビューのゲーム" } : {}),
+          ...(thread ? { overview: CATALOG.indexOf(entry) % 3 === 2 ? LONG_OVERVIEW : "A preview overview from the thread's first post.\nIt can span lines.", languages: ["English"] } : {}),
+          ...(entry.dlsite_id ? { dlsite_genres: ["Big Breasts", "Fantasy"], original_title: DLSITE_TITLE } : {}),
           download: { available: thread && !premiumOnly, reason: premiumOnly ? "Needs LC Plus" : "" },
         };
         return { success: true, mock: true, game };
