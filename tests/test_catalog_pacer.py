@@ -5,7 +5,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from catalog_fakes import FakeClock, FakeTransport, json_response
-from catalog_server.config import USER_AGENT, site_proxies_from_env
+from catalog_server.config import (
+    SITE_LIMITS,
+    USER_AGENT,
+    SiteLimits,
+    site_proxies_from_env,
+)
 from catalog_server.net import (
     BudgetExhausted,
     Pacer,
@@ -254,3 +259,41 @@ def test_site_proxies_refuse_unsupported_urls(monkeypatch, value):
     monkeypatch.setenv("WLIB_CATALOG_DLSITE_PROXY", value)
     with pytest.raises(ValueError, match="WLIB_CATALOG_DLSITE_PROXY"):
         site_proxies_from_env()
+
+
+def test_run_budget_ends_one_run_and_the_next_run_starts_fresh(tmp_path):
+    clock = FakeClock()
+    transport = _ok_transport()
+    limits = {"dlsite": SiteLimits(min_delay=3.0, run_budget=5)}
+    state = StateStore(str(tmp_path / "state.sqlite"))
+    first = Pacer(state, transport, clock=clock, sleep=clock.sleep, limits=limits)
+    for _ in range(5):
+        first.request("dlsite", "https://www.dlsite.com/a")
+    with pytest.raises(BudgetExhausted):
+        first.request("dlsite", "https://www.dlsite.com/a")
+    # The cap counts this run only, not a rolling window.
+    second = Pacer(state, transport, clock=clock, sleep=clock.sleep, limits=limits)
+    for _ in range(5):
+        second.request("dlsite", "https://www.dlsite.com/a")
+    assert len(transport.requests) == 10
+
+
+def test_until_swept_ignores_the_run_budget(tmp_path):
+    clock = FakeClock()
+    transport = _ok_transport()
+    state = StateStore(str(tmp_path / "state.sqlite"))
+    pacer = Pacer(
+        state,
+        transport,
+        clock=clock,
+        sleep=clock.sleep,
+        wait_for_budget={"dlsite"},
+        limits={"dlsite": SiteLimits(min_delay=3.0, run_budget=2)},
+    )
+    for _ in range(5):
+        pacer.request("dlsite", "https://www.dlsite.com/a")
+    assert len(transport.requests) == 5
+
+
+def test_dlsite_has_a_run_budget():
+    assert SITE_LIMITS["dlsite"].run_budget is not None

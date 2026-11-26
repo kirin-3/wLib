@@ -12,7 +12,10 @@ from catalog_fakes import (
     make_context,
     rows,
 )
-from catalog_server.net import HttpStatusError, Response
+from catalog_server.config import SiteLimits
+from catalog_server.net import HttpStatusError, Pacer, Response
+from catalog_server.runner import run_source
+from catalog_server.sources.base import SourceContext
 from catalog_server.sources.dlsite import (
     DlsiteSource,
     parse_english_listing,
@@ -608,3 +611,48 @@ def test_failed_english_listing_or_empty_english_details_keeps_stored_title_en(
             ctx.catalog,
             "SELECT title_en FROM dlsite_works WHERE product_id = 'RJ01609862'",
         ) == [("Summer Witches!",)]
+
+
+def test_run_budget_stops_the_sweep_and_the_next_run_resumes_it(tmp_path):
+    listing = fixture_json("dlsite_listing.json")
+    listing["page_info"]["count"] = 150
+    transport = _transport(listing)
+    ctx, clock = make_context(tmp_path, transport)
+    limits = {"dlsite": SiteLimits(min_delay=3.0, run_budget=20)}
+    source = DlsiteSource()
+
+    first = run_source(
+        source,
+        SourceContext(
+            ctx.catalog,
+            ctx.state,
+            Pacer(ctx.state, transport, clock=clock, sleep=clock.sleep, limits=limits),
+            clock.iso,
+        ),
+    )
+    assert first.status == "budget"
+    assert first.requests == 20
+    assert not first.sweep_completed
+    assert ctx.state.get("dlsite", "sweep_cursor") is not None
+    assert isinstance(ctx.state.get("dlsite", "sweep_started_at"), str)
+
+    results = []
+    for _ in range(10):
+        result = run_source(
+            source,
+            SourceContext(
+                ctx.catalog,
+                ctx.state,
+                Pacer(
+                    ctx.state, transport, clock=clock, sleep=clock.sleep, limits=limits
+                ),
+                clock.iso,
+            ),
+        )
+        results.append(result)
+        if result.sweep_completed:
+            break
+    assert results[-1].sweep_completed
+    assert all(result.requests <= 20 for result in results)
+    assert ctx.state.source_status("dlsite")["sweep_completed_at"] is not None
+    assert ctx.state.get("dlsite", "sweep_cursor") is None

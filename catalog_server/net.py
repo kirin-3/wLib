@@ -63,7 +63,7 @@ class RateLimited(Exception):
 
 class BudgetExhausted(Exception):
     def __init__(self, site: str) -> None:
-        super().__init__(f"{site}: request budget used up for this window")
+        super().__init__(f"{site}: request budget used up")
         self.site: str = site
 
 
@@ -143,6 +143,12 @@ class Pacer:
 
     def _wait_turn(self, site: str) -> None:
         limits = self._limits[site]
+        if (
+            limits.run_budget is not None
+            and site not in self.wait_for_budget
+            and self.sent.get(site, 0) >= limits.run_budget
+        ):
+            raise BudgetExhausted(site)
         if limits.budget is not None:
             while True:
                 now = self._clock()
