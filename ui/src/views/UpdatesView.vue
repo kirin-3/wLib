@@ -10,8 +10,10 @@ import MenuButton, { type MenuButtonItem } from "../components/MenuButton.vue";
 import UpdateSettingsDialog from "../components/UpdateSettingsDialog.vue";
 import { useRouter } from "vue-router";
 import {
+  IconAlertTriangle,
   IconArrowUp,
   IconCheck,
+  IconClock,
   IconDownload,
   IconExternalLink,
   IconFileZip,
@@ -23,7 +25,7 @@ import {
   IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
-import { notify, notifyError, notifyUndo } from "../utils/toast";
+import { errorReason, notify, notifyError, notifyUndo } from "../utils/toast";
 import { runBulk, versionSnapshot } from "../utils/bulkActions";
 import { isPendingRemoval } from "../utils/pendingRemovals";
 import { gamesStore } from "../composables/useGamesStore";
@@ -39,8 +41,14 @@ import { isNewerVersion } from "../utils/appVersion";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 import { bulkDownloadDecision, type HostPlatform } from "../utils/updateDownloads";
 import {
+  autoCheckText,
+  lastCheckText,
   shouldAdoptBackgroundCheck,
-  updateCheckProgressLabel,
+  updateCheckAnnouncement,
+  updateCheckErrorText,
+  updateCheckSummary,
+  updatesEmptyState,
+  type UpdateCheckTone,
 } from "../utils/updateCheck";
 import type { BulkUpdateStartResponse, DownloadOffer, GameRecord, UpdateStatusResponse } from "../services/api";
 import { marked } from "marked";
@@ -99,7 +107,12 @@ const recheck = async (game: GameRecord) => {
   recheckingIds.value.add(game.id);
   try {
     const result = await api.checkForUpdates(url);
-    if (!result?.success) throw new Error(result?.error || "Update check failed");
+    if (!result?.success) {
+      // Same plain words as the failed checks list; technical text in brackets.
+      const { message, detail } = updateCheckErrorText(result ?? {});
+      notifyError(`${game.title}: ${message}${detail ? ` (${detail})` : ""}`);
+      return;
+    }
     if (result.note) notify(result.note, "info");
     if (result.newly_abandoned) notify(`${game.title} was abandoned by its developer`, "info");
     if (result.newly_finished) {
@@ -113,7 +126,7 @@ const recheck = async (game: GameRecord) => {
       "success",
     );
   } catch (error) {
-    notifyError(`${game.title}: ${error instanceof Error ? error.message : String(error)}`);
+    notifyError(`${game.title}: could not check for updates. ${errorReason(error)}`);
   } finally {
     recheckingIds.value.delete(game.id);
   }
@@ -125,10 +138,10 @@ const markAsUpdated = async (game: GameRecord) => {
   try {
     const result = await runBulk([game], (item) => api.markGameUpdated(item),
       (item) => versionSnapshot(item, (id, fields) => api.updateGame(id, fields)));
-    if (result.failed || !result.changed) throw new Error("Could not mark game as updated");
+    if (result.failed || !result.changed) throw new Error("not saved");
     notifyUndo(`${game.title}: installed version set to ${game.latest_version?.trim()}.`, result.undo);
-  } catch (error) {
-    notifyError(String(error));
+  } catch {
+    notifyError(`Could not mark ${game.title} as updated. Try again.`);
   } finally {
     markingUpdatedIds.value.delete(game.id);
   }
@@ -139,7 +152,7 @@ const skipVersion = async (game: GameRecord) => {
     const previous = item.skipped_version || "";
     return () => api.updateGame(item.id, { skipped_version: previous });
   });
-  if (result.failed) notifyError("Could not skip version");
+  if (result.failed) notifyError(`Could not skip the new version of ${game.title}. Try again.`);
   else notifyUndo(`${game.title}: skipping version ${game.latest_version}.`, result.undo);
 };
 const status = ref<UpdateStatusResponse>({
@@ -226,12 +239,12 @@ const setFrequency = async (freq: string) => {
     const res = await api.setAutoCheckSetting(freq);
     if (res && res.success === false) {
       if (autoCheckFreq.value === freq) autoCheckFreq.value = previous;
-      notifyError("Failed to set frequency: " + (res.error || "Unknown error"));
+      notifyError(`Could not save the automatic check setting. ${errorReason(res.error)}`);
     }
   } catch (e) {
     console.error("Failed to set frequency", e);
     if (autoCheckFreq.value === freq) autoCheckFreq.value = previous;
-    notifyError("Error setting frequency: " + String(e));
+    notifyError(`Could not save the automatic check setting. ${errorReason(e)}`);
   }
 };
 
@@ -255,14 +268,12 @@ const applyRunningCheck = (started: BulkUpdateStartResponse) => {
 };
 
 const startCheck = async (ids?: number[]) => {
-  if (startingCheck.value || status.value.running) return;
+  if (startingCheck.value || status.value.running || bulkDownloading.value) return;
   startingCheck.value = true;
   try {
     const result = await api.checkAllUpdates(ids);
     if (result && result.success === false) {
-      notifyError(
-        "Failed to start check: " + (result.error || "Unknown error"),
-      );
+      notifyError(`Could not start the update check. ${errorReason(result.error)}`);
     } else if (result && result.success) {
       statusError.value = "";
       lastCheckTime.value = new Date().toLocaleTimeString();
@@ -271,23 +282,22 @@ const startCheck = async (ids?: number[]) => {
     }
   } catch (e) {
     console.error("Failed to start update check", e);
-    notifyError("Error starting check: " + String(e));
+    notifyError(`Could not start the update check. ${errorReason(e)}`);
   } finally {
     startingCheck.value = false;
   }
 };
 
 const cancelCheck = async () => {
+  if (status.value.cancelling) return;
   try {
     const result = await api.cancelUpdateCheck();
     if (result && result.success === false) {
-      notifyError(
-        "Failed to cancel check: " + (result.error || "Unknown error"),
-      );
+      notifyError(`Could not stop the update check. ${errorReason(result.error)}`);
     }
   } catch (e) {
     console.error("Failed to cancel", e);
-    notifyError("Error cancelling check: " + String(e));
+    notifyError(`Could not stop the update check. ${errorReason(e)}`);
   }
 };
 
@@ -370,15 +380,6 @@ const progress = computed(() => {
   return Math.round((status.value.checked / status.value.total) * 100);
 });
 
-const progressLabel = computed(() =>
-  updateCheckProgressLabel(status.value.running, status.value.outcome),
-);
-
-const progressToneClass = computed(() => {
-  if (status.value.outcome === "completed") return "text-green-400";
-  if (status.value.outcome === "failed") return "text-red-400";
-  return "";
-});
 
 const statusDelaySeconds = computed(() => {
   const raw = Number(status.value.delay_seconds);
@@ -390,13 +391,31 @@ const gamesWithUpdates = computed(() => {
   return status.value.results.filter((r) => r.has_update);
 });
 
-const gamesChecked = computed(() => {
-  return status.value.results.filter((r) => !r.error);
-});
-
 const gamesWithErrors = computed(() => {
   return status.value.results.filter((r) => r.error);
 });
+// Each failed check in plain words; the raw text stays for a title and,
+// when it is technical, as a muted detail for bug reports.
+const failedChecks = computed(() => gamesWithErrors.value.map((result) => {
+  const text = updateCheckErrorText(result);
+  return { id: result.id, title: result.title, raw: result.error, ...text };
+}));
+
+// The one statement of a finished check (see updateCheckSummary); the
+// announcer starts with the same words.
+const checkSummary = computed(() => (status.value.running ? null : updateCheckSummary({
+  outcome: status.value.outcome,
+  total: status.value.total,
+  checked: status.value.checked,
+  error: status.value.error,
+  errors: gamesWithErrors.value.length,
+})));
+const TONE_COLOR: Record<UpdateCheckTone, string> = {
+  success: "var(--success-text)",
+  warning: "var(--warning-text)",
+  danger: "var(--danger-text)",
+  neutral: "var(--text-secondary)",
+};
 
 const gamesWithNotes = computed(() => status.value.results.filter((result) => result.note));
 // Archived games are checked only when chosen; their update is not offered.
@@ -428,6 +447,7 @@ const bulkDownload = async () => {
   if (!selected.length) return;
   bulkDownloading.value = true;
   bulkDownloadCancelled.value = false;
+  announce(`Preparing downloads for ${selected.length} ${selected.length === 1 ? "game" : "games"}.`);
   let queued = 0, choose = 0, skipped = 0;
   try {
     const capabilities = await loadPlatformCapabilities();
@@ -464,6 +484,7 @@ const bulkDownload = async () => {
     const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
     const message = `${stopped ? "Stopped. " : ""}${plural(queued, "download was", "downloads were")} queued, ${plural(choose, "game needs", "games need")} a build choice and ${skipped} ${skipped === 1 ? "was" : "were"} skipped.`;
     notify(message, queued ? "success" : "info", "", { label: "Open Downloads", run: openDownloads });
+    announce(message);
   }
 };
 const cancelBulkDownload = () => { bulkDownloadCancelled.value = true; };
@@ -478,7 +499,12 @@ watch([() => persistedUpdates.value.map((game) => game.id), () => updateDownload
 const bulkUpdate = async (action: "updated" | "skip" | "check") => {
   if (status.value.running || startingCheck.value || bulkBusy.value || bulkDownloading.value) return;
   const selected = persistedUpdates.value.filter((game) => selectedUpdateIds.value.has(game.id));
-  if (action === "check") { await startCheck(selected.filter(updateCheckUrl).map((game) => game.id)); return; }
+  if (action === "check") {
+    const ids = selected.filter(updateCheckUrl).map((game) => game.id);
+    // An empty list would check every game, not none.
+    if (ids.length) await startCheck(ids);
+    return;
+  }
   bulkBusy.value = true;
   const result = await runBulk(selected, (game) => action === "updated" ? api.markGameUpdated(game) : api.updateGame(game.id, { skipped_version: game.latest_version || "" }), (game) => {
     if (action === "updated") return versionSnapshot(game, (id, fields) => api.updateGame(id, fields));
@@ -486,8 +512,11 @@ const bulkUpdate = async (action: "updated" | "skip" | "check") => {
     return () => api.updateGame(game.id, { skipped_version: previous });
   });
   bulkBusy.value = false;
-  if (result.changed) notifyUndo(`${result.changed} changed, ${result.skipped} skipped${result.failed ? `, ${result.failed} failed` : ""}.`, result.undo);
-  else notifyError(`No games changed; ${result.failed} failed.`);
+  const gameCount = (count: number) => `${count} ${count === 1 ? "game" : "games"}`;
+  const done = action === "updated" ? `${gameCount(result.changed)} marked updated` : `Skipping the new version of ${gameCount(result.changed)}`;
+  const notDone = [result.skipped ? `${result.skipped} skipped` : "", result.failed ? `${result.failed} failed` : ""].filter(Boolean).join(", ");
+  if (result.changed) notifyUndo(`${done}${notDone ? ` (${notDone})` : ""}.`, result.undo);
+  else notifyError(`No games changed (${notDone || "0 changed"}). Try again.`);
 };
 
 // Each row has one split button. The main part is the most direct way to get
@@ -562,7 +591,7 @@ const chooseUpdateMenuItem = (game: GameRecord, id: string) => {
 
 // When a row leaves while focus is in it (or focus was lost), move focus to
 // the main part of the row now at the same place, else the previous row, else
-// "Check All Games". Rows that animate out still hold the leave class.
+// "Check all games" (in the header, or in the first-run card). Rows that animate out still hold the leave class.
 const checkActions = useTemplateRef<HTMLElement>("checkActions");
 const focusUpdateRow = (index: number) => {
   const rows = [...document.querySelectorAll<HTMLElement>("[data-update-row]")]
@@ -571,7 +600,8 @@ const focusUpdateRow = (index: number) => {
   const main = target?.querySelector<HTMLElement>("[data-update-row-action] .menu-button-main");
   if (main && !main.matches(":disabled")) { main.focus(); return; }
   if (target) { target.querySelector<HTMLElement>("[data-update-row-action] .menu-button-toggle")?.focus(); return; }
-  checkActions.value?.querySelector<HTMLElement>("[data-check-action]")?.focus();
+  (checkActions.value?.querySelector<HTMLElement>("[data-check-action]")
+    ?? document.querySelector<HTMLElement>("[data-first-check]"))?.focus();
 };
 watch(() => persistedUpdates.value.map((game) => game.id), async (ids, previous) => {
   if (!previous) return;
@@ -590,30 +620,124 @@ watch(() => persistedUpdates.value.map((game) => game.id), async (ids, previous)
   focusUpdateRow(Math.max(0, removedIndex - previous.slice(0, removedIndex).filter((id) => !remaining.has(id)).length));
 });
 
-const settingsOpen = ref(false);
-const frequencyLabel = computed(() => {
-  if (autoCheckFreq.value === "monthly") return "Monthly";
-  if (autoCheckFreq.value === "off") return "Automatic checks off";
-  return "Weekly";
+// The build picker returns focus to the control that opened it. When that was
+// a row menu item, it is gone with its menu: focus the row's split button.
+watch(() => updateDownloads.selectedGame.value?.id, async (now, previous) => {
+  if (now !== undefined || previous === undefined) return;
+  await nextTick();
+  const active = document.activeElement;
+  if (active && active !== document.body && active.isConnected) return;
+  const action = document.querySelector(`[data-update-row="${previous}"] [data-update-row-action]`);
+  const main = action?.querySelector<HTMLElement>(".menu-button-main");
+  (main && !main.matches(":disabled") ? main : action?.querySelector<HTMLElement>(".menu-button-toggle"))?.focus();
 });
+
+const settingsOpen = ref(false);
+const frequencyLabel = computed(() => autoCheckText(autoCheckFreq.value));
 const hasStatusContent = computed(() =>
   bulkDownloading.value
   || !!statusError.value
   || status.value.running
   || status.value.checked > 0
-  || (!!status.value.outcome && status.value.outcome !== "idle")
-  || status.value.total === 0,
+  || (!!status.value.outcome && status.value.outcome !== "idle"),
 );
 
-const formatLastCheck = computed(() => {
-  if (!lastAutoCheck.value) return "Never";
-  try {
-    const d = new Date(lastAutoCheck.value);
-    return d.toLocaleDateString() + " " + d.toLocaleTimeString();
-  } catch {
-    return lastAutoCheck.value;
-  }
+// The bulk buttons stay focusable while blocked (aria-disabled) and point at
+// one visible reason, so keyboard and screen reader users learn why.
+const bulkDisabledReason = computed(() => {
+  if (status.value.running || startingCheck.value) return CHECK_RUNNING_REASON;
+  if (bulkDownloading.value) return BULK_DOWNLOAD_REASON;
+  if (bulkBusy.value) return "Wait for the selected games to change";
+  return "";
 });
+const bulkRecheckReason = computed(() => bulkDisabledReason.value
+  || (persistedUpdates.value.some((game) => selectedUpdateIds.value.has(game.id) && updateCheckUrl(game))
+    ? "" : "No selected game has an active update thread"));
+const checkDisabledReason = computed(() => (bulkDownloading.value ? BULK_DOWNLOAD_REASON : ""));
+// "Re-check failed" checks only the failed games that have an update thread.
+const recheckFailedIds = computed(() => {
+  const failed = new Set(gamesWithErrors.value.map((result) => result.id));
+  return games.value.filter((game) => failed.has(game.id) && updateCheckUrl(game)).map((game) => game.id);
+});
+const recheckFailedReason = computed(() => {
+  if (status.value.running || startingCheck.value) return CHECK_RUNNING_REASON;
+  return checkDisabledReason.value;
+});
+const checkBlocked = computed(() => startingCheck.value || bulkDownloading.value);
+
+// One persistent live region. It speaks when a check starts or ends, when the
+// status cannot be read, and when Download selected starts or ends; never the
+// per-game "Checking: X" line, which changes every few seconds.
+const announcement = ref("");
+const announce = (message: string) => {
+  if (!message) return;
+  announcement.value = "";
+  void nextTick(() => { announcement.value = message; });
+};
+watch(() => status.value.running, (running, wasRunning) => {
+  announce(updateCheckAnnouncement(!!wasRunning, {
+    running,
+    total: status.value.total,
+    checked: status.value.checked,
+    outcome: status.value.outcome,
+    error: status.value.error,
+    updates: gamesWithUpdates.value.length,
+    errors: gamesWithErrors.value.length,
+  }));
+});
+watch(statusError, (message) => { if (message) announce(message); });
+
+// "Check all games" and "Cancel" replace each other in the header. Keep focus
+// on the header action when it was there, instead of dropping it on the page.
+let refocusCheckAction = false;
+watch(() => status.value.running, () => {
+  const active = document.activeElement;
+  refocusCheckAction = active instanceof HTMLElement && active.hasAttribute("data-check-action");
+}, { flush: "pre" });
+watch(() => status.value.running, async () => {
+  if (!refocusCheckAction) return;
+  refocusCheckAction = false;
+  await nextTick();
+  const active = document.activeElement;
+  if (active && active !== document.body && active.isConnected) return;
+  checkActions.value?.querySelector<HTMLElement>("[data-check-action]")?.focus();
+}, { flush: "post" });
+
+// Without update rows: "Not checked yet" before any check, the green
+// "up to date" mark only after a real one (see updatesEmptyState).
+const emptyState = computed(() => updatesEmptyState({
+  running: status.value.running,
+  outcome: status.value.outcome,
+  lastCheck: lastAutoCheck.value,
+  resultCount: status.value.results.length,
+  errorCount: gamesWithErrors.value.length,
+}));
+const checkSources = computed(() => (lcEnabled.value ? "F95Zone and LewdCorner" : "F95Zone"));
+const checkPace = computed(() =>
+  `wLib checks one game every ${statusDelaySeconds.value} seconds, so ${checkSources.value} ${lcEnabled.value ? "do" : "does"} not block it for too many requests.`,
+);
+// The first-run card holds the only "Check all games" button, so the page has
+// one primary action instead of two.
+const firstRun = computed(() => persistedUpdates.value.length === 0 && emptyState.value === "not-checked");
+
+// The first-run card's button and "Re-check failed" leave the page while a
+// check runs, so move focus to the header's Cancel button instead of dropping
+// it on the page.
+const startCheckFrom = async (event: MouseEvent, ids?: number[]) => {
+  const button = event.currentTarget as HTMLElement | null;
+  await startCheck(ids);
+  await nextTick();
+  if (!document.activeElement || document.activeElement === document.body || !button?.isConnected) {
+    checkActions.value?.querySelector<HTMLElement>("[data-check-action]")?.focus();
+  }
+};
+
+const lastCheck = computed(() => lastCheckText(lastAutoCheck.value));
+const recheckFailed = (event: MouseEvent) => {
+  // An empty list would check every game, not only the failed ones.
+  if (recheckFailedReason.value || !recheckFailedIds.value.length) return;
+  void startCheckFrom(event, recheckFailedIds.value);
+};
 
 // Not awaited by onMounted: the GitHub call can take up to 10 s and must not
 // delay showing a running update check.
@@ -718,62 +842,62 @@ onUnmounted(() => {
 
 <template>
   <div class="mx-auto w-full p-8 max-w-4xl pb-12">
+    <p class="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="update-check-announcer">{{ announcement }}</p>
     <header class="mb-6 flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
       <div class="min-w-0">
         <h2
           class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
           style="color: var(--text-primary)"
         >
-          <IconReload class="ui-page-heading-icon" />
+          <IconReload class="ui-page-heading-icon" aria-hidden="true" />
           <span>Updates</span>
         </h2>
-        <p
-          class="text-sm pl-3"
-          style="
-            color: var(--text-secondary);
-            border-left: 2px solid var(--brand);
-          "
-        >
+        <p class="text-sm" style="color: var(--text-secondary)">
           {{ lcEnabled ? "Check F95Zone and active LewdCorner threads for new game versions." : "Check F95Zone for new game versions." }}
         </p>
         <p class="mt-2 text-xs" style="color: var(--text-secondary)" data-testid="updates-last-checked">
-          Last checked: {{ formatLastCheck }} · {{ frequencyLabel }}
+          <!-- Each part stays on one line; a narrow window breaks between them. -->
+          <span class="whitespace-nowrap">Last check:
+            <time v-if="lastCheck.full" :datetime="lastAutoCheck" :title="lastCheck.full">{{ lastCheck.text }}</time>
+            <template v-else>{{ lastCheck.text }}</template></span>
+          · <span class="whitespace-nowrap">{{ frequencyLabel }}</span>
         </p>
       </div>
-      <div ref="checkActions" class="flex flex-wrap items-center gap-2">
+      <div ref="checkActions" class="check-actions flex flex-wrap items-center gap-2">
         <button
           type="button"
-          class="ui-action-btn update-btn"
+          class="ui-card-btn page-btn"
           @click="settingsOpen = true"
         >
-          <IconSettings class="ui-action-icon" />
-          Settings
+          <IconSettings class="ui-action-icon" aria-hidden="true" />
+          Update settings
         </button>
         <button
-          v-if="!status.running"
+          v-if="!status.running && !firstRun"
           type="button"
           data-check-action
           @click="startCheck()"
-          :disabled="startingCheck || bulkDownloading"
-          :title="bulkDownloading ? BULK_DOWNLOAD_REASON : undefined"
-          class="ui-action-btn px-5 py-2 rounded-lg text-sm font-bold transition-all hover:brightness-110 disabled:opacity-50"
-          style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
+          :aria-disabled="checkBlocked || undefined"
+          :aria-describedby="checkDisabledReason ? 'check-disabled-reason' : undefined"
+          :title="checkDisabledReason || undefined"
+          class="ui-card-btn ui-card-btn--primary page-btn page-btn--primary"
         >
-          <IconLoader2 v-if="startingCheck" class="ui-action-icon animate-spin" />
-          <IconReload v-else class="ui-action-icon" />
-          Check All Games
+          <IconLoader2 v-if="startingCheck" class="ui-action-icon animate-spin" aria-hidden="true" />
+          <IconReload v-else class="ui-action-icon" aria-hidden="true" />
+          Check all games
         </button>
         <button
-          v-else
+          v-else-if="status.running"
           type="button"
           data-check-action
           @click="cancelCheck"
-          :disabled="status.cancelling"
-          class="ui-action-btn bg-red-600/20 hover:bg-red-600/30 text-red-400 px-5 py-2 rounded-lg text-sm font-bold transition-all border border-red-500/30 disabled:opacity-60 disabled:cursor-wait"
+          :aria-disabled="status.cancelling || undefined"
+          class="ui-card-btn ui-card-btn--danger page-btn"
         >
-          <IconX class="ui-action-icon" />
+          <IconX class="ui-action-icon" aria-hidden="true" />
           {{ status.cancelling ? "Cancelling…" : "Cancel" }}
         </button>
+        <span v-if="checkDisabledReason" id="check-disabled-reason" class="sr-only">{{ checkDisabledReason }}</span>
       </div>
     </header>
 
@@ -790,49 +914,86 @@ onUnmounted(() => {
       @retry-notifications="loadUpdateSettings"
     />
 
-    <!-- Check status: progress, outcome, errors and the first-run hint -->
+    <!-- Check status: progress, outcome and errors. Not a live region: the
+         announcer at the top of the page speaks the changes that matter. -->
     <div
-      role="status"
       class="mb-6 empty:hidden"
       data-testid="update-check-status"
     >
       <div v-if="hasStatusContent" class="section-card rounded-xl px-5 py-4 space-y-2">
         <div v-if="bulkDownloading" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm" style="color: var(--text-secondary)" data-testid="bulk-download-progress">
           <IconLoader2 class="ui-action-icon animate-spin" aria-hidden="true" />
-          <span class="font-semibold tabular-nums">Preparing downloads {{ bulkDownloadProgress.index }} / {{ bulkDownloadProgress.total }}</span>
+          <span
+            role="progressbar"
+            aria-label="Download selected progress"
+            aria-valuemin="0"
+            :aria-valuemax="bulkDownloadProgress.total"
+            :aria-valuenow="bulkDownloadProgress.index"
+            :aria-valuetext="`Preparing downloads ${bulkDownloadProgress.index} of ${bulkDownloadProgress.total}`"
+            class="font-semibold tabular-nums"
+          >Preparing downloads {{ bulkDownloadProgress.index }} / {{ bulkDownloadProgress.total }}</span>
           <span class="truncate min-w-0 flex-1">{{ bulkDownloadProgress.title }}</span>
           <button
             type="button"
-            class="ui-action-btn px-3 py-1 rounded-lg text-xs font-semibold border disabled:opacity-60"
-            style="color: var(--text-secondary); border-color: var(--border)"
+            class="ui-card-btn"
             :disabled="bulkDownloadCancelled"
             @click="cancelBulkDownload"
           >{{ bulkDownloadCancelled ? "Stopping after this game…" : "Cancel" }}</button>
         </div>
-        <div v-if="status.running || status.checked > 0" class="space-y-2">
+        <div v-if="status.running || status.checked > 0 || (checkSummary && !statusError)" class="space-y-2">
           <div
-            class="flex items-center justify-between text-xs"
+            v-if="status.running"
+            class="flex items-center justify-between gap-3 text-xs"
             style="color: var(--text-secondary)"
           >
-            <span v-if="status.running" class="flex items-center gap-2">
-              <IconLoader2 class="ui-action-icon animate-spin text-green-400" />
-              Checking: {{ status.current }}
+            <span class="flex min-w-0 items-center gap-2" data-testid="update-check-current">
+              <IconLoader2 class="ui-action-icon shrink-0 animate-spin" style="color: var(--brand)" aria-hidden="true" />
+              <span class="truncate">{{ status.current ? `Checking: ${status.current}` : "Starting the check…" }}</span>
             </span>
-            <span v-else :class="progressToneClass">{{ progressLabel }}</span>
-            <span>{{ status.checked }}/{{ status.total }}</span>
+            <span class="shrink-0 tabular-nums">{{ status.checked }}/{{ status.total }}</span>
+          </div>
+          <!-- One statement of the outcome; the announcer says the same words. -->
+          <div
+            v-else-if="checkSummary && !statusError"
+            class="flex items-start gap-2 text-sm"
+            data-testid="update-check-summary"
+          >
+            <IconCheck v-if="checkSummary.tone === 'success'" class="ui-action-icon mt-0.5 shrink-0" :style="{ color: TONE_COLOR.success }" aria-hidden="true" />
+            <IconAlertTriangle v-else-if="checkSummary.tone !== 'neutral'" class="ui-action-icon mt-0.5 shrink-0" :style="{ color: TONE_COLOR[checkSummary.tone] }" aria-hidden="true" />
+            <div class="min-w-0">
+              <p :style="{ color: checkSummary.tone === 'neutral' ? TONE_COLOR.neutral : TONE_COLOR[checkSummary.tone] }">{{ checkSummary.text }}</p>
+              <p
+                v-if="checkSummary.reason"
+                class="mt-0.5 text-xs break-words"
+                style="color: var(--text-secondary)"
+                :title="checkSummary.rawError !== checkSummary.reason.message ? checkSummary.rawError : undefined"
+                data-testid="update-check-failure-reason"
+              >
+                {{ checkSummary.reason.message }}
+                <span v-if="checkSummary.reason.detail" class="font-mono" style="color: var(--text-muted)">({{ checkSummary.reason.detail }})</span>
+              </p>
+            </div>
           </div>
           <div
+            v-if="status.running || status.checked > 0"
+            role="progressbar"
+            aria-label="Update check progress"
+            aria-valuemin="0"
+            :aria-valuemax="Math.max(status.total, status.checked)"
+            :aria-valuenow="status.checked"
+            :aria-valuetext="`${status.checked} of ${status.total} games checked`"
+            data-testid="update-check-progress"
             class="h-2 rounded-full overflow-hidden"
             style="background: var(--bg-raised)"
           >
             <div
-              class="h-full bg-gradient-to-r from-green-500 to-emerald-400 rounded-full transition-all duration-500"
+              class="check-progress-fill h-full rounded-full"
               :style="{ width: progress + '%' }"
             ></div>
           </div>
         </div>
 
-        <p v-if="statusError" class="text-sm text-red-400">
+        <p v-if="statusError" class="text-sm" style="color: var(--danger-text)">
           {{ statusError }}
           <button
             type="button"
@@ -843,22 +1004,12 @@ onUnmounted(() => {
           </button>
         </p>
         <p
-          v-else-if="!status.running && status.outcome && status.outcome !== 'idle'"
-          class="text-sm"
+          v-if="status.running && !statusError"
+          class="text-xs"
           style="color: var(--text-secondary)"
+          data-testid="update-check-pace"
         >
-          Check {{ status.outcome }}: {{ status.checked }} / {{ status.total }} games checked.
-          {{ status.error }}
-        </p>
-        <p
-          v-else-if="!status.running && status.total === 0"
-          class="text-sm"
-          style="color: var(--text-secondary)"
-        >
-          Choose "Check All Games" to scan {{ lcEnabled ? "F95Zone and LewdCorner" : "F95Zone" }} for new
-          versions. Games are checked one-by-one with a {{ statusDelaySeconds }}-second
-          delay to avoid rate limiting.<template v-if="lcEnabled && lcPlus"> LewdCorner Plus games need a LewdCorner
-          login in the browser with the wLib extension.</template>
+          {{ checkPace }}
         </p>
       </div>
     </div>
@@ -888,12 +1039,13 @@ onUnmounted(() => {
               class="ui-section-heading text-xl font-bold mb-1"
               style="color: var(--text-primary)"
             >
-              <IconArrowUp class="ui-section-icon" />
-              wLib Update Available
+              <IconArrowUp class="ui-section-icon" aria-hidden="true" />
+              wLib update available
             </h3>
-            <div class="flex items-center gap-3">
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
               <span
-                class="text-xs font-mono px-2 py-0.5 rounded-md"
+                class="max-w-full truncate whitespace-nowrap text-xs font-mono px-2 py-0.5 rounded-md"
+                :title="`Current: ${currentVersion}`"
                 style="
                   background: var(--bg-raised);
                   color: var(--text-muted);
@@ -901,9 +1053,10 @@ onUnmounted(() => {
                 "
                 >Current: {{ currentVersion }}</span
               >
-              <span class="text-xs" style="color: var(--text-muted)">→</span>
+              <span class="text-xs" style="color: var(--text-muted)" aria-hidden="true">→</span>
               <span
-                class="text-xs font-mono px-2 py-0.5 rounded-md font-bold animate-pulse"
+                class="max-w-full truncate whitespace-nowrap text-xs font-mono px-2 py-0.5 rounded-md font-bold animate-pulse"
+                :title="`New: ${appUpdate.version}`"
                 style="
                   background: var(--brand-glow);
                   color: var(--brand);
@@ -916,11 +1069,11 @@ onUnmounted(() => {
 
           <div class="flex gap-2 shrink-0">
             <button
+              type="button"
               @click="openInBrowser(appUpdate.url)"
-              class="ui-action-btn px-4 py-2 rounded-lg text-xs font-bold transition-all shrink-0"
-              style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
+              class="ui-card-btn ui-card-btn--primary shrink-0"
             >
-              <IconExternalLink class="ui-action-icon" />
+              <IconExternalLink class="ui-action-icon" aria-hidden="true" />
               Latest release
             </button>
           </div>
@@ -934,24 +1087,40 @@ onUnmounted(() => {
         ></div>
       </section>
 
-      <!-- Updates Available -->
+      <!-- Updates available -->
       <section
         v-if="persistedUpdates.length > 0"
         class="section-card rounded-xl p-6"
       >
         <h3 class="ui-section-heading text-lg font-semibold mb-4">
-          <IconArrowUp class="ui-section-icon" />
-          Updates Available ({{ persistedUpdates.length }})
+          <IconArrowUp class="ui-section-icon" aria-hidden="true" />
+          Updates available ({{ persistedUpdates.length }})
         </h3>
 
-        <div class="flex flex-wrap items-center gap-2 mb-4">
-          <label class="flex items-center gap-2"><input type="checkbox" :checked="selectedUpdateIds.size === persistedUpdates.length" @change="toggleAllUpdates" /> Select all ({{ selectedUpdateIds.size }} selected)</label>
-          <template v-if="selectedUpdateIds.size">
-            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading" :title="status.running || startingCheck ? CHECK_RUNNING_REASON : undefined" @click="bulkDownload">Download selected</button>
-            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading" @click="bulkUpdate('updated')">Mark updated</button>
-            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading" @click="bulkUpdate('skip')">Skip version</button>
-            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading || !persistedUpdates.some(game => selectedUpdateIds.has(game.id) && updateCheckUrl(game))" @click="bulkUpdate('check')">Re-check</button>
-          </template>
+        <!-- Select all, then the bulk actions for the selected rows. The actions
+             wrap as one group; in a narrow window each row of them fills the width. -->
+        <div class="bulk-bar mb-4" data-testid="updates-bulk-bar">
+          <label class="bulk-select">
+            <input
+              type="checkbox"
+              :checked="selectedUpdateIds.size > 0 && selectedUpdateIds.size === persistedUpdates.length"
+              :indeterminate="selectedUpdateIds.size > 0 && selectedUpdateIds.size < persistedUpdates.length"
+              @change="toggleAllUpdates"
+            />
+            <span>Select all <span class="bulk-count">({{ selectedUpdateIds.size }} selected)</span></span>
+          </label>
+          <div v-if="selectedUpdateIds.size" class="bulk-actions">
+            <button type="button" class="ui-card-btn ui-card-btn--primary" :aria-disabled="!!bulkDisabledReason || undefined" :aria-describedby="bulkDisabledReason ? 'bulk-disabled-reason' : undefined" @click="bulkDownload">
+              <IconDownload class="ui-action-icon" aria-hidden="true" />Download selected
+            </button>
+            <button type="button" class="ui-card-btn" :aria-disabled="!!bulkDisabledReason || undefined" :aria-describedby="bulkDisabledReason ? 'bulk-disabled-reason' : undefined" @click="bulkUpdate('updated')">Mark updated</button>
+            <button type="button" class="ui-card-btn" :aria-disabled="!!bulkDisabledReason || undefined" :aria-describedby="bulkDisabledReason ? 'bulk-disabled-reason' : undefined" @click="bulkUpdate('skip')">Skip version</button>
+            <button type="button" class="ui-card-btn" :aria-disabled="!!bulkRecheckReason || undefined" :aria-describedby="bulkRecheckReason ? 'bulk-recheck-reason' : undefined" @click="bulkUpdate('check')">Re-check</button>
+          </div>
+          <p v-if="selectedUpdateIds.size && (bulkDisabledReason || bulkRecheckReason)" class="bulk-reason text-xs" style="color: var(--text-secondary)">
+            <span v-if="bulkDisabledReason" id="bulk-disabled-reason" data-testid="bulk-disabled-reason">{{ bulkDisabledReason }}</span>
+            <span v-if="bulkRecheckReason" id="bulk-recheck-reason" :class="bulkDisabledReason ? 'sr-only' : undefined">{{ bulkRecheckReason }}</span>
+          </p>
         </div>
         <TransitionGroup name="list" tag="div" class="space-y-2">
           <div
@@ -975,12 +1144,14 @@ onUnmounted(() => {
                 >
                   {{ game.title }}
                 </button>
-                <span class="update-version font-mono whitespace-nowrap" data-testid="update-version-change">
-                  <span>{{ game.version }}</span>
-                  <span class="mx-1" aria-hidden="true">→</span>
-                  <span class="sr-only">to</span>
-                  <span class="font-bold" style="color: var(--success-text)">{{ game.latest_version }}</span>
-                  <span v-if="latestSiteLabel(game, lcEnabled)" class="ml-1 text-xs" style="color: var(--text-muted)">{{ latestSiteLabel(game, lcEnabled) }}</span>
+                <span class="update-version font-mono" data-testid="update-version-change">
+                  <span class="whitespace-nowrap">
+                    <span>{{ game.version }}</span>
+                    <span class="mx-1" aria-hidden="true">→</span>
+                    <span class="sr-only">to</span>
+                  </span>
+                  <span class="update-version-new font-bold" style="color: var(--success-text)">{{ game.latest_version }}</span>
+                  <span v-if="latestSiteLabel(game, lcEnabled)" class="ml-1 whitespace-nowrap text-xs" style="color: var(--text-muted)">{{ latestSiteLabel(game, lcEnabled) }}</span>
                 </span>
               </p>
               <p class="flex flex-wrap items-center gap-x-2 text-xs" style="color: var(--text-secondary)">
@@ -1000,7 +1171,7 @@ onUnmounted(() => {
                   class="font-medium"
                   style="color: var(--warning-text)"
                   data-testid="update-needs-choice"
-                >{{ needsChoice.get(game.id) }}. Choose a build with Download update.</span>
+                >{{ needsChoice.get(game.id) }}. Open Download update to choose a build.</span>
               </p>
             </div>
             <MenuButton
@@ -1013,6 +1184,7 @@ onUnmounted(() => {
               button-label="More update actions"
               :disabled="bulkDownloading"
               :main-disabled="updateMainDisabled(game)"
+              :main-disabled-reason="updateMainDisabled(game) ? updateMainTitle(game) : undefined"
               :main-title="updateMainTitle(game)"
               @main="runUpdateMain(game)"
               @select="(id: string) => chooseUpdateMenuItem(game, id)"
@@ -1026,13 +1198,54 @@ onUnmounted(() => {
           </div>
         </TransitionGroup>
       </section>
-      <section v-else class="section-card rounded-xl p-6">
-        <p class="flex items-center gap-2 text-sm" style="color: var(--text-secondary)">
+      <section
+        v-else-if="firstRun"
+        class="section-card rounded-xl p-6"
+        aria-labelledby="updates-not-checked-heading"
+        data-testid="updates-not-checked"
+      >
+        <h3 id="updates-not-checked-heading" class="ui-section-heading text-lg font-semibold mb-2">
+          <IconClock class="ui-section-icon" aria-hidden="true" />
+          Not checked yet
+        </h3>
+        <div class="max-w-prose space-y-2 text-sm" style="color: var(--text-secondary)">
+          <p>
+            A check reads each game's {{ checkSources }} thread and lists the games that have a newer version here.
+          </p>
+          <p>
+            {{ checkPace }} With many games this takes a while; you can keep using wLib meanwhile.
+          </p>
+          <p v-if="lcEnabled && lcPlus">
+            LewdCorner Plus games need a LewdCorner login in the browser with the wLib extension.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="ui-card-btn ui-card-btn--primary page-btn page-btn--primary mt-4"
+          :aria-disabled="checkBlocked || undefined"
+          :aria-describedby="checkDisabledReason ? 'check-disabled-reason' : undefined"
+          :title="checkDisabledReason || undefined"
+          data-first-check
+          @click="startCheckFrom($event)"
+        >
+          <IconLoader2 v-if="startingCheck" class="ui-action-icon animate-spin" aria-hidden="true" />
+          <IconReload v-else class="ui-action-icon" aria-hidden="true" />
+          Check all games
+        </button>
+      </section>
+      <section v-else class="section-card rounded-xl p-6" data-testid="updates-empty">
+        <p v-if="emptyState === 'up-to-date'" class="flex items-center gap-2 text-sm" style="color: var(--text-secondary)">
           <IconCheck class="ui-action-icon" style="color: var(--success-text)" aria-hidden="true" />
-          No updates available.
+          Your games are up to date.
+        </p>
+        <p v-else-if="emptyState === 'checking'" class="text-sm" style="color: var(--text-secondary)">
+          No updates found yet. Games with a newer version appear here during the check.
+        </p>
+        <p v-else class="text-sm" style="color: var(--text-secondary)">
+          No updates found.
         </p>
       </section>
-      <!-- Check Results -->
+      <!-- Last check results -->
       <section
         v-if="!status.running && status.results.length > 0"
         class="section-card rounded-xl p-6"
@@ -1041,56 +1254,56 @@ onUnmounted(() => {
           class="ui-section-heading text-lg font-semibold mb-4"
           style="color: var(--text-primary)"
         >
-          <IconInfoCircle class="ui-section-icon" />
-          Last Check Results
+          <IconInfoCircle class="ui-section-icon" aria-hidden="true" />
+          Last check results
         </h3>
 
-        <div class="grid grid-cols-3 gap-4 mb-4">
+        <div class="grid grid-cols-3 gap-2 sm:gap-4 mb-4">
           <div
-            class="rounded-lg p-3 text-center"
+            class="min-w-0 rounded-lg px-1.5 py-3 text-center sm:px-3"
             style="
               background: var(--bg-raised);
               border: 1px solid var(--border);
             "
           >
-            <p class="text-2xl font-bold" style="color: var(--text-primary)">
-              {{ gamesChecked.length }}
+            <p class="text-2xl font-bold tabular-nums" style="color: var(--text-primary)" data-testid="results-checked">
+              {{ status.checked }}
             </p>
-            <p class="text-xs" style="color: var(--text-muted)">Checked</p>
+            <p class="text-xs" style="color: var(--text-muted)">Games checked</p>
           </div>
           <div
-            class="rounded-lg p-3 text-center"
-            style="
-              background: var(--bg-raised);
-              border: 1px solid rgba(34, 197, 94, 0.2);
-            "
+            class="min-w-0 rounded-lg px-1.5 py-3 text-center sm:px-3"
+            :style="{
+              background: 'var(--bg-raised)',
+              border: `1px solid ${gamesWithUpdates.length ? 'var(--success-border)' : 'var(--border)'}`,
+            }"
           >
-            <p class="text-2xl font-bold text-green-400">
+            <p class="text-2xl font-bold tabular-nums" :style="{ color: gamesWithUpdates.length ? 'var(--success-text)' : 'var(--text-muted)' }" data-testid="results-updates">
               {{ gamesWithUpdates.length }}
             </p>
-            <p class="text-xs" style="color: var(--text-muted)">Updates</p>
+            <p class="text-xs" style="color: var(--text-muted)">Updates found</p>
           </div>
           <div
-            class="rounded-lg p-3 text-center"
-            style="
-              background: var(--bg-raised);
-              border: 1px solid rgba(239, 68, 68, 0.2);
-            "
+            class="min-w-0 rounded-lg px-1.5 py-3 text-center sm:px-3"
+            :style="{
+              background: 'var(--bg-raised)',
+              border: `1px solid ${gamesWithErrors.length ? 'var(--danger-border)' : 'var(--border)'}`,
+            }"
           >
             <p
-              class="text-2xl font-bold"
-              :class="gamesWithErrors.length ? 'text-red-400' : ''"
-              :style="!gamesWithErrors.length ? 'color: var(--text-muted)' : ''"
+              class="text-2xl font-bold tabular-nums"
+              :style="{ color: gamesWithErrors.length ? 'var(--danger-text)' : 'var(--text-muted)' }"
+              data-testid="results-failed"
             >
               {{ gamesWithErrors.length }}
             </p>
-            <p class="text-xs" style="color: var(--text-muted)">Errors</p>
+            <p class="text-xs" style="color: var(--text-muted)">Checks failed</p>
           </div>
         </div>
 
         <ul v-if="archivedResults.length" class="mb-3 space-y-1 text-xs" style="color: var(--text-muted)">
           <li v-for="result in archivedResults" :key="`archived-${result.id}`">
-            <span class="font-medium">{{ result.title }}</span> · Archived<template v-if="result.latest_version">, latest {{ result.latest_version }}</template>
+            <span class="font-medium">{{ result.title }}</span> · Archived, so the update is not shown.<template v-if="result.latest_version"> Latest version: {{ result.latest_version }}.</template>
           </li>
         </ul>
         <ul v-if="gamesWithNotes.length" class="mb-3 space-y-1 text-xs" style="color: var(--text-muted)">
@@ -1098,18 +1311,40 @@ onUnmounted(() => {
             <span class="font-medium">{{ result.title }}</span> · {{ result.note }}
           </li>
         </ul>
-        <div v-if="gamesWithErrors.length" class="space-y-1">
-          <p class="text-xs mb-1" style="color: var(--text-muted)">
-            Failed checks:
-          </p>
-          <div
-            v-for="err in gamesWithErrors"
-            :key="err.id"
-            class="text-xs text-red-400/70 flex items-start gap-2"
-          >
-            <span class="shrink-0" style="color: var(--text-muted)">{{ err.title }}:</span>
-            <span class="min-w-0 break-words">{{ err.error }}</span>
+        <div v-if="failedChecks.length" data-testid="failed-checks">
+          <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <p id="failed-checks-label" class="text-xs" style="color: var(--text-muted)">
+              Failed checks:
+            </p>
+            <button
+              v-if="recheckFailedIds.length"
+              type="button"
+              class="ui-card-btn"
+              :aria-disabled="!!recheckFailedReason || undefined"
+              :aria-describedby="recheckFailedReason ? 'recheck-failed-reason' : undefined"
+              :title="recheckFailedReason || undefined"
+              data-testid="recheck-failed"
+              @click="recheckFailed"
+            >
+              <IconReload class="ui-action-icon" aria-hidden="true" />
+              Re-check failed ({{ recheckFailedIds.length }})
+            </button>
+            <span v-if="recheckFailedReason" id="recheck-failed-reason" class="sr-only">{{ recheckFailedReason }}</span>
           </div>
+          <ul class="space-y-1 text-xs" aria-labelledby="failed-checks-label">
+            <li
+              v-for="failed in failedChecks"
+              :key="failed.id"
+              class="break-words"
+              data-testid="failed-check"
+            >
+              <span class="font-medium" style="color: var(--text-secondary)">{{ failed.title }}:</span>
+              {{ " " }}<span style="color: var(--danger-text)" :title="failed.raw !== failed.message ? failed.raw : undefined">{{ failed.message }}</span>
+              <template v-if="failed.detail">
+                {{ " " }}<span class="font-mono" style="color: var(--text-muted)">({{ failed.detail }})</span>
+              </template>
+            </li>
+          </ul>
         </div>
       </section>
     </div>
@@ -1124,18 +1359,51 @@ onUnmounted(() => {
   border: 1px solid var(--border);
 }
 
-.update-btn {
-  background: var(--bg-overlay);
-  color: var(--text-primary);
-  padding: 0.5rem 1rem;
-  border-radius: 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  border: 1px solid var(--border);
-  transition: all 0.15s ease;
+/* The header and first-run buttons: the shared .ui-card-btn set one size up. */
+.page-btn {
+  min-height: 2.375rem;
+  padding-inline: 1.125rem;
+  font-size: 0.875rem;
 }
-.update-btn:hover:not(:disabled) {
-  background: var(--border-hover);
+.page-btn--primary { box-shadow: var(--shadow-brand); }
+.check-progress-fill {
+  background: var(--brand);
+  transition: width 0.5s ease;
+}
+
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+.bulk-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.125rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.bulk-count { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.bulk-reason { flex-basis: 100%; }
+/* The main part of every row's split button has one width, so the rows line up. */
+:deep([data-update-row-action] .menu-button-main) { min-width: 10.5rem; }
+@media (max-width: 639px) {
+  /* Header buttons and bulk actions fill each wrapped row instead of leaving a ragged edge. */
+  .check-actions { width: 100%; }
+  .check-actions > button { flex: 1 1 auto; }
+  .bulk-actions { width: 100%; }
+  .bulk-actions > .ui-card-btn { flex: 1 1 auto; }
+  /* The row's split button drops under the title: it takes the full row width. */
+  :deep([data-update-row-action]) { width: 100%; }
+  :deep([data-update-row-action] .menu-button-main) { flex: 1 1 auto; min-width: 0; }
 }
 
 .update-row {
@@ -1145,7 +1413,16 @@ onUnmounted(() => {
 .update-entry { color: var(--text-primary); }
 .update-entry:hover { color: var(--brand); }
 .update-entry:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.update-version { color: var(--text-secondary); }
+/* "old →" stays on one line; a long new version wraps under it inside the row. */
+.update-version {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text-secondary);
+}
+.update-version-new { min-width: 0; overflow-wrap: anywhere; }
 
 .changelog-wrapper {
   background: var(--bg-inset);

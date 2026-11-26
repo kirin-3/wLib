@@ -2,8 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  formatEta, formatSize, formatUploadDate, isSeeding, needsSeedAnswer, rpdlMarks, rpdlNote, rpdlPreselected,
-  rpdlPrimaryAction, rpdlPrimaryLabel, torrentSentMessage, seedingLabel, seedPromptText, torrentDetails, torrentInstallSource, torrentPercent, torrentStatusLine,
+  formatEta, formatSize, formatUploadDate, isSeeding, keepTorrentChoice, needsSeedAnswer, rpdlCanChoose, rpdlMarks, rpdlNote, rpdlPreselected,
+  rpdlOpenByDefault, rpdlPrimaryAction, rpdlPrimaryLabel, rpdlSummary, torrentSentMessage, seedingLabel, seedPromptText, torrentDetails, torrentInstallSource, torrentPercent, torrentStatusLine,
 } from "./torrentDownloads.ts";
 import { awaitsSeedAnswer, groupDownloads, rowActions, sidebarBadge } from "./downloadQueue.ts";
 import type { DownloadQueueJob, RpdlSearchResponse, RpdlTorrent, UpdateDownloadJob } from "../services/api.ts";
@@ -80,7 +80,7 @@ test("RPDL rows are marked and only a signed-in clear match is preselected", () 
 
 test("the RPDL note asks to sign in or to choose", () => {
   const base: RpdlSearchResponse = { success: true, results: [torrent()], preselected_id: null, needs_choice: true, signed_in: true };
-  assert.match(rpdlNote({ ...base, signed_in: false }), /Sign in to RPDL in Settings/);
+  assert.match(rpdlNote({ ...base, signed_in: false }), /Sign in to RPDL to download/);
   assert.match(rpdlNote(base), /Choose one/);
   assert.equal(rpdlNote({ ...base, needs_choice: false }), "");
   assert.equal(rpdlNote({ success: true, results: [] }), "");
@@ -124,4 +124,56 @@ test("seeding torrents get their own section after Ready to install", () => {
   const sections = groupDownloads([finishedTorrent("seeding")], [job({ stage: "done", seed_state: "seeding" })]);
   assert.deepEqual(sections.map((s) => s.id), ["ready", "seeding"]);
   assert.equal(sections[1]?.seeding.length, 1);
+});
+
+test("signed out, RPDL torrents are not a choice and never replace a file-host pick", () => {
+  const signedIn: RpdlSearchResponse = { success: true, results: [torrent(), torrent({ id: 2 })], preselected_id: 1, needs_choice: false, signed_in: true };
+  const signedOut = { ...signedIn, signed_in: false };
+  assert.equal(rpdlCanChoose(signedIn), true);
+  assert.equal(rpdlCanChoose(signedOut), false);
+  assert.equal(rpdlCanChoose({ ...signedIn, results: [] }), false);
+  assert.equal(rpdlCanChoose({ success: false, error: "offline" }), false);
+  assert.equal(rpdlCanChoose(null), false);
+  // A late signed-out answer has no preselection, so the mirror choice stays.
+  assert.equal(rpdlPreselected(signedOut), null);
+});
+
+test("a picked torrent stays only while RPDL still offers it to a signed-in user", () => {
+  const signedIn: RpdlSearchResponse = { success: true, results: [torrent(), torrent({ id: 2 })], preselected_id: 1, needs_choice: false, signed_in: true };
+  assert.equal(keepTorrentChoice(signedIn, 2), true);
+  assert.equal(keepTorrentChoice(signedIn, 3), false);
+  assert.equal(keepTorrentChoice({ ...signedIn, signed_in: false }, 1), false);
+  assert.equal(keepTorrentChoice(null, 1), false);
+});
+
+test("the RPDL section opens only when RPDL is the best source", () => {
+  const found: RpdlSearchResponse = { success: true, signed_in: true, results: [torrent({ version_match: false }), torrent({ id: 2, version_match: null })] };
+  const base = { response: found, torrentChosen: false, linksSettled: true, inAppBuild: true, wishlisted: false };
+  assert.equal(rpdlOpenByDefault(base), false, "an in-app mirror is the better source");
+  assert.equal(rpdlOpenByDefault({ ...base, torrentChosen: true }), true, "the choice is in it");
+  assert.equal(rpdlOpenByDefault({ ...base, inAppBuild: false }), true, "no in-app mirror for this computer");
+  assert.equal(rpdlOpenByDefault({ ...base, inAppBuild: false, linksSettled: false }), false, "waits for the links");
+  assert.equal(rpdlOpenByDefault({ ...base, wishlisted: true }), false, "wishlisted without a version match");
+  const matching: RpdlSearchResponse = { ...found, needs_choice: true, results: [torrent({ version_match: true })] };
+  assert.equal(rpdlOpenByDefault({ ...base, response: matching, wishlisted: true, linksSettled: false }), true, "wishlisted with a matching torrent");
+  assert.equal(rpdlOpenByDefault({ ...base, response: { ...matching, signed_in: false }, wishlisted: true }), false, "signed out, a working mirror stays first");
+  assert.equal(rpdlOpenByDefault({ ...base, response: { ...matching, signed_in: false }, wishlisted: true, inAppBuild: false }), true, "signed out without a mirror: the sign-in note leads");
+  assert.equal(rpdlOpenByDefault({ ...base, response: matching }), false, "an update with a matching torrent keeps the mirror first");
+  for (const response of [null, { success: false, error: "x" }, { success: true, signed_in: true, results: [] }] as Array<RpdlSearchResponse | null>) {
+    assert.equal(rpdlOpenByDefault({ ...base, response, inAppBuild: false }), false, "nothing to show");
+  }
+});
+
+test("the RPDL summary gives the count and one short state", () => {
+  const idle = { loading: false, error: "", chosen: false };
+  const found = (extra: Partial<RpdlSearchResponse> = {}): RpdlSearchResponse =>
+    ({ success: true, signed_in: true, results: [torrent({ version_match: false }), torrent({ id: 2, version_match: null })], ...extra });
+  assert.deepEqual(rpdlSummary(null, { ...idle, loading: true }), { count: 0, state: "Searching…", tone: "muted" });
+  assert.deepEqual(rpdlSummary(null, { ...idle, error: "HTTP 500" }), { count: 0, state: "Search failed", tone: "warn" });
+  assert.deepEqual(rpdlSummary(found({ results: [] }), idle), { count: 0, state: "No matches", tone: "muted" });
+  assert.deepEqual(rpdlSummary(found({ signed_in: false }), { ...idle, chosen: true }), { count: 2, state: "Sign in needed", tone: "warn" });
+  assert.deepEqual(rpdlSummary(found(), { ...idle, chosen: true }), { count: 2, state: "Selected", tone: "good" });
+  assert.equal(rpdlSummary(found({ results: [torrent()] }), idle).state, "Matches version");
+  assert.equal(rpdlSummary(found({ needs_choice: true }), idle).state, "Choose one");
+  assert.deepEqual(rpdlSummary(found(), idle), { count: 2, state: "", tone: "muted" });
 });

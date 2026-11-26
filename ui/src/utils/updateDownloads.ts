@@ -128,3 +128,33 @@ export async function settlePickerStart(
     if (effects.stillOpen()) effects.showError(String(e instanceof Error ? e.message : e));
   }
 }
+
+/** The labelled version line under the picker title: "Installed 1.0 → 2.0", or "Version 2.0" for a first download. */
+export interface PickerVersionLine {
+  label: "Installed" | "Version";
+  /** The installed version; empty when the line names one version only. */
+  from: string;
+  to: string;
+}
+
+/**
+ * What the picker header says about versions. `threadVersion` is the version
+ * the loaded thread gives (empty before the links load); without it the line
+ * uses the version the picker searches for.
+ */
+export function pickerVersionLine(
+  game: Pick<GameRecord, "latest_version" | "version" | "exe_path">,
+  threadVersion: string,
+): PickerVersionLine | null {
+  const target = threadVersion.trim() || pickerTargetVersion(game);
+  const installed = isWishlisted(game) ? "" : game.version?.trim() || "";
+  if (!installed) return target ? { label: "Version", from: "", to: target } : null;
+  if (!target || target === installed) return { label: "Installed", from: "", to: installed };
+  return { label: "Installed", from: installed, to: target };
+}
+
+/** The line under a mirror's name: whether wLib can download it or only the browser can. */
+export function mirrorSubtitle(mirror: UpdateMirror, build: UpdateBuild, host: HostPlatform): string {
+  if (mirror.split) return `Part ${mirror.part} · browser only`;
+  return suitable(build, host) && inAppMirror(mirror) ? "In-app download" : "Browser only";
+}

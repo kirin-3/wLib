@@ -122,10 +122,23 @@ export function rpdlPreselected(response: RpdlSearchResponse | null): RpdlTorren
   return response.results?.find((torrent) => torrent.id === response.preselected_id) ?? null;
 }
 
-/** The note under the RPDL list. */
+/** The settings row where the user signs in to RPDL. */
+export const RPDL_SETTINGS_ROUTE = "/settings#file-hosts-rpdl";
+
+/** True when the user can pick an RPDL torrent: the search worked and the account is signed in. */
+export function rpdlCanChoose(response: RpdlSearchResponse | null): boolean {
+  return !!response?.success && !!response.signed_in && !!response.results?.length;
+}
+
+/** True when a picked torrent is still a usable choice after a new RPDL answer. */
+export function keepTorrentChoice(response: RpdlSearchResponse | null, torrentId: number): boolean {
+  return rpdlCanChoose(response) && !!response?.results?.some((torrent) => torrent.id === torrentId);
+}
+
+/** The note above the RPDL list. */
 export function rpdlNote(response: RpdlSearchResponse | null): string {
   if (!response?.success || !response.results?.length) return "";
-  if (!response.signed_in) return "Sign in to RPDL in Settings to download these.";
+  if (!response.signed_in) return "Sign in to RPDL to download these torrents.";
   if (response.needs_choice) return "Several torrents match closely. Choose one.";
   return "";
 }
@@ -143,4 +156,57 @@ export const rpdlPrimaryLabel = (action: RpdlPrimaryAction): string => action ==
 export function torrentSentMessage(folder: string): string {
   const where = folder.trim() ? `the watch folder (${folder.trim()})` : "the watch folder";
   return `Sent to ${where}. Your torrent client will download it. When it finishes, install the update with "Install from archive".`;
+}
+
+/** What the picker knows when it decides whether the RPDL section starts open. */
+export interface RpdlOpenState {
+  response: RpdlSearchResponse | null;
+  /** A torrent is the current choice. */
+  torrentChosen: boolean;
+  /** The thread links finished loading (with builds or with an error). */
+  linksSettled: boolean;
+  /** The thread has an in-app mirror for a suitable full build (`preselect` found one). */
+  inAppBuild: boolean;
+  wishlisted: boolean;
+}
+
+/**
+ * True when RPDL is the best source, so its section opens by itself: a torrent
+ * is chosen, the thread has no in-app download for this computer (also when
+ * signed out: the sign-in note is then the way forward), or a wishlisted game
+ * (a full download) has a torrent that matches the version and the user is
+ * signed in.
+ */
+export function rpdlOpenByDefault(state: RpdlOpenState): boolean {
+  if (state.torrentChosen) return true;
+  const results = state.response?.success ? state.response.results ?? [] : [];
+  if (!results.length) return false;
+  // Signed out, a wishlisted game's matching torrent waits behind "Sign in needed" when a mirror works.
+  if (state.wishlisted && state.response?.signed_in && results.some((torrent) => torrent.version_match === true)) return true;
+  return state.linksSettled && !state.inAppBuild;
+}
+
+export interface RpdlSummary {
+  /** Torrents found; 0 while searching, after a failure or without matches. */
+  count: number;
+  /** A short state after the count; empty when there is nothing to add. */
+  state: string;
+  tone: "muted" | "warn" | "good";
+}
+
+/** The closed RPDL section's summary line: "RPDL torrents (2)" and a short state. */
+export function rpdlSummary(
+  response: RpdlSearchResponse | null,
+  status: { loading: boolean; error: string; chosen: boolean },
+): RpdlSummary {
+  if (status.loading) return { count: 0, state: "Searching…", tone: "muted" };
+  if (status.error) return { count: 0, state: "Search failed", tone: "warn" };
+  const results = response?.success ? response.results ?? [] : [];
+  if (!results.length) return { count: 0, state: "No matches", tone: "muted" };
+  const count = results.length;
+  if (!response?.signed_in) return { count, state: "Sign in needed", tone: "warn" };
+  if (status.chosen) return { count, state: "Selected", tone: "good" };
+  if (results.some((torrent) => torrent.version_match === true)) return { count, state: "Matches version", tone: "good" };
+  if (response.needs_choice) return { count, state: "Choose one", tone: "muted" };
+  return { count, state: "", tone: "muted" };
 }

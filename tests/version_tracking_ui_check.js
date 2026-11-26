@@ -9,12 +9,20 @@ async (page) => {
   const errors = [];
   const onError = error => errors.push(String(error));
   page.on("pageerror", onError);
-  const open = () => page.getByRole("checkbox", { name: "Journal fixture. Press Enter for details.", exact: true }).press("Enter");
+  // Layout is in the View menu.
+  const setLayout = async label => {
+    await page.getByRole("button", { name: /^View: / }).click();
+    const menu = page.getByRole("menu", { name: "View options" });
+    await menu.getByRole("menuitemradio", { name: label, exact: true }).click();
+    await menu.waitFor({ state: "hidden" });
+  };
+  const open = () => page.getByRole("row", { name: "Journal fixture", exact: true }).press("Enter");
   const dialog = page.getByRole("dialog");
   const close = () => dialog.getByRole("button", { name: "Close", exact: true }).click();
   const panel = () => dialog.getByRole("tabpanel", { name: "Journal", exact: true });
-  const badges = () => page.locator(".unplayed-label:visible");
-  const updatePills = () => page.locator(".update-pill:visible");
+  // Grid cards show Unplayed as a card fact; list rows and image tiles use a label.
+  const badges = () => page.locator(".unplayed-label:visible, .card-fact:visible").filter({ hasText: /^Unplayed$/ });
+  const updatePills = () => page.locator(".update-marker:visible");
   const contrast = async locator => locator.evaluate(element => {
     const luminance = rgb => {
       const channels = rgb.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => {
@@ -50,19 +58,19 @@ async (page) => {
       await page.goto(new URL("/#/", previousUrl).toString());
       await page.reload();
       for (const layout of ["Grid", "List", "Compact"]) {
-        await page.getByTitle(`${layout} view`, { exact: true }).click();
+        await setLayout(layout);
         await badges().waitFor();
         check(await badges().count() === 1, `${theme}/${layout}: only played installed games get an Unplayed badge`);
         check(await updatePills().count() === 1, `${theme}/${layout}: update indicator coexists with Unplayed`);
         check(await contrast(badges()) >= 4.5, `${theme}/${layout}: badge contrast must pass AA`);
       }
-      await page.getByTitle("Grid view", { exact: true }).click();
+      await setLayout("Grid");
       await page.getByRole("button", { name: "Filters", exact: true }).click();
       await page.getByRole("button", { name: "Unplayed update", exact: true }).click();
       await page.reload();
       await badges().waitFor();
       check(await badges().count() === 1, "Unplayed collection must restore on reload");
-      await page.getByRole("button", { name: "All Games", exact: true }).click();
+      await page.getByRole("button", { name: "No quick filter", exact: true }).click();
       await open();
       await dialog.getByRole("button", { name: "More update actions", exact: true }).click();
       await dialog.getByRole("menuitem", { name: "Skip version 0.9", exact: true }).click();
@@ -83,9 +91,9 @@ async (page) => {
       check(await page.getByTitle("Open Journal fixture", { exact: true }).count() === 0, "Skipped game leaves the Updates view");
       await page.getByRole("link", { name: "Library", exact: true }).click();
       await page.getByRole("button", { name: "Updates available", exact: false }).click();
-      await page.getByRole("checkbox", { name: "Journal fixture. Press Enter for details.", exact: true }).waitFor({ state: "hidden" });
-      await page.getByRole("button", { name: "All Games", exact: true }).click();
-      const card = page.getByRole("checkbox", { name: "Journal fixture. Press Enter for details.", exact: true });
+      await page.getByRole("row", { name: "Journal fixture", exact: true }).waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: "No quick filter", exact: true }).click();
+      const card = page.getByRole("row", { name: "Journal fixture", exact: true });
       await card.press("Shift+F10");
       check(await page.getByRole("button", { name: "Mark as updated to 0.9", exact: true }).count() === 0, "Mark as updated is hidden while skipping");
       await page.getByRole("button", { name: "Stop skipping 0.9", exact: true }).click();
@@ -120,7 +128,7 @@ async (page) => {
       await dialog.getByRole("button", { name: "Stop", exact: true }).click();
       await panel().getByText("In progress", { exact: true }).waitFor({ state: "hidden" });
       await close();
-      await page.getByRole("checkbox", { name: "Never played fixture. Press Enter for details.", exact: true }).press("Enter");
+      await page.getByRole("row", { name: "Never played fixture", exact: true }).press("Enter");
       await dialog.getByRole("tab", { name: "Journal", exact: true }).click();
       await panel().getByText("No sessions have been recorded yet.", { exact: false }).waitFor();
       await page.evaluate(() => {
@@ -147,7 +155,7 @@ async (page) => {
       await page.evaluate(() => { document.documentElement.style.zoom = ""; });
       await close();
       await page.getByRole("link", { name: /^Updates,/ }).click();
-      const updateSettings = page.getByRole("button", { name: "Settings", exact: true });
+      const updateSettings = page.getByRole("button", { name: "Update settings", exact: true });
       const openUpdateSettings = async () => {
         await updateSettings.click();
         await page.getByRole("dialog", { name: "Update settings", exact: true }).waitFor();

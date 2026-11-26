@@ -1271,7 +1271,9 @@ export class MockBackend {
             (refreshInfo ? game.f95_url : updateCheckUrl(game)) &&
             (!Array.isArray(args[0]) || args[0].includes(game.id)),
           ).length;
-          if (Array.isArray(args[0]) && total) {
+          // A full check (no id list) runs too, so the Updates page can show
+          // its checked states; only a completed full check records its time.
+          if (total) {
             this._mockUpdateStatus = { running: true, cancelling: false, outcome: "running", error: "", total, checked: 0, current: "", results: [], delay_seconds: 2, refresh_info: refreshInfo };
             setTimeout(() => {
               if (!this._mockUpdateStatus?.running) return;
@@ -1324,7 +1326,34 @@ export class MockBackend {
                   });
                 localStorage.setItem("wlib-mock-games", JSON.stringify(stored.map((game) => ({ ...game, ...updates.get(game.id) }))));
               }
-              this._mockUpdateStatus = { ...this._mockUpdateStatus, running: false, outcome: "completed", checked: total, results };
+              // Preview of failed checks: with "wlib-mock-update-errors" = "1",
+              // the first games fail with the backend's real error texts and
+              // the rest are read. A re-check of chosen games (an id list) works.
+              let outcome: "completed" | "failed" = "completed";
+              let error = "";
+              let showErrors = false;
+              try { showErrors = localStorage.getItem("wlib-mock-update-errors") === "1"; } catch { /* No storage: no preview errors. */ }
+              if (!refreshInfo && !Array.isArray(args[0]) && showErrors) {
+                const failures: Pick<BulkUpdateResultItem, "error" | "error_code" | "browser_fallback">[] = [
+                  { error: "Rate limited by F95Zone; try again later.", error_code: "rate_limited" },
+                  { error: "Thread not found; it may have been deleted or moved", error_code: "not_found" },
+                  { error: "Login is required to access this thread. The wLib browser extension is not connected; keep the browser where it is installed open and try again.", error_code: "login_required", browser_fallback: "unavailable" },
+                  { error: "[Errno -3] Temporary failure in name resolution", error_code: "scraper_error" },
+                ];
+                results = readMockGames().filter((game) => updateCheckUrl(game)).map((game, index) => ({
+                  id: game.id, title: game.title, current_version: game.version || "", latest_version: index < failures.length ? "" : game.latest_version || game.version || "",
+                  has_update: index >= failures.length && hasAvailableUpdate(game), error: "", error_code: "",
+                  ...(failures[index] ?? {}),
+                }));
+                if (results.some((result) => result.error)) {
+                  outcome = "failed";
+                  error = "Some games could not be checked; see results for details";
+                }
+              }
+              this._mockUpdateStatus = { ...this._mockUpdateStatus, running: false, outcome, error, checked: total, results };
+              if (!refreshInfo && !Array.isArray(args[0])) {
+                try { localStorage.setItem("wlib-mock-last-update-check", new Date().toISOString()); } catch { /* Preview just forgets it. */ }
+              }
             }, refreshInfo ? 7000 : 3000);
           }
           return { success: true, mock: true, total, delay_seconds: 2 };
@@ -1776,7 +1805,12 @@ export class MockBackend {
           delay_seconds: 2,
         };
       case "get_auto_check_setting":
-        try { return { frequency: localStorage.getItem("wlib-mock-auto-check") || "weekly", last_check: "" }; } catch { return { frequency: "weekly", last_check: "" }; }
+        try {
+          return {
+            frequency: localStorage.getItem("wlib-mock-auto-check") || "weekly",
+            last_check: localStorage.getItem("wlib-mock-last-update-check") || "",
+          };
+        } catch { return { frequency: "weekly", last_check: "" }; }
       case "maybe_auto_check":
         return { triggered: false, reason: "mock" };
       case "get_proton_download_status":

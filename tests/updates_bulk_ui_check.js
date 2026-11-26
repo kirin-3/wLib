@@ -13,10 +13,15 @@ async page => {
     const all = page.getByRole('checkbox', {name: /Select all/});
     await all.check();
     if (!(await page.getByText('Select all (5 selected)').count())) throw Error('select all count');
+    // Some rows selected: Select all is partly selected (indeterminate), not checked.
+    await page.getByRole('checkbox', {name: 'Select Update 1'}).uncheck();
+    if (!(await all.evaluate(box => box.indeterminate && !box.checked))) throw Error('select all is not indeterminate with 4 of 5 selected');
+    await all.check();
+    if (await all.evaluate(box => box.indeterminate)) throw Error('select all stays indeterminate after selecting all');
     await page.getByRole('button', {name:'Mark updated', exact:true}).first().click();
     await page.getByRole('button', {name:'Undo', exact:true}).click();
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('wlib-mock-games')).every(game => game.version === '1'));
-    const row = page.locator('.section-card').filter({has: page.getByRole('heading', {name: /^Updates Available/})});
+    const row = page.locator('.section-card').filter({has: page.getByRole('heading', {name: /^Updates available/})});
     await row.getByRole('button', {name:'More update actions', exact:true}).last().click();
     await page.getByRole('menuitem', {name:'Skip version 2', exact:true}).click();
     await page.getByRole('button', {name:'Undo', exact:true}).last().click();

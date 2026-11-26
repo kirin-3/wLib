@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {orderBuilds,preselect,settlePickerStart,downloadFailureMessage,needsExtensionSwitch,bulkDownloadDecision,pickerTargetVersion,platformLabel,selectableBuild,siteUnavailable,visibleArchivePassword} from './updateDownloads.ts';
+import {mirrorSubtitle,pickerVersionLine,orderBuilds,preselect,settlePickerStart,downloadFailureMessage,needsExtensionSwitch,bulkDownloadDecision,pickerTargetVersion,platformLabel,selectableBuild,siteUnavailable,visibleArchivePassword} from './updateDownloads.ts';
 import type {UpdateBuild} from '../services/api.ts';
 const build = (platform: string, kind = 'full'): UpdateBuild => ({label:platform,section:'',platform,kind,mirrors:[{link_id:platform,host:'mega',label:'MEGA',part:'',split:false}]});
 test('prefers native full builds and separates unsuitable platforms',()=>{
@@ -150,4 +150,24 @@ test('a late download answer only changes the picker that started it',async()=>{
     return events;
   })();
   assert.deepEqual(thrown, []);
+});
+
+test('the picker header labels the version change',()=>{
+  const game = {exe_path:'/g/game.sh',version:'1.0',latest_version:'2.0'};
+  assert.deepEqual(pickerVersionLine(game,''),{label:'Installed',from:'1.0',to:'2.0'});
+  assert.deepEqual(pickerVersionLine(game,' 2.1 '),{label:'Installed',from:'1.0',to:'2.1'},'the thread version wins once the links load');
+  assert.deepEqual(pickerVersionLine({...game,latest_version:'1.0'},''),{label:'Installed',from:'',to:'1.0'});
+  assert.deepEqual(pickerVersionLine({...game,version:''},''),{label:'Version',from:'',to:'2.0'});
+  const wish = {exe_path:'',version:'0.7',latest_version:''};
+  assert.deepEqual(pickerVersionLine(wish,''),{label:'Version',from:'',to:'0.7'},'a wishlisted game has no installed version');
+  assert.deepEqual(pickerVersionLine({...wish,latest_version:'0.8'},''),{label:'Version',from:'',to:'0.8'});
+  assert.equal(pickerVersionLine({exe_path:'',version:'',latest_version:''},''),null);
+});
+test('mirror subtitles say where the download runs',()=>{
+  const linux = build('linux');
+  const mirror = (extra: Partial<UpdateBuild['mirrors'][number]> = {}) => ({link_id:'m',host:'pixeldrain',label:'Pixeldrain',part:'',split:false,...extra});
+  assert.equal(mirrorSubtitle(mirror(),linux,'linux'),'In-app download');
+  assert.equal(mirrorSubtitle(mirror({host:'gofile'}),linux,'linux'),'Browser only');
+  assert.equal(mirrorSubtitle(mirror(),build('mac'),'linux'),'Browser only','another platform is browser only');
+  assert.equal(mirrorSubtitle(mirror({split:true,part:'2'}),build('mac'),'linux'),'Part 2 · browser only');
 });
