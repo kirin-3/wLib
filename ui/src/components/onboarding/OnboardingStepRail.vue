@@ -1,18 +1,31 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { computed } from "vue";
-import { IconCheck } from "@tabler/icons-vue";
+import { IconCheck, IconMinus } from "@tabler/icons-vue";
 import type { OnboardingStepId } from "../../services/api";
-import { ONBOARDING_STEPS, stepIndex, stepMeta, stepNumber } from "../../utils/onboarding";
+import { useOnboarding } from "../../composables/useOnboarding";
+import { gamesStore } from "../../composables/useGamesStore";
+import { ONBOARDING_STEPS, railStepStates, stepIndex, stepMeta, stepNumber } from "../../utils/onboarding";
 
 const props = defineProps<{
   step: OnboardingStepId;
   compact: boolean;
 }>();
 
+const onboarding = useOnboarding();
+
 const currentIdx = computed(() => stepIndex(props.step));
 const currentNum = computed(() => stepNumber(props.step));
 const currentMeta = computed(() => stepMeta(props.step));
+// A passed step shows a check only when it is set. Import with an empty
+// library and an unpaired extension show a hollow "not set" marker.
+const railItems = computed(() =>
+  railStepStates(props.step, {
+    importedCount: onboarding.importedCount.value,
+    pairedBrowsers: onboarding.pairedBrowsers.value,
+    libraryCount: gamesStore.games.value.length,
+  }),
+);
 const progressPercent = computed(() => {
   const spans = ONBOARDING_STEPS.length - 1;
   return spans > 0 ? (currentIdx.value / spans) * 100 : 0;
@@ -21,32 +34,34 @@ const progressPercent = computed(() => {
 
 <template>
   <!-- Compact top bar for narrow windows and compact TV widths -->
-  <div v-if="props.compact" class="rail-compact" aria-label="Setup progress">
+  <div v-if="props.compact" class="rail-compact" role="group" aria-label="Setup progress">
     <div class="rail-compact-head">
       <div class="rail-brand-mini">
-        <img src="/icon.svg" alt="" class="w-5 h-5 shrink-0" aria-hidden="true" />
+        <img src="/icon.svg" alt="" class="rail-logo rail-logo--mini" aria-hidden="true" />
         <span class="rail-compact-step">
           Step {{ currentNum }} of {{ ONBOARDING_STEPS.length }} · {{ currentMeta.label }}
         </span>
       </div>
     </div>
-    <div class="rail-segments" aria-hidden="true">
-      <span
-        v-for="(item, idx) in ONBOARDING_STEPS"
+    <ol class="rail-segments">
+      <li
+        v-for="item in railItems"
         :key="item.id"
         class="rail-segment"
-        :class="{
-          'rail-segment--done': idx < currentIdx,
-          'rail-segment--current': idx === currentIdx,
-        }"
-      />
-    </div>
+        :class="`rail-segment--${item.state}`"
+        :data-rail-step="item.id"
+        :data-rail-state="item.state"
+        :aria-current="item.state === 'current' ? 'step' : undefined"
+      >
+        <span class="sr-only">{{ item.srLabel }}</span>
+      </li>
+    </ol>
   </div>
 
   <!-- Wide vertical step rail -->
   <aside v-else class="rail-wide" aria-label="Setup steps">
     <div class="rail-brand">
-      <img src="/icon.svg" alt="" class="w-7 h-7 shrink-0" aria-hidden="true" />
+      <img src="/icon.svg" alt="" class="rail-logo" aria-hidden="true" />
       <div class="min-w-0">
         <p class="rail-brand-title">wLib setup</p>
         <p class="rail-brand-count">
@@ -55,28 +70,30 @@ const progressPercent = computed(() => {
       </div>
     </div>
 
-    <ol class="rail-list">
+    <div class="rail-steps">
       <div class="rail-track" aria-hidden="true">
         <div class="rail-track-fill" :style="{ height: `${progressPercent}%` }" />
       </div>
-      <li
-        v-for="(item, idx) in ONBOARDING_STEPS"
-        :key="item.id"
-        class="rail-item"
-        :class="{
-          'rail-item--done': idx < currentIdx,
-          'rail-item--current': idx === currentIdx,
-          'rail-item--upcoming': idx > currentIdx,
-        }"
-        :aria-current="idx === currentIdx ? 'step' : undefined"
-      >
-        <span class="rail-dot" aria-hidden="true">
-          <IconCheck v-if="idx < currentIdx" class="w-3.5 h-3.5" :stroke-width="2.5" />
-          <span v-else class="rail-dot-num">{{ idx + 1 }}</span>
-        </span>
-        <span class="rail-label">{{ item.label }}</span>
-      </li>
-    </ol>
+      <ol class="rail-list">
+        <li
+          v-for="(item, idx) in railItems"
+          :key="item.id"
+          class="rail-item"
+          :class="`rail-item--${item.state}`"
+          :data-rail-step="item.id"
+          :data-rail-state="item.state"
+          :aria-current="item.state === 'current' ? 'step' : undefined"
+        >
+          <span class="rail-dot" aria-hidden="true">
+            <IconCheck v-if="item.state === 'done'" class="w-3.5 h-3.5" :stroke-width="2.5" />
+            <IconMinus v-else-if="item.state === 'not-set'" class="w-3.5 h-3.5" :stroke-width="2.5" />
+            <span v-else class="rail-dot-num">{{ idx + 1 }}</span>
+          </span>
+          <span class="rail-label" aria-hidden="true">{{ item.label }}</span>
+          <span class="sr-only">{{ item.srLabel }}</span>
+        </li>
+      </ol>
+    </div>
   </aside>
 </template>
 
@@ -100,6 +117,27 @@ const progressPercent = computed(() => {
   padding: 0 0.25rem;
 }
 
+/* The logo is dark ink: a light plate keeps it readable on the dark rail. */
+.rail-logo {
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: 0 0 auto;
+  padding: 0.125rem;
+  border-radius: 0.4375rem;
+  background: color-mix(in srgb, var(--brand) 14%, var(--text-primary));
+}
+
+.rail-logo--mini {
+  width: 1.375rem;
+  height: 1.375rem;
+  padding: 0.0625rem;
+  border-radius: 0.3125rem;
+}
+
+.light .rail-logo {
+  background: color-mix(in srgb, var(--brand) 14%, var(--bg-surface));
+}
+
 .rail-brand-title {
   font-size: 0.9375rem;
   font-weight: 700;
@@ -111,6 +149,10 @@ const progressPercent = computed(() => {
   font-size: 0.75rem;
   color: var(--text-secondary);
   margin-top: 0.125rem;
+}
+
+.rail-steps {
+  position: relative;
 }
 
 .rail-list {
@@ -141,7 +183,7 @@ const progressPercent = computed(() => {
   transition: height 220ms ease-out;
 }
 
-:global(.motion-off) .rail-track-fill {
+.motion-off .rail-track-fill {
   transition: none;
 }
 
@@ -186,6 +228,12 @@ const progressPercent = computed(() => {
   background: var(--brand);
   border-color: var(--brand);
   color: var(--on-brand);
+}
+
+.rail-item--not-set .rail-dot {
+  border-style: dashed;
+  border-color: var(--border-hover);
+  color: var(--text-muted);
 }
 
 .rail-item--current .rail-dot {
@@ -245,6 +293,9 @@ const progressPercent = computed(() => {
 }
 
 .rail-segments {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0.375rem;
@@ -259,6 +310,12 @@ const progressPercent = computed(() => {
 .rail-segment--done,
 .rail-segment--current {
   background: var(--brand);
+}
+
+/* Not set: a hollow segment, so it does not read as done or as upcoming. */
+.rail-segment--not-set {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--text-muted);
 }
 
 .rail-segment--current {

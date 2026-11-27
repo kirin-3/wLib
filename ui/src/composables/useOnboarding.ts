@@ -8,6 +8,7 @@ export {
   type OnboardingDirection,
   type OnboardingMode,
   type PendingExtensionRunner,
+  type PendingImport,
 } from "../utils/onboarding";
 
 const singleton = createOnboardingController(api);

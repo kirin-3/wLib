@@ -21,53 +21,49 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div v-if="props.compact" class="ext-install-grid">
-    <div class="ext-install-card">
-      <div class="ext-install-head">
-        <span class="ext-badge ext-badge--chromium">Chrome / Chromium / Edge</span>
+  <div v-if="props.compact" class="ext-install-compact">
+    <div class="ext-install-grid">
+      <div class="ext-install-card">
+        <div class="ext-install-head">
+          <span class="ext-badge ext-badge--chromium">Chrome / Chromium / Edge</span>
+        </div>
+        <ol class="ext-install-list">
+          <li>
+            Open <code class="ext-code">chrome://extensions</code> and turn on
+            <strong class="ext-strong">Developer mode</strong>.
+          </li>
+          <li>
+            Click <strong class="ext-strong">Load unpacked</strong> and pick
+            <code class="ext-code ext-code--path">{{ props.chromeDirectory }}</code>.
+          </li>
+          <li>
+            Open an F95Zone page and allow the pairing prompt in wLib.
+          </li>
+        </ol>
       </div>
-      <ol class="ext-install-list">
-        <li>
-          Open <code class="ext-code">chrome://extensions</code> and turn on
-          <strong class="ext-strong">Developer mode</strong>.
-        </li>
-        <li>
-          Click <strong class="ext-strong">Load unpacked</strong> and pick
-          <code class="ext-code ext-code--path">{{ props.chromeDirectory }}</code>.
-        </li>
-        <li>
-          Open an F95Zone page and allow the pairing prompt in wLib.
-        </li>
-      </ol>
-      <button
-        v-if="props.showOpenButton"
-        type="button"
-        class="ui-card-btn ext-folder-btn"
-        @click="emit('openFolder')"
-      >
-        <IconFolderOpen class="w-4 h-4 shrink-0" aria-hidden="true" />
-        Open extension folder
-      </button>
+
+      <div class="ext-install-card">
+        <div class="ext-install-head">
+          <span class="ext-badge ext-badge--firefox">Firefox</span>
+        </div>
+        <ol class="ext-install-list">
+          <li>
+            Open <strong class="ext-strong">Add-ons and themes</strong> and click the gear icon.
+          </li>
+          <li>
+            Choose <strong class="ext-strong">Install Add-on From File…</strong> and pick
+            <code class="ext-code ext-code--path">{{ props.firefoxFile }}</code>.
+          </li>
+          <li>
+            Confirm the install and allow the pairing prompt in wLib.
+          </li>
+        </ol>
+      </div>
     </div>
 
-    <div class="ext-install-card">
-      <div class="ext-install-head">
-        <span class="ext-badge ext-badge--firefox">Firefox</span>
-      </div>
-      <ol class="ext-install-list">
-        <li>
-          Open <strong class="ext-strong">Add-ons and themes</strong> and click the gear icon.
-        </li>
-        <li>
-          Choose <strong class="ext-strong">Install Add-on From File…</strong> and pick
-          <code class="ext-code ext-code--path">{{ props.firefoxFile }}</code>.
-        </li>
-        <li>
-          Confirm the install and allow the pairing prompt in wLib.
-        </li>
-      </ol>
+    <!-- One folder holds both browsers' files, so one button serves both cards. -->
+    <div v-if="props.showOpenButton" class="ext-folder-row">
       <button
-        v-if="props.showOpenButton"
         type="button"
         class="ui-card-btn ext-folder-btn"
         @click="emit('openFolder')"
@@ -75,6 +71,7 @@ const emit = defineEmits<{
         <IconFolderOpen class="w-4 h-4 shrink-0" aria-hidden="true" />
         Open extension folder
       </button>
+      <span class="ext-folder-hint">It has the files for both browsers.</span>
     </div>
   </div>
 
@@ -256,11 +253,28 @@ const emit = defineEmits<{
   word-break: break-word;
 }
 
+.ext-install-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.ext-folder-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+
 .ext-folder-btn {
-  margin-top: auto;
-  align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+}
+
+.ext-folder-hint {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
 }
 </style>

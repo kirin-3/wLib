@@ -1,32 +1,36 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount } from "vue";
 import { IconFileImport, IconInfoCircle } from "@tabler/icons-vue";
 import { gamesStore } from "../../composables/useGamesStore";
-import { useOnboarding } from "../../composables/useOnboarding";
+import { useOnboarding, type PendingImport } from "../../composables/useOnboarding";
 import ExternalImportPanel from "../ExternalImportPanel.vue";
+import StepShell from "./StepShell.vue";
 
 const onboarding = useOnboarding();
 const existingCount = computed(() => gamesStore.games.value.length);
+
+// The overlay footer runs the panel's import; the panel hides its own button.
+let registered: PendingImport | null = null;
+const onPendingImport = (request: PendingImport | null) => {
+  registered = request;
+  onboarding.setPendingImport(request);
+};
+onBeforeUnmount(() => {
+  // Clear only our own request, never one a newer step instance set.
+  if (registered && onboarding.pendingImport.value === registered) {
+    onboarding.setPendingImport(null);
+  }
+  registered = null;
+});
 </script>
 
 <template>
-  <div class="step-shell">
-    <header class="step-header">
-      <div class="step-icon-tile" aria-hidden="true">
-        <IconFileImport class="w-6 h-6" />
-      </div>
-      <div class="min-w-0">
-        <h2 id="onboarding-step-title" tabindex="-1" class="step-title">
-          Import from other apps
-        </h2>
-        <p class="step-lead">
-          Bring your existing library from F95Checker, Atlas, XLibrary, f69,
-          Playnite, or Game-List. You can skip this step and import later.
-        </p>
-      </div>
-    </header>
-
+  <StepShell
+    :icon="IconFileImport"
+    title="Import from other apps"
+    lead="Bring your existing library from F95Checker, Atlas, XLibrary, f69, Playnite, or Game-List. You can skip this step and import later."
+  >
     <div
       v-if="existingCount > 0"
       class="existing-note"
@@ -46,54 +50,13 @@ const existingCount = computed(() => gamesStore.games.value.length);
         variant="embedded"
         @busy="onboarding.setBusy($event)"
         @imported="onboarding.recordImport($event)"
+        @pending-import="onPendingImport"
       />
     </div>
-  </div>
+  </StepShell>
 </template>
 
 <style scoped>
-.step-shell {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.step-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 1rem;
-}
-
-.step-icon-tile {
-  width: 3rem;
-  height: 3rem;
-  border-radius: 0.75rem;
-  background: var(--brand-glow);
-  color: var(--brand-text);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-}
-
-.step-title {
-  font-size: 1.5rem;
-  line-height: 1.25;
-  font-weight: 700;
-  color: var(--text-primary);
-  text-wrap: balance;
-  outline: none;
-}
-
-.step-lead {
-  margin-top: 0.35rem;
-  font-size: 0.875rem;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  text-wrap: pretty;
-  max-width: 38rem;
-}
-
 .existing-note {
   display: flex;
   align-items: flex-start;

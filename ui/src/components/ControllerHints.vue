@@ -2,12 +2,13 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { useEventListener } from "../composables/useEventListener";
-import { currentHints, defaultHints, type ControllerHint } from "../utils/controllerActions";
+import { CONTROLLER_HINTS_EVENT, currentHints, defaultHints, type ControllerHint } from "../utils/controllerActions";
 const hints = ref<ControllerHint[]>(defaultHints);
 const update = () => { hints.value = currentHints(); };
 onMounted(update);
 useEventListener(document, "focusin", update);
 useEventListener(window, "wlib-controller-action", update);
+useEventListener(window, CONTROLLER_HINTS_EVENT, update);
 </script>
 <template>
   <div class="controller-hints" aria-label="Controller shortcuts">

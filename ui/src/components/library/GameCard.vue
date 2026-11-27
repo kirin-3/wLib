@@ -551,7 +551,7 @@ const targetMenuId = computed(() => `launch-targets-${props.game.id}`);
   transform: translateY(-2px);
 }
 
-:global(.motion-off) .game-card:not(.is-running):hover {
+.motion-off .game-card:not(.is-running):hover {
   border-color: var(--border);
   box-shadow: var(--shadow-card);
   transform: none;

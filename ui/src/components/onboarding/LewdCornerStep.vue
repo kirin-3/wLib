@@ -6,6 +6,7 @@ import { api } from "../../services/api";
 import { useSaveStatus } from "../../composables/useSaveStatus";
 import { useOnboarding } from "../../composables/useOnboarding";
 import SettingRow from "../settings/SettingRow.vue";
+import StepShell from "./StepShell.vue";
 
 const onboarding = useOnboarding();
 const saveStatus = useSaveStatus();
@@ -37,27 +38,17 @@ const onToggle = async (event: Event) => {
 </script>
 
 <template>
-  <div class="step-shell">
-    <header class="step-header">
-      <div class="step-icon-tile" aria-hidden="true">
-        <IconWorld class="w-6 h-6" />
-      </div>
-      <div class="min-w-0">
-        <h2 id="onboarding-step-title" tabindex="-1" class="step-title">
-          LewdCorner
-        </h2>
-        <p class="step-lead">
-          Turn this on if you also follow or download games from LewdCorner.
-        </p>
-      </div>
-    </header>
-
+  <StepShell
+    :icon="IconWorld"
+    title="LewdCorner"
+    lead="Turn this on if you also follow or download games from LewdCorner."
+  >
     <section class="step-card">
       <SettingRow
         label="Use LewdCorner"
         control-id="onboarding-lc-enabled"
         help-id="onboarding-lc-help"
-        help="Show LewdCorner thread fields and fill in LewdCorner threads for your games from the catalog. You can configure LC Plus later in Settings → Sources."
+        help="Show LewdCorner thread fields and fill in LewdCorner threads for your games from the catalog. If you have LC Plus, the paid LewdCorner tier, you can set it up later in Settings → Sources."
         layout="inline"
         :save-state="saveStatus.state.value"
         :save-error="saveStatus.error.value"
@@ -93,7 +84,10 @@ const onToggle = async (event: Event) => {
     </div>
 
     <section class="explain-card">
-      <h3 class="explain-heading">What Use LewdCorner adds</h3>
+      <h3 class="explain-heading">
+        <IconCheck class="w-4 h-4 shrink-0 check-icon" aria-hidden="true" />
+        <span>What you get when it is on</span>
+      </h3>
       <ul class="explain-list">
         <li v-for="item in highlights" :key="item">
           <IconCheck class="w-3.5 h-3.5 shrink-0 mt-1 check-icon" aria-hidden="true" />
@@ -101,52 +95,10 @@ const onToggle = async (event: Event) => {
         </li>
       </ul>
     </section>
-  </div>
+  </StepShell>
 </template>
 
 <style scoped>
-.step-shell {
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-}
-
-.step-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 1rem;
-}
-
-.step-icon-tile {
-  width: 3rem;
-  height: 3rem;
-  border-radius: 0.75rem;
-  background: var(--brand-glow);
-  color: var(--brand-text);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-}
-
-.step-title {
-  font-size: 1.5rem;
-  line-height: 1.25;
-  font-weight: 700;
-  color: var(--text-primary);
-  text-wrap: balance;
-  outline: none;
-}
-
-.step-lead {
-  margin-top: 0.35rem;
-  font-size: 0.875rem;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  text-wrap: pretty;
-  max-width: 38rem;
-}
-
 .step-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -185,6 +137,9 @@ const onToggle = async (event: Event) => {
 }
 
 .explain-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   font-size: 0.875rem;
   font-weight: 650;
   color: var(--text-primary);

@@ -14,6 +14,7 @@ import { notifyError } from "../../utils/toast";
 import { useEventListener } from "../../composables/useEventListener";
 import { useOnboarding } from "../../composables/useOnboarding";
 import ExtensionInstallSteps from "../ExtensionInstallSteps.vue";
+import StepShell from "./StepShell.vue";
 
 const onboarding = useOnboarding();
 const platformCapabilities = ref<PlatformCapabilities>({
@@ -60,10 +61,13 @@ useEventListener(window, EXTENSION_PAIRING_EVENT, () => {
 });
 
 onMounted(() => {
+  void checkPairing();
+  // Gaming Mode has no desktop browser, so the step shows no install steps
+  // and does not poll. The pairing event still updates a paired state.
+  if (gamingMode.value) return;
   void loadPlatformCapabilities().then((caps) => {
     if (!disposed) platformCapabilities.value = caps;
   });
-  void checkPairing();
   pollTimer = setInterval(() => {
     void checkPairing();
   }, 2000);
@@ -79,23 +83,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="step-shell">
-    <header class="step-header">
-      <div class="step-icon-tile" aria-hidden="true">
-        <IconPuzzle class="w-6 h-6" />
-      </div>
-      <div class="min-w-0">
-        <h2 id="onboarding-step-title" tabindex="-1" class="step-title">
-          Browser extension
-        </h2>
-        <p class="step-lead">
-          Adds “Add to wLib” buttons to F95Zone, LewdCorner, DLsite, VNDB, and
-          Ryuugames pages, and enables in-app downloads.
-        </p>
-      </div>
-    </header>
-
-    <div class="status-row">
+  <StepShell
+    :icon="IconPuzzle"
+    title="Browser extension"
+    lead="Adds “Add to wLib” buttons to F95Zone, LewdCorner, DLsite, VNDB, and Ryuugames pages, and enables in-app downloads."
+  >
+    <div v-if="!gamingMode || pairedLabel" class="status-row">
       <div
         class="status-pill"
         :class="pairedLabel ? 'status-pill--paired' : 'status-pill--waiting'"
@@ -109,67 +102,41 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="gamingMode" class="gaming-note" role="status" data-testid="extension-gaming-mode-note">
-      <IconDeviceGamepad2 class="w-4 h-4 shrink-0 mt-0.5 gaming-note-icon" aria-hidden="true" />
-      <span>
-        You are in Steam Gaming Mode. The browser extension is set up from a
-        desktop browser later.
-      </span>
-    </div>
+    <section
+      v-if="gamingMode"
+      class="gaming-card"
+      aria-labelledby="extension-gaming-mode-title"
+      data-testid="extension-gaming-mode-card"
+    >
+      <IconDeviceGamepad2 class="w-5 h-5 shrink-0 gaming-card-icon" aria-hidden="true" />
+      <div class="min-w-0">
+        <h3 id="extension-gaming-mode-title" class="gaming-card-title">
+          {{ pairedLabel ? "Change it later in Desktop Mode" : "Set it up later in Desktop Mode" }}
+        </h3>
+        <p class="gaming-card-text">
+          The extension runs in a desktop browser. Steam Gaming Mode has no
+          desktop browser.
+        </p>
+        <p class="gaming-card-text">
+          In Desktop Mode, open <strong class="gaming-card-strong">Extension</strong>
+          in the wLib sidebar.
+          {{ pairedLabel ? "You can add or remove a browser there." : "That page shows the steps." }}
+        </p>
+      </div>
+    </section>
 
     <ExtensionInstallSteps
+      v-else
       :chrome-directory="chromeExtensionDirectory"
       :firefox-file="firefoxExtensionFile"
       compact
       show-open-button
       @open-folder="openExtensionFolder"
     />
-  </div>
+  </StepShell>
 </template>
 
 <style scoped>
-.step-shell {
-  display: flex;
-  flex-direction: column;
-  gap: 1.125rem;
-}
-
-.step-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 1rem;
-}
-
-.step-icon-tile {
-  width: 3rem;
-  height: 3rem;
-  border-radius: 0.75rem;
-  background: var(--brand-glow);
-  color: var(--brand-text);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-}
-
-.step-title {
-  font-size: 1.5rem;
-  line-height: 1.25;
-  font-weight: 700;
-  color: var(--text-primary);
-  text-wrap: balance;
-  outline: none;
-}
-
-.step-lead {
-  margin-top: 0.35rem;
-  font-size: 0.875rem;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  text-wrap: pretty;
-  max-width: 38rem;
-}
-
 .status-row {
   display: flex;
   align-items: center;
@@ -212,7 +179,7 @@ onUnmounted(() => {
   50% { opacity: 0.45; transform: scale(0.85); }
 }
 
-:global(.motion-off) .waiting-dot {
+.motion-off .waiting-dot {
   animation: none;
 }
 
@@ -222,20 +189,39 @@ onUnmounted(() => {
   }
 }
 
-.gaming-note {
+.gaming-card {
   display: flex;
   align-items: flex-start;
-  gap: 0.55rem;
-  padding: 0.75rem 0.9rem;
-  border-radius: 0.625rem;
+  gap: 0.75rem;
+  max-width: 38rem;
+  padding: 1rem 1.125rem;
+  border-radius: 0.75rem;
   background: var(--bg-raised);
   border: 1px solid var(--border);
-  font-size: 0.8125rem;
-  line-height: 1.45;
+}
+
+.gaming-card-icon {
+  margin-top: 0.1rem;
+  color: var(--brand-text);
+}
+
+.gaming-card-title {
+  font-size: 0.9375rem;
+  line-height: 1.35;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
-.gaming-note-icon {
-  color: var(--brand-text);
+.gaming-card-text {
+  margin-top: 0.35rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+
+.gaming-card-strong {
+  color: var(--text-primary);
+  font-weight: 600;
 }
 </style>

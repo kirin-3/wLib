@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chooseScope, dispatchController, defaultHints, resolveHints, handleScopedBack } from "./controllerActions.ts";
+import { chooseScope, dispatchController, defaultHints, resolveHints, handleScopedBack, scrollContainer } from "./controllerActions.ts";
 import { modalStack } from "./modalKeyboard.ts";
 class ElementStub {
   parent: ElementStub | null = null;
@@ -45,4 +45,25 @@ test("scoped back reports whether the handler consumed it", () => {
   assert.equal(handleScopedBack(scope), true);
   assert.equal(handleScopedBack({ ...scope, handlers: { back: () => false } }), false);
   assert.equal(handleScopedBack(undefined), false);
+});
+test("scroll falls back to the scope's marked scroll area, not the page behind it", () => {
+  type Box = { parentElement: Box | null; overflowY: string; scrollHeight: number; clientHeight: number };
+  const box = (overflowY: string, scrollHeight: number, clientHeight: number, parentElement: Box | null = null): Box => ({ parentElement, overflowY, scrollHeight, clientHeight });
+  const page = box("auto", 2000, 800);
+  const dialog = box("hidden", 600, 600), body = box("auto", 900, 400, dialog), footerButton = box("visible", 40, 40, dialog);
+  const root = { querySelector: (selector: string) => (selector === "[data-controller-scroll]" ? body : null) };
+  Object.assign(globalThis, {
+    getComputedStyle: (node: Box) => ({ overflowY: node.overflowY }),
+    document: { querySelector: (selector: string) => (selector === "main" ? page : null), documentElement: page },
+  });
+  const pick = (el: Box, scope: unknown) => scrollContainer(el as unknown as HTMLElement, scope as HTMLElement | null) as unknown as Box;
+  // Focus inside the scroll area uses the nearest scrolling parent.
+  const item = box("visible", 30, 30, body);
+  assert.equal(pick(item, root), body);
+  // A footer button has no scrolling parent: the marked body scrolls.
+  assert.equal(pick(footerButton, root), body);
+  // Without a scope, or when the marked area fits, the page scrolls as before.
+  assert.equal(pick(footerButton, null), page);
+  body.scrollHeight = 400;
+  assert.equal(pick(footerButton, root), page);
 });

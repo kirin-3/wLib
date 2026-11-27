@@ -102,15 +102,24 @@ const previewChips = [
   display: flex;
   align-items: center;
   justify-content: center;
+  /* The logo is dark ink, so the tile stays light in both themes. */
   background: radial-gradient(
     circle at 50% 35%,
-    color-mix(in srgb, var(--brand) 22%, var(--bg-raised)),
-    var(--bg-inset)
+    color-mix(in srgb, var(--brand) 14%, var(--text-primary)),
+    color-mix(in srgb, var(--brand) 26%, var(--text-secondary))
   );
   border: 1px solid color-mix(in srgb, var(--brand) 34%, var(--border));
   box-shadow: var(--shadow-brand);
   margin-bottom: 1.5rem;
   animation: welcome-icon-in 300ms ease-out both;
+}
+
+.light .welcome-logo-wrap {
+  background: radial-gradient(
+    circle at 50% 35%,
+    color-mix(in srgb, var(--brand) 22%, var(--bg-raised)),
+    var(--bg-inset)
+  );
 }
 
 .welcome-logo {
@@ -130,7 +139,7 @@ const previewChips = [
   }
 }
 
-:global(.motion-off) .welcome-logo-wrap {
+.motion-off .welcome-logo-wrap {
   animation: none;
 }
 

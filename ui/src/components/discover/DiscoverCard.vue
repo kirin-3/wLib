@@ -149,7 +149,7 @@ const activate = (event: Event) => emit("activate", props.card, event.currentTar
   box-shadow: 0 4px 20px var(--brand-glow);
   transform: translateY(-2px);
 }
-:global(.motion-off) .discover-card:hover {
+.motion-off .discover-card:hover {
   box-shadow: var(--shadow-card);
   transform: none;
 }

@@ -1187,8 +1187,8 @@ const closePreview = () => {
   }
 }
 /* The motion setting and the system setting stop the turn; the icon stays. */
-:global(.motion-off) .discover-count-spinner,
-:global(.motion-off) .discover-retry-spinner {
+.motion-off .discover-count-spinner,
+.motion-off .discover-retry-spinner {
   animation: none;
 }
 @media (prefers-reduced-motion: reduce) {

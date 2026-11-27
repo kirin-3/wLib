@@ -10,27 +10,44 @@ import {
   IconWorld,
 } from "@tabler/icons-vue";
 import { useOnboarding } from "../../composables/useOnboarding";
-import { buildDoneSummary, type OnboardingIconKey } from "../../utils/onboarding";
+import { gamesStore } from "../../composables/useGamesStore";
+import { gamingMode } from "../../utils/tvMode";
+import {
+  buildDoneSummary,
+  doneHeadline,
+  type OnboardingSummaryIconKey,
+  type OnboardingSummaryRow,
+} from "../../utils/onboarding";
 
 const onboarding = useOnboarding();
 
-const iconMap: Record<OnboardingIconKey, Component> = {
-  sparkles: IconCheck,
+const iconMap: Record<OnboardingSummaryIconKey, Component> = {
   book: IconBook2,
   world: IconWorld,
   import: IconFileImport,
   puzzle: IconPuzzle,
-  check: IconCheck,
 };
+
+const progress = computed(() => ({
+  importedCount: onboarding.importedCount.value,
+  pairedBrowsers: onboarding.pairedBrowsers.value,
+  libraryCount: gamesStore.games.value.length,
+}));
 
 const summaryRows = computed(() =>
   buildDoneSummary({
+    ...progress.value,
     catalogEnabled: onboarding.catalogEnabled.value,
     lcEnabled: onboarding.lcEnabled.value,
-    importedCount: onboarding.importedCount.value,
-    pairedBrowsers: onboarding.pairedBrowsers.value,
+    gamingMode: gamingMode.value,
   }),
 );
+
+const headline = computed(() => doneHeadline(progress.value));
+
+const openStep = (row: OnboardingSummaryRow) => {
+  if (row.action) void onboarding.goTo(row.action.step);
+};
 
 onMounted(() => {
   void onboarding.refreshPairing();
@@ -38,18 +55,22 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="done-step">
+  <div class="done-step" :data-done-state="headline.allSet ? 'all-set' : 'left'">
     <div class="done-head">
-      <div class="done-badge" aria-hidden="true">
+      <div
+        class="done-badge"
+        :class="{ 'done-badge--calm': !headline.allSet }"
+        aria-hidden="true"
+      >
         <IconCheck class="w-8 h-8" :stroke-width="2.5" />
       </div>
       <h2 id="onboarding-step-title" tabindex="-1" class="done-title">
-        You're all set
+        {{ headline.title }}
       </h2>
-      <p class="done-lead">
-        Here is a summary of your setup. You can change any of these choices at
-        any time in Settings.
+      <p v-if="headline.leftText" class="done-left" data-testid="done-left-text">
+        {{ headline.leftText }}
       </p>
+      <p class="done-lead">{{ headline.lead }}</p>
     </div>
 
     <ul class="summary-list" aria-label="Setup summary">
@@ -58,6 +79,7 @@ onMounted(() => {
         :key="row.id"
         class="summary-row"
         :data-summary-row="row.id"
+        :data-summary-set="row.set ? 'true' : 'false'"
       >
         <div class="summary-left">
           <span class="summary-icon" aria-hidden="true">
@@ -65,9 +87,23 @@ onMounted(() => {
           </span>
           <span class="summary-label">{{ row.label }}</span>
         </div>
-        <span class="summary-pill" :class="`summary-pill--${row.tone}`">
-          {{ row.value }}
-        </span>
+        <div class="summary-right">
+          <span class="summary-pill" :class="`summary-pill--${row.tone}`">
+            {{ row.value }}
+          </span>
+          <button
+            v-if="row.action"
+            type="button"
+            class="ui-card-btn summary-action"
+            :data-summary-action="row.id"
+            @click="openStep(row)"
+          >
+            {{ row.action.label }}
+          </button>
+          <span v-else-if="row.note" class="summary-note" :data-summary-note="row.id">
+            {{ row.note }}
+          </span>
+        </div>
       </li>
     </ul>
 
@@ -110,6 +146,14 @@ onMounted(() => {
   margin-bottom: 1rem;
 }
 
+/* Something is left for later: a calm check, not a celebration. */
+.done-badge--calm {
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-hover);
+  box-shadow: none;
+}
+
 .done-title {
   font-size: 1.625rem;
   line-height: 1.25;
@@ -117,6 +161,18 @@ onMounted(() => {
   color: var(--text-primary);
   text-wrap: balance;
   outline: none;
+}
+
+.done-left {
+  margin-top: 0.45rem;
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.done-left + .done-lead {
+  margin-top: 0.2rem;
 }
 
 .done-lead {
@@ -176,6 +232,24 @@ onMounted(() => {
   font-size: 0.875rem;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.summary-right {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.summary-action {
+  padding: 0.3125rem 0.75rem;
+}
+
+.summary-note {
+  font-size: 0.75rem;
+  line-height: 1.3;
+  color: var(--text-secondary);
 }
 
 .summary-pill {

@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch, type Component } from "vue";
+import { computed, nextTick, onMounted, ref, useTemplateRef, watch, type Component } from "vue";
 import {
   IconAlertTriangle,
   IconFileImport,
@@ -31,10 +31,21 @@ const props = withDefaults(
   },
 );
 
+// Embedded mode hides the panel's own Import button. The host gets a
+// "pending-import" request instead and shows its own primary action.
+interface ExternalImportRequest {
+  count: number;
+  run: () => Promise<boolean>;
+}
+
 const emit = defineEmits<{
   busy: [value: boolean];
   imported: [result: ExternalLibraryImportResponse];
+  "pending-import": [request: ExternalImportRequest | null];
 }>();
+
+const embedded = computed(() => props.variant === "embedded");
+const feedbackRef = useTemplateRef<HTMLElement>("feedbackRef");
 
 interface ExternalSectionOption {
   id: LibraryBackupSection;
@@ -131,6 +142,12 @@ const externalAvailableOptions = computed(() => {
 const canImportExternal = computed(() => {
   // Identity and versions always import, so an empty section list is valid.
   return Boolean(externalPreview.value);
+});
+// Games the import adds or updates. Ambiguous and skipped games stay out.
+const externalImportCount = computed(() => {
+  const counts = externalCounts.value;
+  if (!externalPreview.value || !counts) return 0;
+  return Math.max(0, (counts.new_games ?? 0) + (counts.matched_games ?? 0));
 });
 
 const isSelected = (id: LibraryBackupSection) => externalSections.value.includes(id);
@@ -238,8 +255,8 @@ const inspectExternal = async () => {
   }
 };
 
-const runExternalImport = async () => {
-  if (externalImporting.value || !externalPreview.value) return;
+const runExternalImport = async (): Promise<boolean> => {
+  if (externalImporting.value || !externalPreview.value) return false;
   externalMessage.value = "";
   externalError.value = "";
   externalResult.value = null;
@@ -253,7 +270,7 @@ const runExternalImport = async () => {
     });
     if (!result || result.success === false) {
       externalError.value = result?.error || "Import failed.";
-      return;
+      return false;
     }
     externalResult.value = result;
     externalMessage.value =
@@ -262,13 +279,32 @@ const runExternalImport = async () => {
     window.dispatchEvent(new Event("wlib-refresh-library"));
     externalPreview.value = null;
     emit("imported", result);
+    return true;
   } catch (error) {
     externalError.value = `Import failed: ${String(error)}`;
+    return false;
   } finally {
     externalImporting.value = false;
     emit("busy", false);
   }
 };
+
+watch(
+  externalImportCount,
+  (count) => {
+    emit("pending-import", count > 0 ? { count, run: runExternalImport } : null);
+  },
+  { immediate: true },
+);
+
+// In embedded mode the result or error sits at the end of a scrolling step.
+// Bring it into view so the user sees what happened.
+watch([externalError, externalResult], async ([error, result]) => {
+  if (!embedded.value || (!error && !result)) return;
+  await nextTick();
+  const el = feedbackRef.value;
+  if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
+});
 
 watch(externalSource, () => {
   externalDetectRequest++;
@@ -366,6 +402,7 @@ onMounted(() => {
       <button
         type="button"
         class="backup-secondary backup-inspect"
+        :data-controller-primary="embedded && !externalImportCount && !externalResult ? '' : undefined"
         :disabled="externalInspecting || externalImporting || !externalPath"
         @click="inspectExternal"
       >
@@ -383,6 +420,15 @@ onMounted(() => {
           <span v-if="(externalCounts?.skipped_unreadable ?? 0) > 0">Unreadable: {{ externalCounts?.skipped_unreadable }}</span>
           <span>Paths dropped: {{ externalCounts?.dropped_paths ?? 0 }}</span>
           <span v-if="externalAvailableSections.includes('covers')">Covers to copy: {{ externalCoversToCopy }}</span>
+        </div>
+
+        <div
+          v-if="embedded && externalImportCount === 0"
+          class="backup-note"
+          data-testid="external-import-nothing"
+        >
+          <IconInfoCircle />
+          <span>This file has no games to import. Pick another file or go to the next step.</span>
         </div>
 
         <div class="backup-field">
@@ -410,6 +456,9 @@ onMounted(() => {
               <span class="backup-option-copy">
                 <strong>Overwrite</strong>
                 <em>Replaces your values with the source's.</em>
+                <em class="backup-option-warning">
+                  wLib makes no backup first. You cannot undo this.
+                </em>
               </span>
             </label>
           </div>
@@ -457,8 +506,8 @@ onMounted(() => {
       </div>
     </section>
 
-    <footer class="backup-footer">
-      <div class="backup-feedback">
+    <footer v-if="!embedded || externalError || externalResult" class="backup-footer">
+      <div ref="feedbackRef" class="backup-feedback">
         <p v-if="externalError" class="backup-error" role="alert">
           {{ externalError }}
         </p>
@@ -479,7 +528,7 @@ onMounted(() => {
         </div>
       </div>
 
-      <div class="backup-actions">
+      <div v-if="!embedded" class="backup-actions">
         <button
           type="button"
           class="backup-primary"
@@ -656,6 +705,10 @@ onMounted(() => {
   color: var(--text-muted);
   font-size: 0.75rem;
   font-style: normal;
+}
+
+.backup-option-copy .backup-option-warning {
+  color: var(--text-secondary);
 }
 
 .backup-inspect {

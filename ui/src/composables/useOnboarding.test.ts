@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createOnboardingController, type OnboardingApiClient } from "../utils/onboarding.ts";
+import {
+  createOnboardingController,
+  importActionLabel,
+  type OnboardingApiClient,
+  type PendingImport,
+} from "../utils/onboarding.ts";
 import type { OnboardingFinishStatus, OnboardingStateResponse, OnboardingStepId } from "../services/api.ts";
 
 function makeMockClient(initial: OnboardingStateResponse = { success: true, status: "", step: "", catalog_held: true }) {
@@ -166,4 +171,147 @@ test("Done twice finishes once", async () => {
   const [a, b] = await Promise.all([onboarding.finish(), onboarding.finish()]);
   assert.deepEqual([a, b], [true, false]);
   assert.equal(calls.filter((c) => c.name === "finishOnboarding").length, 1);
+});
+
+test("a waiting import blocks Next; advance runs it and stays on the step", async () => {
+  const { client } = makeMockClient({ success: true, status: "", step: "import", catalog_held: false });
+  const onboarding = createOnboardingController(client);
+  assert.equal(await onboarding.start(), true);
+  assert.equal(onboarding.step.value, "import");
+
+  let runs = 0;
+  const pending: PendingImport = {
+    count: 3,
+    run: async () => {
+      runs++;
+      // The panel sets busy while it imports and clears the request on success.
+      onboarding.setBusy(true);
+      await Promise.resolve();
+      onboarding.recordImport({ success: true, created: 3, updated: 0 });
+      onboarding.setPendingImport(null);
+      onboarding.setBusy(false);
+      return true;
+    },
+  };
+  onboarding.setPendingImport(pending);
+
+  // Plain Next must not drop the preview.
+  assert.equal(await onboarding.next(), false);
+  assert.equal(onboarding.step.value, "import");
+
+  // advance() (footer primary and RB) runs the import and stays on the step.
+  assert.equal(await onboarding.advance(), true);
+  assert.equal(runs, 1);
+  assert.equal(onboarding.step.value, "import");
+  assert.equal(onboarding.importedCount.value, 3);
+  assert.equal(onboarding.pendingImport.value, null);
+
+  // With no waiting import, advance() moves on like Next.
+  assert.equal(await onboarding.advance(), true);
+  assert.equal(onboarding.step.value, "extension");
+});
+
+test("advance does nothing while busy, and a failed import keeps the preview", async () => {
+  const { client } = makeMockClient({ success: true, status: "", step: "import", catalog_held: false });
+  const onboarding = createOnboardingController(client);
+  await onboarding.start();
+  let runs = 0;
+  onboarding.setPendingImport({ count: 2, run: async () => { runs++; return false; } });
+
+  onboarding.setBusy(true);
+  assert.equal(await onboarding.advance(), false);
+  assert.equal(runs, 0);
+  onboarding.setBusy(false);
+
+  assert.equal(await onboarding.advance(), false);
+  assert.equal(runs, 1);
+  assert.equal(onboarding.step.value, "import");
+  assert.notEqual(onboarding.pendingImport.value, null);
+  assert.equal(onboarding.importedCount.value, 0);
+});
+
+test("skipImport drops the preview and moves on without importing", async () => {
+  const { client, calls } = makeMockClient({ success: true, status: "", step: "import", catalog_held: false });
+  const onboarding = createOnboardingController(client);
+  await onboarding.start();
+  let runs = 0;
+  onboarding.setPendingImport({ count: 5, run: async () => { runs++; return true; } });
+
+  assert.equal(await onboarding.skipImport(), true);
+  assert.equal(runs, 0);
+  assert.equal(onboarding.step.value, "extension");
+  assert.equal(onboarding.pendingImport.value, null);
+  assert.equal(onboarding.importedCount.value, 0);
+  assert.ok(calls.some((c) => c.name === "setOnboardingStep" && c.arg === "extension"));
+
+  // skipImport is only for the import step.
+  assert.equal(await onboarding.skipImport(), false);
+  assert.equal(onboarding.step.value, "extension");
+});
+
+test("Back from the import step clears the waiting import", async () => {
+  const { client } = makeMockClient({ success: true, status: "", step: "import", catalog_held: false });
+  const onboarding = createOnboardingController(client);
+  await onboarding.start();
+  onboarding.setPendingImport({ count: 1, run: async () => true });
+  assert.equal(await onboarding.back(), true);
+  assert.equal(onboarding.step.value, "lc");
+  assert.equal(onboarding.pendingImport.value, null);
+  // Next from LC is not blocked.
+  assert.equal(await onboarding.next(), true);
+  assert.equal(onboarding.step.value, "import");
+});
+
+test("importActionLabel counts games", () => {
+  assert.equal(importActionLabel(1), "Import 1 game");
+  assert.equal(importActionLabel(146), "Import 146 games");
+});
+
+test("goTo jumps back to an earlier step, saves it, and Next walks forward again", async () => {
+  const { client, calls } = makeMockClient({ success: true, status: "", step: "done", catalog_held: false });
+  const onboarding = createOnboardingController(client);
+  assert.equal(await onboarding.start(), true);
+  assert.equal(onboarding.step.value, "done");
+
+  // A forward jump, or a jump to the same step, does nothing.
+  assert.equal(await onboarding.goTo("done"), false);
+
+  assert.equal(await onboarding.goTo("import"), true);
+  assert.equal(onboarding.step.value, "import");
+  assert.equal(onboarding.direction.value, "backward");
+  assert.deepEqual(calls.filter((c) => c.name === "setOnboardingStep").at(-1), { name: "setOnboardingStep", arg: "import" });
+  assert.equal(await onboarding.goTo("extension"), false);
+  assert.equal(onboarding.step.value, "import");
+
+  assert.equal(await onboarding.next(), true);
+  assert.equal(onboarding.step.value, "extension");
+  assert.equal(onboarding.direction.value, "forward");
+  assert.equal(await onboarding.next(), true);
+  assert.equal(onboarding.step.value, "done");
+  // Passing the import step on the way back does not touch the catalog hold.
+  assert.equal(calls.filter((c) => c.name === "releaseCatalogHold").length, 0);
+});
+
+test("goTo does nothing while busy, clears a waiting import, and saves nothing in replay", async () => {
+  const { client } = makeMockClient({ success: true, status: "", step: "import", catalog_held: false });
+  const onboarding = createOnboardingController(client);
+  await onboarding.start();
+  onboarding.setPendingImport({ count: 2, run: async () => true });
+
+  onboarding.setBusy(true);
+  assert.equal(await onboarding.goTo("welcome"), false);
+  assert.equal(onboarding.step.value, "import");
+  onboarding.setBusy(false);
+
+  assert.equal(await onboarding.goTo("catalog"), true);
+  assert.equal(onboarding.pendingImport.value, null);
+
+  const replay = makeMockClient();
+  const replayed = createOnboardingController(replay.client);
+  await replayed.replay();
+  await replayed.next();
+  await replayed.next();
+  assert.equal(await replayed.goTo("welcome"), true);
+  assert.equal(replayed.step.value, "welcome");
+  assert.equal(replay.calls.filter((c) => c.name === "setOnboardingStep").length, 0);
 });

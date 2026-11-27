@@ -225,11 +225,16 @@ test("ExternalImportPanel emits busy true/false and imported result, and hides p
       walkNodes(pageContainer).some((node) => node.type === "h3" && textOf(node).includes("From another app")),
       "page variant should include the page-level heading",
     );
+    assert.ok(
+      walkNodes(pageContainer).some((node) => node.type === "button" && textOf(node).includes("Import Selected")),
+      "page variant keeps its own Import Selected button",
+    );
     pageRoot.unmount();
 
     // 2. Embedded variant hides the page heading, and emits busy true -> false + imported.
     const busyEvents: boolean[] = [];
     const importedEvents: unknown[] = [];
+    const pendingEvents: Array<{ count: number; run: () => Promise<boolean> } | null> = [];
     const embeddedRenderer = makeNoopRenderer();
     const embeddedApp = embeddedRenderer.createApp(
       defineComponent({
@@ -238,6 +243,8 @@ test("ExternalImportPanel emits busy true/false and imported result, and hides p
             variant: "embedded",
             onBusy: (value: boolean) => busyEvents.push(value),
             onImported: (res: unknown) => importedEvents.push(res),
+            onPendingImport: (req: { count: number; run: () => Promise<boolean> } | null) =>
+              pendingEvents.push(req),
           }),
       }),
     );
@@ -282,9 +289,15 @@ test("ExternalImportPanel emits busy true/false and imported result, and hides p
       await nextTick();
     }
 
-    const importBtn = findButton("Import Selected");
-    assert.ok(importBtn, "Import Selected button should exist");
-    importBtn.dispatch("click", {});
+    assert.equal(
+      findButton("Import Selected"),
+      undefined,
+      "embedded variant must hide its own Import Selected button",
+    );
+    const pending = pendingEvents[pendingEvents.length - 1];
+    assert.ok(pending, "embedded variant should emit a pending import after inspect");
+    assert.equal(pending.count, 4, "count is new plus matched games");
+    const runResult = pending.run();
     await nextTick();
 
     assert.deepEqual(busyEvents, [true], "busy should emit true while import is running");
@@ -299,6 +312,8 @@ test("ExternalImportPanel emits busy true/false and imported result, and hides p
 
     assert.deepEqual(busyEvents, [true, false], "busy should emit false after import finishes");
     assert.deepEqual(importedEvents, [importResult], "imported should emit the backend result");
+    assert.equal(await runResult, true, "run resolves true on success");
+    assert.equal(pendingEvents[pendingEvents.length - 1], null, "pending import clears after success");
     embeddedApp.unmount();
   } finally {
     await server.close();

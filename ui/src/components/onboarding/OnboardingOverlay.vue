@@ -1,14 +1,15 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, nextTick, ref, useTemplateRef, watch, type Component } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useTemplateRef, watch, type Component } from "vue";
 import { useRouter } from "vue-router";
-import { IconArrowLeft, IconArrowRight, IconCheck } from "@tabler/icons-vue";
+import { IconArrowLeft, IconArrowRight, IconCheck, IconFileImport, IconLoader2 } from "@tabler/icons-vue";
 import type { OnboardingStepId } from "../../services/api";
 import { useOnboarding } from "../../composables/useOnboarding";
-import { stepAnnouncement } from "../../utils/onboarding";
+import { importActionLabel, stepAnnouncement } from "../../utils/onboarding";
 import { motionEnabled } from "../../utils/motionPreference";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
-import { useControllerActions, type ControllerHint } from "../../utils/controllerActions";
+import { refreshControllerHints, useControllerActions, type ControllerHint } from "../../utils/controllerActions";
+import { NO_SCROLL_EDGES, sameScrollEdges, scrollEdges, type ScrollEdges } from "../../utils/scrollEdges";
 import { useWindowCssWidth } from "../../utils/windowWidth";
 import { inputModality } from "../../utils/inputModality";
 import { tvModeActive } from "../../utils/tvMode";
@@ -54,6 +55,12 @@ const currentComponent = computed(() => stepComponents[onboarding.step.value]);
 const isWelcome = computed(() => onboarding.step.value === "welcome");
 const isDone = computed(() => onboarding.step.value === "done");
 const showFooter = computed(() => !isWelcome.value);
+const isImport = computed(() => onboarding.step.value === "import");
+// An inspected preview that is not imported yet: the primary runs the import.
+const waitingImport = computed(() => (isImport.value ? onboarding.pendingImport.value : null));
+const primaryImportLabel = computed(() =>
+  waitingImport.value ? importActionLabel(waitingImport.value.count) : "",
+);
 
 const transitionName = computed(() => {
   if (!motionEnabled.value) return "";
@@ -63,6 +70,68 @@ const transitionName = computed(() => {
 });
 
 const liveAnnouncement = ref("");
+
+// Scroll cue: a soft fade shows at an edge of the body while more content is
+// past it. It updates on scroll, on body or step resize, and on step change.
+const bodyEdges = shallowRef<ScrollEdges>(NO_SCROLL_EDGES);
+let edgesFrame = 0;
+const readBodyEdges = () => {
+  edgesFrame = 0;
+  const el = bodyRef.value;
+  const next = el ? scrollEdges(el) : NO_SCROLL_EDGES;
+  if (sameScrollEdges(next, bodyEdges.value)) return;
+  const scrollableChanged = next.scrollable !== bodyEdges.value.scrollable;
+  bodyEdges.value = next;
+  // The RS Scroll hint shows only while the body can scroll.
+  if (scrollableChanged) refreshControllerHints();
+};
+const updateBodyEdges = () => {
+  if (edgesFrame || typeof requestAnimationFrame === "undefined") return;
+  edgesFrame = requestAnimationFrame(readBodyEdges);
+};
+
+let bodyObserver: ResizeObserver | null = null;
+let observedStep: Element | null = null;
+const observeStepContent = () => {
+  const child = bodyRef.value?.firstElementChild ?? null;
+  if (bodyObserver && child !== observedStep) {
+    if (observedStep) bodyObserver.unobserve(observedStep);
+    if (child) bodyObserver.observe(child);
+    observedStep = child;
+  }
+  updateBodyEdges();
+};
+
+watch(
+  bodyRef,
+  (el) => {
+    bodyObserver?.disconnect();
+    bodyObserver = null;
+    observedStep = null;
+    if (!el) {
+      bodyEdges.value = NO_SCROLL_EDGES;
+      return;
+    }
+    if (typeof ResizeObserver !== "undefined") {
+      bodyObserver = new ResizeObserver(updateBodyEdges);
+      bodyObserver.observe(el);
+    }
+    observeStepContent();
+  },
+  { flush: "post" },
+);
+
+onBeforeUnmount(() => {
+  bodyObserver?.disconnect();
+  bodyObserver = null;
+  if (edgesFrame) cancelAnimationFrame(edgesFrame);
+  edgesFrame = 0;
+});
+
+const handleStepEnter = () => {
+  observeStepContent();
+  void focusStepHeading();
+};
 
 const focusStepHeading = async () => {
   await nextTick();
@@ -86,7 +155,12 @@ const handlePrimary = async () => {
     }
     return;
   }
-  await onboarding.next();
+  await onboarding.advance();
+};
+
+const handleSkipImport = async () => {
+  if (onboarding.busy.value) return;
+  await onboarding.skipImport();
 };
 
 const handleSkip = async () => {
@@ -118,13 +192,16 @@ useControllerActions(panelRef, {
     if (!onboarding.busy.value && !selectOpen()) void onboarding.back();
   },
   nextTab: () => {
-    if (!onboarding.busy.value && !selectOpen() && !isDone.value) void onboarding.next();
+    // RB matches the footer primary: it runs a waiting import, else moves on.
+    if (!onboarding.busy.value && !selectOpen() && !isDone.value) void onboarding.advance();
   },
   hints: (): ControllerHint[] => {
+    const scroll: ControllerHint[] = bodyEdges.value.scrollable ? [{ button: "RS", label: "Scroll" }] : [];
     if (isWelcome.value) {
       return [
         { button: "A", label: "Select" },
         { button: "RB", label: "Next" },
+        ...scroll,
       ];
     }
     if (isDone.value) {
@@ -132,12 +209,23 @@ useControllerActions(panelRef, {
         { button: "A", label: "Select" },
         { button: "B", label: "Back" },
         { button: "LB", label: "Previous" },
+        ...scroll,
+      ];
+    }
+    if (waitingImport.value) {
+      return [
+        { button: "A", label: "Select" },
+        { button: "B", label: "Back" },
+        { button: "LB", label: "Previous" },
+        { button: "RB", label: "Import" },
+        ...scroll,
       ];
     }
     return [
       { button: "A", label: "Select" },
       { button: "B", label: "Back" },
       { button: "LB / RB", label: "Step" },
+      ...scroll,
     ];
   },
 });
@@ -150,6 +238,8 @@ watch(
     // Focus now; when motion is on, @after-enter focuses the new heading
     // again after the swap completes.
     void focusStepHeading();
+    // Without motion the new step mounts at once and @after-enter may not run.
+    void nextTick(observeStepContent);
   },
   { immediate: true },
 );
@@ -184,28 +274,40 @@ watch(
       <OnboardingStepRail :step="onboarding.step.value" :compact="compactRail" />
 
       <div class="onboarding-main">
-        <div ref="bodyRef" class="onboarding-body">
-          <Transition
-            :name="transitionName"
-            mode="out-in"
-            @after-enter="focusStepHeading"
+        <div class="onboarding-body-frame">
+          <div
+            ref="bodyRef"
+            class="onboarding-body"
+            data-controller-scroll
+            data-testid="onboarding-body"
+            @scroll.passive="updateBodyEdges"
           >
-            <component :is="currentComponent" :key="onboarding.step.value" />
-          </Transition>
+            <Transition
+              :name="transitionName"
+              mode="out-in"
+              @after-enter="handleStepEnter"
+            >
+              <component :is="currentComponent" :key="onboarding.step.value" />
+            </Transition>
+          </div>
+          <div
+            class="onboarding-scroll-fade onboarding-scroll-fade--top"
+            :class="{ 'is-visible': bodyEdges.top }"
+            aria-hidden="true"
+            data-testid="onboarding-scroll-fade-top"
+          />
+          <div
+            class="onboarding-scroll-fade onboarding-scroll-fade--bottom"
+            :class="{ 'is-visible': bodyEdges.bottom }"
+            aria-hidden="true"
+            data-testid="onboarding-scroll-fade-bottom"
+          />
         </div>
 
         <footer v-if="showFooter" class="onboarding-footer">
-          <button
-            v-if="!isDone"
-            type="button"
-            class="ui-card-btn ui-card-btn--link onboarding-skip-btn"
-            :disabled="onboarding.busy.value"
-            @click="handleSkip"
-          >
-            Skip setup
-          </button>
-          <span v-else aria-hidden="true" />
-
+          <!-- Back and the primary come first in Tab order. Skip setup comes
+               last, so a fast Tab then Enter toward Next cannot end setup.
+               CSS order keeps Skip setup at the left edge. -->
           <div class="onboarding-footer-actions">
             <button
               type="button"
@@ -218,8 +320,19 @@ watch(
             </button>
 
             <button
+              v-if="waitingImport"
+              type="button"
+              class="ui-card-btn onboarding-skip-import-btn"
+              :disabled="onboarding.busy.value"
+              @click="handleSkipImport"
+            >
+              Skip import
+            </button>
+
+            <button
               type="button"
               class="ui-card-btn ui-card-btn--primary onboarding-primary-btn"
+              :data-controller-primary="isImport || isDone ? '' : undefined"
               :disabled="onboarding.busy.value"
               @click="handlePrimary"
             >
@@ -227,12 +340,30 @@ watch(
                 <IconCheck class="w-4 h-4 shrink-0" aria-hidden="true" />
                 <span>Go to library</span>
               </template>
+              <template v-else-if="waitingImport && onboarding.busy.value">
+                <IconLoader2 class="w-4 h-4 shrink-0 animate-spin" aria-hidden="true" />
+                <span>Importing...</span>
+              </template>
+              <template v-else-if="waitingImport">
+                <IconFileImport class="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span>{{ primaryImportLabel }}</span>
+              </template>
               <template v-else>
                 <span>Next</span>
                 <IconArrowRight class="w-4 h-4 shrink-0" aria-hidden="true" />
               </template>
             </button>
           </div>
+
+          <button
+            v-if="!isDone"
+            type="button"
+            class="ui-card-btn ui-card-btn--link onboarding-skip-btn"
+            :disabled="onboarding.busy.value"
+            @click="handleSkip"
+          >
+            Skip setup
+          </button>
         </footer>
       </div>
     </div>
@@ -284,16 +415,114 @@ watch(
   flex-direction: column;
 }
 
+.onboarding-body-frame {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .onboarding-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 1.75rem 2rem;
+  /* Focus moves (scrollIntoView "nearest") stop clear of the edge fades. */
+  scroll-padding-block: 2rem;
 }
 
 .onboarding-panel--compact .onboarding-body {
-  padding: 1.25rem 1.25rem;
+  padding: 1rem 1.25rem;
+}
+
+/* Compact and TV layouts: a smaller step icon tile gives the content more height. */
+.onboarding-panel--compact .onboarding-body :deep(.step-header) {
+  gap: 0.75rem;
+}
+
+.onboarding-panel--compact .onboarding-body :deep(.step-icon-tile) {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.625rem;
+}
+
+.onboarding-panel--compact .onboarding-body :deep(.step-icon-tile svg) {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.onboarding-panel--compact .onboarding-body :deep(.step-shell) {
+  gap: 1rem;
+}
+
+/* Compact and TV layouts: a smaller Welcome hero, so Get started and Skip
+   setup fit without scrolling at 1280x800 in Gaming Mode. */
+.onboarding-panel--compact .onboarding-body :deep(.welcome-step) {
+  padding-block: 0.5rem;
+}
+
+.onboarding-panel--compact .onboarding-body :deep(.welcome-logo-wrap) {
+  width: 4.5rem;
+  height: 4.5rem;
+  border-radius: 1.125rem;
+  margin-bottom: 1rem;
+}
+
+.onboarding-panel--compact .onboarding-body :deep(.welcome-logo) {
+  width: 3.5rem;
+  height: 3.5rem;
+}
+
+.onboarding-panel--compact .onboarding-body :deep(.welcome-chips) {
+  margin-top: 1.25rem;
+}
+
+.onboarding-panel--compact .onboarding-body :deep(.welcome-actions) {
+  margin-top: 1.5rem;
+}
+
+/* Scroll cue: overlays above the body edges, so no layout shift. */
+.onboarding-scroll-fade {
+  position: absolute;
+  left: 0;
+  /* Keep the 6px scrollbar uncovered. */
+  right: 6px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease-out;
+}
+
+.onboarding-scroll-fade--top {
+  top: 0;
+  height: 1.25rem;
+  background: linear-gradient(to bottom, var(--bg-surface), transparent);
+}
+
+.onboarding-scroll-fade--bottom {
+  bottom: 0;
+  height: 2.75rem;
+  background: linear-gradient(
+    to top,
+    var(--bg-surface),
+    color-mix(in srgb, var(--bg-surface) 70%, transparent) 45%,
+    transparent
+  );
+}
+
+.onboarding-scroll-fade.is-visible {
+  opacity: 1;
+}
+
+.motion-off .onboarding-scroll-fade {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-scroll-fade {
+    transition: none;
+  }
 }
 
 .onboarding-footer {
@@ -320,10 +549,12 @@ watch(
 }
 
 .onboarding-skip-btn {
+  order: -1;
   color: var(--text-secondary);
 }
 
 .onboarding-back-btn,
+.onboarding-skip-import-btn,
 .onboarding-primary-btn {
   display: inline-flex;
   align-items: center;
@@ -363,10 +594,10 @@ watch(
   transform: translateX(1.25rem);
 }
 
-:global(.motion-off) .onboarding-slide-forward-enter-active,
-:global(.motion-off) .onboarding-slide-forward-leave-active,
-:global(.motion-off) .onboarding-slide-back-enter-active,
-:global(.motion-off) .onboarding-slide-back-leave-active {
+.motion-off .onboarding-slide-forward-enter-active,
+.motion-off .onboarding-slide-forward-leave-active,
+.motion-off .onboarding-slide-back-enter-active,
+.motion-off .onboarding-slide-back-leave-active {
   transition: none !important;
 }
 

@@ -23,11 +23,21 @@ export const handleScopedBack = (entry: ControllerScope | undefined): boolean =>
 export const defaultHints: ControllerHint[] = [{ button: "A", label: "Select" }, { button: "B", label: "Back" }];
 export function resolveHints(entry: ControllerScope | undefined): ControllerHint[] { const hints = entry?.handlers.hints; return typeof hints === "function" ? hints() : hints ?? defaultHints; }
 export function currentHints(): ControllerHint[] { return resolveHints(chooseScope(scopes, document.activeElement, scopeRoot())); }
-function scrollContainer(element: HTMLElement | null): HTMLElement {
+// Hint lists that depend on layout (for example "RS Scroll" only while a body
+// can scroll) dispatch this so the hints bar reads them again.
+export const CONTROLLER_HINTS_EVENT = "wlib-controller-hints";
+export function refreshControllerHints(): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(CONTROLLER_HINTS_EVENT));
+}
+export function scrollContainer(element: HTMLElement | null, root: HTMLElement | null = null): HTMLElement {
   for (let node = element; node; node = node.parentElement) {
     const style = getComputedStyle(node);
     if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight) return node;
   }
+  // Focus outside any scroll area (a dialog footer button): scroll the area the
+  // focus scope marks with data-controller-scroll, not the page behind it.
+  const marked = root?.querySelector<HTMLElement>("[data-controller-scroll]");
+  if (marked && marked.scrollHeight > marked.clientHeight) return marked;
   return document.querySelector<HTMLElement>("main") ?? document.documentElement;
 }
 export function controllerFocusText(element: HTMLInputElement | HTMLTextAreaElement): void {
@@ -43,7 +53,7 @@ export function dispatchController(action: ControllerAction, back: () => void): 
     if (!chooseScope(scopes, active, root)?.handlers.move?.(action.direction)) moveFocus(action.direction);
     return;
   }
-  if (action.type === "scroll") { scrollContainer(active).scrollBy({ left: action.x * 20, top: action.y * 20 }); return; }
+  if (action.type === "scroll") { scrollContainer(active, root).scrollBy({ left: action.x * 20, top: action.y * 20 }); return; }
   if (action.type === "activate") {
     if (active instanceof HTMLSelectElement) window.dispatchEvent(new CustomEvent("wlib-controller-select", { detail: active }));
     else if (active instanceof HTMLTextAreaElement || (active instanceof HTMLInputElement && ["text", "search", "email", "url", "tel", "password", "number"].includes(active.type))) controllerFocusText(active);
@@ -59,7 +69,7 @@ export function dispatchController(action: ControllerAction, back: () => void): 
   if (action.type === "menu") active?.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true }));
   if (action.type === "pageUp" || action.type === "pageDown") {
     // Measure in content coordinates: instant scrolling moves elements under the viewport while paging.
-    const container = scrollContainer(active), offset = (element: HTMLElement) => element.getBoundingClientRect().top + container.scrollTop;
+    const container = scrollContainer(active, root), offset = (element: HTMLElement) => element.getBoundingClientRect().top + container.scrollTop;
     const start = active ? offset(active) : 0;
     for (let i = 0; i < 100; i++) { const next = moveFocus(action.type === "pageUp" ? "up" : "down"); if (!next || Math.abs(offset(next) - start) >= container.clientHeight) break; }
   }
