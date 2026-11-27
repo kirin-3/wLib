@@ -34,6 +34,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 
 **Highlights**
 
+- **Find new games.** **Discover** lets you browse the whole game catalog (F95Zone, LewdCorner, DLsite, VNDB and Ryuugames), with one card per game, and add or download a game from there.
 - **Updates in one click.** Check the whole library against F95Zone, download the new build through the browser extension or as an RPDL torrent, and install it over the old one with your saves moved across.
 - **Made for Linux.** Wine, Proton through umu-launcher, an RPG Maker runner, GameMode, MangoHud, gamescope, Winetricks and per-game sandboxing are built in.
 - **Steam Deck ready.** Controller navigation, a TV mode that turns on in Gaming Mode, and games added to Steam as shortcuts.
@@ -46,7 +47,9 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 
 - Grid, list, compact and banner views, with a card-size slider.
 - Cover art (animated covers play always, on hover or never, and pause while a game runs), tags with colors, ratings, play status (including your own statuses), Markdown notes and PDF, TXT or MD attachments.
-- Collections as tabs, saved filters, and active filters shown as removable chips. Tag, engine and source filters can include or exclude a value.
+- Collections as tabs and saved filters. Every filter is a pill: click to include a value, and use the **-** button, Alt+click or the - key to exclude it. Active filters show as removable chips.
+- A **Weighted rating** sort and filter (3.5+, 4.0+, 4.5+) that count the number of F95 reviews, so a game with a few high votes does not rank above a game with hundreds.
+- Cards and the list show an **Update** tag with the new version. In a small window, the filters open as a drawer and one **View** menu holds layout, sort, order and card size.
 - LewdCorner threads next to F95 threads: wLib fills in the other site's thread for games on both sites, reads LC covers and screenshots, and detects LC Plus. Turn it on in Settings.
 - Select several games at once to change status, collections, favorites, tags, engine, launch mode, sandbox or Wine/Proton prefix, back up saves, refresh F95 covers, ratings and tags, check for updates, uninstall, move or remove them. Most actions can be undone for a few seconds, also with Ctrl+Z.
 - A wishlist that tells you when a game is marked Completed, and downloads a wishlisted game straight from its F95 thread.
@@ -55,8 +58,15 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - Thread screenshots in the detail window, served from the shared game catalog.
 - View and edit thread details such as the overview, original title, aliases, languages and developer links. Search aliases and filter by developer or language.
 - Import a whole folder of installed games at once. wLib guesses the title, version and engine, and you can fix them afterwards.
+- When wLib cannot read an F95 thread and the browser extension is not connected, it fills the empty developer, cover, engine, tags and rating from the game catalog. DLsite games use English titles, circles and tags when DLsite has them.
 - More than one executable per game, with one as the default for Play.
 - Uninstall a game (it can stay in the library as Wishlist, with an optional save backup first) or move its folder to another drive. Moves run in the background and update every path for you.
+
+### Discover
+
+- Browse every game in the shared game catalog, not only your library. A game that is on more than one site shows as one card.
+- Search titles, original titles and developers. Filter by site, status, F95 rating, engine and tags, and sort by latest update, highest rated, latest release or title.
+- The game preview shows screenshots and the sites that list the game, with **Wishlist**, **Download** and **Open in library** buttons. Discover adds games from catalog data only, with no F95 request.
 
 ### Updates and downloads
 
@@ -66,6 +76,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - **Downloads page** lists every download in one queue: reorder it, start one now, pause and resume, and see why one failed with the next step to take. Set how many run at once and a speed limit for file hosts and torrents together, and let downloads wait while you play or run on battery.
 - Install a new game or an update from a `.zip`, `.7z` or `.rar`, including multi-part archives, or from a tar archive (`.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`/`.tbz2`/`.tbz`, `.tar.xz`/`.txz`), the format of many Ren'Py Linux builds. Password-protected archives work too: wLib reads the password from the thread's first post, shows it with a **Copy** button, and fills it in for the install. wLib moves your saves over and removes the old version, and it also spots matching archives in your Downloads folder. Installs use every CPU core and are fast on NFS and SMB network drives too.
 - Skip a version you don't want, and undo the skip any time.
+- The **Updates** page lists the games that could not be checked, with a **Re-check** button, and shows when the last check ran.
 - Desktop notifications for new releases and completed wishlist games (Linux).
 
 ### Saves, mods and tools
@@ -75,6 +86,11 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - **RPG Maker MV/MZ:** decrypt encrypted assets and switch the game to load them, edit saves (gold, items, actors, switches, variables, or the raw data) with a backup before each write, and switch plugins on or off with a backup and one-click restore. The plugin list warns about missing files, duplicates and, for MZ only, declared dependencies and load order. Game updates do not keep plugin changes.
 - **RPG Maker XP/VX/VX Ace:** extract `.rgssad`, `.rgss2a` and `.rgss3a` archives to a folder or into the game folder, switch the game to load the extracted files, and edit saves (gold, items, actors, switches, variables, or the raw data) with a backup before each write.
 - **Unity:** install, update or remove BepInEx 5 or 6, with a backup.
+
+### Storage
+
+- See how much space your games and wLib's files use on disk: per category, and per game with its parts (game files, save backups, Wine prefix, sandbox and torrent data). The scan runs only when you start it, in the background, and stops when a game starts.
+- Free space with seven cleanup actions, each marked **Safe**, **Review** or **Risky**: finished download archives, temporary install files, data of removed games, old save backups, unused Proton builds, the cover cache and the BepInEx download cache. Each one shows a preview, and nothing is deleted before you confirm.
 
 ### Launching
 
@@ -105,11 +121,11 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 
 ### Interface
 
-Light and dark themes, an accent color, text size, interface scale from 80% to 150%, and a reduced-motion toggle. Settings save as you change them and have a search box. The **Diagnostics** page copies a report for bug reports.
+A short first-time setup helps you turn on the catalog and LewdCorner, import from another app and pair the browser extension. Light and dark themes, an accent color, text size, interface scale from 80% to 150%, and an animations toggle. Settings are grouped by task, save as you change them and have a search box. The **Diagnostics** page copies a report for bug reports.
 
 ## How it compares
 
-A short version of the [comparison on the wiki](https://github.com/kirin-3/wLib/wiki/Comparison), checked on 2026-11-23. The wiki also has one page for each app: [wLib vs XLibrary](https://github.com/kirin-3/wLib/wiki/wLib-vs-XLibrary), [wLib vs Atlas](https://github.com/kirin-3/wLib/wiki/wLib-vs-Atlas), [wLib vs f69](https://github.com/kirin-3/wLib/wiki/wLib-vs-f69), [wLib vs F95Checker](https://github.com/kirin-3/wLib/wiki/wLib-vs-F95Checker) and [wLib vs XDir](https://github.com/kirin-3/wLib/wiki/wLib-vs-XDir).
+A short version of the [comparison on the wiki](https://github.com/kirin-3/wLib/wiki/Comparison), checked on 2026-11-27 for wLib 1.0.0 and on 2026-11-23 for the other apps. The wiki also has one page for each app: [wLib vs XLibrary](https://github.com/kirin-3/wLib/wiki/wLib-vs-XLibrary), [wLib vs Atlas](https://github.com/kirin-3/wLib/wiki/wLib-vs-Atlas), [wLib vs f69](https://github.com/kirin-3/wLib/wiki/wLib-vs-f69), [wLib vs F95Checker](https://github.com/kirin-3/wLib/wiki/wLib-vs-F95Checker) and [wLib vs XDir](https://github.com/kirin-3/wLib/wiki/wLib-vs-XDir).
 
 | | wLib | XLibrary | Atlas | f69 | F95Checker |
 |---|---|---|---|---|---|
@@ -128,11 +144,12 @@ A short version of the [comparison on the wiki](https://github.com/kirin-3/wLib/
 | GameMode, MangoHud, Winetricks | Yes | No | No | No | No |
 | Cloud sync | Folder, Dropbox, Google Drive | Google Drive | No | No | No |
 | LewdCorner | Yes | Yes | Yes | No | No |
+| Browse the full catalog | Yes | Yes | Yes | No | No |
 | Import from other apps | 6 apps | 4 apps | 2 apps | 2 apps | None |
 
 \* Tested on 2026-11-16 on a Windows 11 VM with empty libraries, using wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.14 and f69 0.14.1. F95Checker was not part of this test. The number is the median RAM that the app and its child processes hold over 4 minutes.
 
-Other apps have things wLib doesn't yet, such as browsing the full catalog, machine translation and applying patches with rollback. The [comparison pages](https://github.com/kirin-3/wLib/wiki/Comparison) list them.
+Other apps have things wLib doesn't yet, such as machine translation, applying patches with rollback and keeping older versions of a game. The [comparison pages](https://github.com/kirin-3/wLib/wiki/Comparison) list them.
 
 ## Screenshots
 

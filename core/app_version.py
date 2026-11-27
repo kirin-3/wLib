@@ -4,4 +4,4 @@
 Release and build scripts read the ``APP_VERSION = "..."`` line from this file.
 """
 
-APP_VERSION = "0.4.9"
+APP_VERSION = "1.0.0"
